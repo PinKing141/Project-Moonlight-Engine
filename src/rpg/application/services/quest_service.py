@@ -7,6 +7,7 @@ from rpg.application.services.balance_tables import (
     FIRST_HUNT_TARGET_KILLS,
 )
 from rpg.application.services.event_bus import EventBus
+from rpg.application.services.seed_policy import derive_seed
 from rpg.domain.events import MonsterSlain, TickAdvanced
 from rpg.domain.repositories import CharacterRepository, WorldRepository
 
@@ -90,6 +91,14 @@ class QuestService:
             quest_id = str(template.get("quest_id", ""))
             if not quest_id or quest_id in quests:
                 continue
+            seed_value = derive_seed(
+                namespace="quest.template",
+                context={
+                    "world_turn": int(event.turn_after),
+                    "quest_id": quest_id,
+                    "objective_kind": str(template.get("objective_kind", "kill_any")),
+                },
+            )
             quests[quest_id] = {
                 "status": str(template.get("status", "available")),
                 "objective_kind": str(template.get("objective_kind", "kill_any")),
@@ -97,6 +106,7 @@ class QuestService:
                 "target": int(template.get("target", 1)),
                 "reward_xp": int(template.get("reward_xp", 0)),
                 "reward_money": int(template.get("reward_money", 0)),
+                "seed_key": f"quest:{quest_id}:{int(seed_value)}",
             }
 
         for quest in quests.values():

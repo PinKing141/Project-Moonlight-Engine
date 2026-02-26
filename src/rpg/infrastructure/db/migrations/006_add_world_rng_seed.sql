@@ -1,0 +1,6 @@
+ALTER TABLE world
+    ADD COLUMN rng_seed BIGINT UNSIGNED NOT NULL DEFAULT 1;
+
+UPDATE world
+SET rng_seed = 1
+WHERE rng_seed IS NULL;

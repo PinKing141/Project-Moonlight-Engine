@@ -115,6 +115,16 @@ class DnD5eClient:
             backoff_seconds=self._backoff_seconds,
         )
 
+    def list_magicitems(self, page: int = 1) -> dict:
+        return get_json_with_retry(
+            self.client,
+            f"{self.API_PREFIX}/magic-items",
+            params={"page": page},
+            headers={"Accept": "application/json"},
+            retries=self._retries,
+            backoff_seconds=self._backoff_seconds,
+        )
+
     def list_classes(self, page: int = 1) -> dict:
         return get_json_with_retry(
             self.client,

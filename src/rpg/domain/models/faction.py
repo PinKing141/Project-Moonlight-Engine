@@ -1,5 +1,24 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Dict, List, Optional
+
+
+class InfluenceThreshold(str, Enum):
+    HOSTILE = "hostile"
+    NEUTRAL = "neutral"
+    FRIENDLY = "friendly"
+    REVERED = "revered"
+
+
+@dataclass(frozen=True)
+class Reputation:
+    score: int = 0
+
+    @property
+    def threshold(self) -> InfluenceThreshold:
+        return reputation_threshold(self.score)
 
 
 @dataclass
@@ -34,3 +53,36 @@ class Faction:
         if score <= -5:
             return "unfriendly"
         return "neutral"
+
+
+def reputation_threshold(reputation_score: int) -> InfluenceThreshold:
+    score = int(reputation_score)
+    if score >= 40:
+        return InfluenceThreshold.REVERED
+    if score >= 10:
+        return InfluenceThreshold.FRIENDLY
+    if score <= -10:
+        return InfluenceThreshold.HOSTILE
+    return InfluenceThreshold.NEUTRAL
+
+
+def calculate_price_modifier(reputation_score: int) -> int:
+    threshold = reputation_threshold(reputation_score)
+    if threshold == InfluenceThreshold.REVERED:
+        return -25
+    if threshold == InfluenceThreshold.FRIENDLY:
+        return -10
+    if threshold == InfluenceThreshold.HOSTILE:
+        return 20
+    return 0
+
+
+def determines_aggro(faction_alignment: str, reputation_score: int) -> bool:
+    alignment = str(faction_alignment or "neutral").strip().lower()
+    threshold = reputation_threshold(reputation_score)
+
+    if alignment in {"hostile", "aggressive", "evil"}:
+        return threshold != InfluenceThreshold.REVERED
+    if alignment in {"friendly", "lawful", "ally"}:
+        return threshold == InfluenceThreshold.HOSTILE
+    return threshold == InfluenceThreshold.HOSTILE

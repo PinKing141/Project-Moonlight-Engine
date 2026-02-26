@@ -88,6 +88,9 @@ class FallbackContentClient:
     def list_classes(self, page: int = 1) -> dict:
         return self._get_with_fallback("list_classes", kwargs={"page": page})
 
+    def list_magicitems(self, page: int = 1) -> dict:
+        return self._get_with_fallback("list_magicitems", kwargs={"page": page})
+
     def list_races(self, page: int = 1) -> dict:
         return self._get_with_fallback("list_races", kwargs={"page": page})
 

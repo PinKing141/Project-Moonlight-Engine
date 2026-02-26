@@ -6,7 +6,9 @@ from rpg.domain.models.entity import Entity
 from rpg.domain.models.faction import Faction
 from rpg.domain.models.encounter_definition import EncounterDefinition
 from rpg.domain.models.location import Location
+from rpg.domain.models.quest import QuestState, QuestTemplate
 from rpg.domain.models.spell import Spell
+from rpg.domain.models.feature import Feature
 from rpg.domain.models.world import World
 from rpg.domain.models.character_class import CharacterClass
 
@@ -121,4 +123,84 @@ class SpellRepository(ABC):
 
     @abstractmethod
     def list_by_class(self, class_slug: str, max_level: int):
+        raise NotImplementedError
+
+
+class FeatureRepository(ABC):
+    @abstractmethod
+    def list_for_character(self, character_id: int) -> List[Feature]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def grant_feature_by_slug(self, character_id: int, feature_slug: str) -> bool:
+        raise NotImplementedError
+
+
+class CharacterReputationRepository(ABC):
+    @abstractmethod
+    def get_reputation(self, *, character_id: int, faction_id: str) -> int:
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_reputation(
+        self,
+        *,
+        character_id: int,
+        faction_id: str,
+        new_score: int,
+        changed_turn: int,
+        reason: str,
+    ) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_for_character(self, *, character_id: int) -> dict[str, int]:
+        raise NotImplementedError
+
+
+class QuestStateRepository(ABC):
+    @abstractmethod
+    def list_definitions(self) -> List[QuestTemplate]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_active_for_character(self, *, character_id: int) -> List[QuestState]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def save_active(
+        self,
+        *,
+        character_id: int,
+        state: QuestState,
+        target_count: int,
+        seed_key: str,
+    ) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def append_history(
+        self,
+        *,
+        character_id: int,
+        template_slug: str,
+        action: str,
+        action_turn: int,
+        payload_json: str,
+    ) -> None:
+        raise NotImplementedError
+
+
+class LocationStateRepository(ABC):
+    @abstractmethod
+    def record_flag_change(
+        self,
+        *,
+        location_id: int,
+        changed_turn: int,
+        flag_key: str,
+        old_value: str | None,
+        new_value: str | None,
+        reason: str,
+    ) -> None:
         raise NotImplementedError

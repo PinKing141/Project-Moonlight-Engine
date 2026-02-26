@@ -64,6 +64,7 @@ class QuestServiceTests(unittest.TestCase):
         self.assertEqual("available", quests["first_hunt"]["status"])
         self.assertEqual("kill_any", quests["trail_patrol"]["objective_kind"])
         self.assertEqual("travel_count", quests["supply_drop"]["objective_kind"])
+        self.assertTrue(str(quests["first_hunt"].get("seed_key", "")).startswith("quest:first_hunt:"))
 
     def test_tick_then_monster_slain_marks_quest_ready_to_turn_in(self) -> None:
         bus = EventBus()

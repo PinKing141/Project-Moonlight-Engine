@@ -1,20 +1,19 @@
+import json
 import random
-from typing import Callable, Optional
+from collections.abc import Callable, Sequence
+from typing import Optional
 
 from rpg.application.dtos import (
     ActionResult,
     CharacterSheetView,
-    CombatEnemyPanelView,
-    CombatPlayerPanelView,
     CombatRoundView,
-    CombatSceneView,
     CharacterCreationSummaryView,
     CharacterSummaryView,
     EncounterPlan,
-    EquipmentItemView,
     EquipmentView,
     EnemyView,
     ExploreView,
+    LevelUpPendingView,
     FactionStandingsView,
     GameLoopView,
     LocationContextView,
@@ -25,20 +24,37 @@ from rpg.application.dtos import (
     QuestStateView,
     RewardOutcomeView,
     SellInventoryView,
-    SellItemView,
     RumourBoardView,
     RumourItemView,
     SocialOutcomeView,
-    ShopItemView,
     ShopView,
     SpellOptionView,
     TravelDestinationView,
-    TravelPrepOptionView,
     TravelPrepView,
-    TrainingOptionView,
     TrainingView,
-    TownNpcView,
     TownView,
+)
+from rpg.application.mappers.game_service_mapper import (
+    to_combat_enemy_panel_view,
+    to_combat_player_panel_view,
+    to_combat_round_view,
+    to_combat_scene_view,
+    to_quest_board_view,
+    to_quest_state_view,
+    to_rumour_board_view,
+    to_rumour_item_view,
+    to_sell_inventory_view,
+    to_sell_item_view,
+    to_shop_item_view,
+    to_shop_view,
+    to_town_npc_view,
+    to_town_view,
+    to_travel_prep_option_view,
+    to_travel_prep_view,
+    to_equipment_item_view,
+    to_equipment_view,
+    to_training_option_view,
+    to_training_view,
 )
 from rpg.application.services.seed_policy import derive_seed
 from rpg.application.services.settlement_naming import generate_settlement_name
@@ -53,9 +69,11 @@ from rpg.application.services.balance_tables import (
 )
 from rpg.application.services.world_progression import WorldProgression
 from rpg.application.services.encounter_flavour import random_intro
-from rpg.domain.events import MonsterSlain
+from rpg.application.services.progression_service import ProgressionService
+from rpg.domain.events import FactionReputationChangedEvent, MonsterSlain
 from rpg.domain.models.character import Character
 from rpg.domain.models.entity import Entity
+from rpg.domain.models.faction import calculate_price_modifier
 from rpg.domain.models.location import Location
 from rpg.domain.models.world import World
 from rpg.domain.repositories import (
@@ -63,8 +81,11 @@ from rpg.domain.repositories import (
     ClassRepository,
     EncounterDefinitionRepository,
     EntityRepository,
+    FeatureRepository,
     FactionRepository,
     LocationRepository,
+    LocationStateRepository,
+    QuestStateRepository,
     WorldRepository,
     SpellRepository,
 )
@@ -269,12 +290,16 @@ class GameService:
         class_repo: ClassRepository | None = None,
         definition_repo: EncounterDefinitionRepository | None = None,
         faction_repo: FactionRepository | None = None,
+        quest_state_repo: QuestStateRepository | None = None,
+        location_state_repo: LocationStateRepository | None = None,
+        feature_repo: FeatureRepository | None = None,
         spell_repo: SpellRepository | None = None,
-        atomic_state_persistor: Callable[[Character, object], None] | None = None,
+        atomic_state_persistor: Callable[..., None] | None = None,
         verbose_level: str = "compact",
         open5e_client_factory: Callable[[], object] | None = None,
         name_generator=None,
         encounter_intro_builder: Callable[[Entity], str] | None = None,
+        mechanical_flavour_builder: Callable[..., str] | None = None,
     ) -> None:
         from rpg.application.services.character_creation_service import CharacterCreationService
         from rpg.application.services.encounter_service import EncounterService
@@ -287,6 +312,9 @@ class GameService:
         self.progression = progression
         self.definition_repo = definition_repo
         self.faction_repo = faction_repo
+        self.quest_state_repo = quest_state_repo
+        self.location_state_repo = location_state_repo
+        self.feature_repo = feature_repo
         self.character_creation_service = None
         self.encounter_service = None
         self.combat_service = None
@@ -294,6 +322,11 @@ class GameService:
         self.atomic_state_persistor = atomic_state_persistor
         self.verbose_level = verbose_level
         self.encounter_intro_builder = encounter_intro_builder or random_intro
+        self.mechanical_flavour_builder = mechanical_flavour_builder
+        event_publisher = None
+        if self.progression and getattr(self.progression, "event_bus", None):
+            event_publisher = self.progression.event_bus.publish
+        self.progression_service = ProgressionService(event_publisher=event_publisher)
 
         if class_repo and location_repo:
             client = None
@@ -308,6 +341,7 @@ class GameService:
                 location_repo,
                 open5e_client=client,
                 name_generator=name_generator,
+                feature_repo=feature_repo,
             )
 
         if entity_repo:
@@ -317,7 +351,28 @@ class GameService:
                 faction_repo=faction_repo,
                 rng_factory=lambda seed: random.Random(seed),
             )
-            self.combat_service = CombatService()
+            self.combat_service = CombatService(feature_repo=feature_repo, event_publisher=event_publisher)
+            if self.combat_service is not None and mechanical_flavour_builder is not None:
+                self.combat_service.mechanical_flavour_builder = mechanical_flavour_builder
+
+    @staticmethod
+    def _world_flag_projection(world: World) -> dict[str, object]:
+        if not isinstance(getattr(world, "flags", None), dict):
+            return {}
+        flags = world.flags
+        projected: dict[str, object] = {}
+
+        stored_world_flags = flags.get("world_flags")
+        if isinstance(stored_world_flags, dict):
+            for key, value in stored_world_flags.items():
+                projected[str(key)] = value
+
+        quest_flags = flags.get("quest_world_flags")
+        if isinstance(quest_flags, dict):
+            for key, value in quest_flags.items():
+                projected[f"quest:{key}"] = value
+
+        return projected
 
     def rest(self, character_id: int) -> tuple[Character, Optional[World]]:
         character = self._require_character(character_id)
@@ -385,6 +440,8 @@ class GameService:
             world_turn=world.current_turn,
             faction_bias=effective_faction_bias,
             max_enemies=effective_max_enemies,
+            location_biome=str(getattr(location, "biome", "wilderness") or "wilderness"),
+            world_flags=self._world_flag_projection(world),
         )
 
         self.advance_world(ticks=1)
@@ -392,16 +449,121 @@ class GameService:
 
     def explore_intent(self, character_id: int) -> tuple[ExploreView, Character, list[Entity]]:
         plan, character, _ = self.explore(character_id)
+        hazard_message = ""
+        if plan.hazards:
+            hazard_message, skip_encounter = self._resolve_explore_hazard(character, plan)
+            if skip_encounter:
+                return ExploreView(has_encounter=False, message=hazard_message, enemies=[]), character, []
+
         if plan.enemies and not self.is_combat_ready():
             message = self._apply_explore_no_combat_fallback(character, plan.enemies)
+            if hazard_message:
+                message = f"{hazard_message} {message}".strip()
             return ExploreView(has_encounter=False, message=message, enemies=[]), character, []
 
         view = self.build_explore_view(plan)
+        if hazard_message:
+            view = ExploreView(has_encounter=view.has_encounter, message=f"{hazard_message} {view.message}".strip(), enemies=view.enemies)
         if not view.has_encounter:
             event_message = self._apply_noncombat_explore_event(character)
             if event_message:
-                view = ExploreView(has_encounter=False, message=event_message, enemies=[])
+                message = f"{hazard_message} {event_message}".strip() if hazard_message else event_message
+                view = ExploreView(has_encounter=False, message=message, enemies=[])
         return view, character, list(plan.enemies)
+
+    def _resolve_explore_hazard(self, character: Character, plan: EncounterPlan) -> tuple[str, bool]:
+        world = self._require_world()
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        hazard_names = [str(item) for item in plan.hazards if str(item).strip()]
+        if not hazard_names:
+            return "", False
+
+        seed = derive_seed(
+            namespace="explore.hazard.check",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "world_turn": int(getattr(world, "current_turn", 0)),
+                "location_id": int(getattr(character, "location_id", 0) or 0),
+                "biome": str(getattr(location, "biome", "wilderness") if location else "wilderness"),
+                "hazards": tuple(hazard_names),
+                "enemy_count": len(plan.enemies),
+            },
+        )
+        rng = random.Random(seed)
+
+        attrs = getattr(character, "attributes", {}) or {}
+        dex = int(attrs.get("dexterity", attrs.get("agility", 10)) or 10)
+        wis = int(attrs.get("wisdom", 10) or 10)
+        skill_mod = max((dex - 10) // 2, (wis - 10) // 2)
+        dc = 12 + min(4, len(hazard_names))
+        roll = rng.randint(1, 20)
+        total = roll + skill_mod
+        lead_hazard = hazard_names[0]
+
+        def _environment_suffix(event_kind: str) -> str:
+            if not callable(self.mechanical_flavour_builder):
+                return ""
+            try:
+                line = self.mechanical_flavour_builder(
+                    event_kind=str(event_kind),
+                    biome=str(getattr(location, "biome", "wilderness") if location else "wilderness"),
+                    hazard_name=str(lead_hazard),
+                    world_turn=int(getattr(world, "current_turn", 0)),
+                )
+            except Exception:
+                return ""
+            return f" {line}" if str(line).strip() else ""
+
+        if total >= dc:
+            return f"You navigate {lead_hazard} safely ({total} vs DC {dc}).{_environment_suffix('hazard_success')}".strip(), False
+
+        hp_loss_cap = max(0, int(getattr(character, "hp_current", 1)) - 1)
+        hp_loss = min(hp_loss_cap, max(1, int(getattr(character, "hp_max", 1)) // 14))
+        if hp_loss > 0:
+            character.hp_current = max(1, int(character.hp_current) - int(hp_loss))
+        if hasattr(world, "threat_level"):
+            world.threat_level = max(0, int(getattr(world, "threat_level", 0)) + 1)
+
+        operations: list[Callable[[object], None]] = []
+        if self.location_state_repo is not None and character.location_id is not None:
+            operation_builder = getattr(self.location_state_repo, "build_location_flag_change_operation", None)
+            if callable(operation_builder):
+                operations.append(
+                    operation_builder(
+                        location_id=int(character.location_id),
+                        changed_turn=int(getattr(world, "current_turn", 0)),
+                        flag_key="hazard:last_resolution",
+                        old_value=None,
+                        new_value=lead_hazard,
+                        reason="explore_hazard_failed_check",
+                    )
+                )
+
+        persisted = self._persist_character_world_atomic(character, world, operations=operations)
+        if not persisted:
+            self.character_repo.save(character)
+            if self.world_repo:
+                self.world_repo.save(world)
+            if self.location_state_repo is not None and character.location_id is not None:
+                try:
+                    self.location_state_repo.record_flag_change(
+                        location_id=int(character.location_id),
+                        changed_turn=int(getattr(world, "current_turn", 0)),
+                        flag_key="hazard:last_resolution",
+                        old_value=None,
+                        new_value=lead_hazard,
+                        reason="explore_hazard_failed_check",
+                    )
+                except Exception:
+                    pass
+
+        forced_retreat = bool(plan.enemies) and rng.randint(1, 100) <= 35
+        if forced_retreat:
+            return (
+                f"{lead_hazard} disrupts your route (-{hp_loss} HP). "
+                f"You withdraw before combat.{_environment_suffix('hazard_failed')}"
+            ).strip(), True
+        return f"{lead_hazard} strains your advance (-{hp_loss} HP).{_environment_suffix('hazard_failed')}".strip(), False
 
     def get_player_view(self, player_id: int) -> str:
         world = self._require_world()
@@ -606,6 +768,87 @@ class GameService:
             hp_current=int(character.hp_current),
             hp_max=int(character.hp_max),
         )
+
+    def get_level_up_pending_intent(self, character_id: int) -> LevelUpPendingView | None:
+        character = self._require_character(character_id)
+        return self.progression_service.preview_pending(character)
+
+    def submit_level_up_choice_intent(
+        self,
+        character_id: int,
+        growth_choice: str,
+        option: str | None = None,
+    ) -> ActionResult:
+        character = self._require_character(character_id)
+        flags_before = getattr(character, "flags", None)
+        history_before = 0
+        if isinstance(flags_before, dict) and isinstance(flags_before.get("progression_history"), list):
+            history_before = len(flags_before.get("progression_history", []))
+
+        try:
+            level_messages = self.progression_service.apply_level_progression(
+                character,
+                growth_choice=growth_choice,
+            )
+        except ValueError as exc:
+            return ActionResult(messages=[str(exc)], game_over=False)
+
+        if not level_messages:
+            return ActionResult(messages=["No level-up is pending."], game_over=False)
+
+        if option:
+            flags = getattr(character, "flags", None)
+            if isinstance(flags, dict):
+                flags["last_growth_option"] = str(option)
+
+        world = self._require_world() if self.world_repo else None
+        operations: list[Callable[[object], None]] = []
+        flags_after = getattr(character, "flags", None)
+        progression_rows = []
+        if isinstance(flags_after, dict):
+            history = flags_after.get("progression_history", [])
+            if isinstance(history, list):
+                progression_rows = [row for row in history[history_before:] if isinstance(row, dict)]
+
+        operation_builder = getattr(self.character_repo, "build_progression_unlock_operation", None)
+        for row in progression_rows:
+            to_level = int(row.get("to_level", character.level) or character.level)
+            row_choice = str(row.get("growth_choice", growth_choice) or growth_choice)
+            unlock_key = f"level_{to_level}_{row_choice}"
+            if callable(operation_builder):
+                operations.append(
+                    operation_builder(
+                        character_id=int(character.id or 0),
+                        unlock_kind="growth_choice",
+                        unlock_key=unlock_key,
+                        unlocked_level=to_level,
+                        created_turn=int(getattr(world, "current_turn", 0)) if world is not None else 0,
+                    )
+                )
+
+        self._set_progression_messages(character, level_messages)
+
+        persisted = False
+        if world is not None:
+            persisted = self._persist_character_world_atomic(character, world, operations=operations)
+
+        if not persisted:
+            self.character_repo.save(character)
+            recorder = getattr(self.character_repo, "record_progression_unlock", None)
+            if callable(recorder):
+                for row in progression_rows:
+                    to_level = int(row.get("to_level", character.level) or character.level)
+                    row_choice = str(row.get("growth_choice", growth_choice) or growth_choice)
+                    unlock_key = f"level_{to_level}_{row_choice}"
+                    recorder(
+                        character_id=int(character.id or 0),
+                        unlock_kind="growth_choice",
+                        unlock_key=unlock_key,
+                        unlocked_level=to_level,
+                        created_turn=int(getattr(world, "current_turn", 0)) if world is not None else 0,
+                    )
+
+        return ActionResult(messages=level_messages, game_over=False)
 
     def get_location_context_intent(self, character_id: int) -> LocationContextView:
         character = self._require_character(character_id)
@@ -1081,12 +1324,12 @@ class GameService:
         location_name = self._settlement_display_name(world, location)
         district_tag, landmark_tag = self._town_layer_tags(world=world, location=location)
         prep_summary = self._travel_prep_summary(self._active_travel_prep_profile(character))
-        npcs: list[TownNpcView] = []
+        npcs = []
         for npc in self._TOWN_NPCS:
             disposition = self._get_npc_disposition(world, npc["id"])
             npcs.append(
-                TownNpcView(
-                    id=npc["id"],
+                to_town_npc_view(
+                    npc_id=npc["id"],
                     name=npc["name"],
                     role=npc["role"],
                     temperament=npc["temperament"],
@@ -1096,7 +1339,7 @@ class GameService:
         story_lines = self._active_story_seed_town_lines(world)
         memory_lines = self._recent_story_memory_town_lines(world)
         recent_consequences = self._recent_consequence_messages(world)
-        return TownView(
+        return to_town_view(
             day=getattr(world, "current_turn", None),
             threat_level=getattr(world, "threat_level", None),
             location_name=location_name,
@@ -1140,8 +1383,24 @@ class GameService:
         elif price_modifier > 0:
             standing_label = "unfriendly surcharge"
 
-        items: list[ShopItemView] = []
-        for row in self._SHOP_ITEMS:
+        dynamic_rows: list[dict] = []
+        loader = getattr(self.character_repo, "list_shop_items", None)
+        if callable(loader):
+            try:
+                loaded = loader(character_id=character_id, max_items=8)
+                if isinstance(loaded, list):
+                    dynamic_rows = [row for row in loaded if isinstance(row, dict)]
+            except Exception:
+                dynamic_rows = []
+
+        items = []
+        merged_rows = list(self._SHOP_ITEMS) + dynamic_rows
+        emitted: set[str] = set()
+        for row in merged_rows:
+            item_id = str(row.get("id", "")).strip()
+            if not item_id or item_id in emitted:
+                continue
+            emitted.add(item_id)
             base_price = int(row.get("base_price", 1))
             price = self._bounded_price(base_price, price_modifier)
             availability_note = ""
@@ -1156,8 +1415,8 @@ class GameService:
                     availability_note = f"Requires {requires_faction} reputation {required_reputation}."
 
             items.append(
-                ShopItemView(
-                    item_id=str(row["id"]),
+                to_shop_item_view(
+                    item_id=item_id,
                     name=str(row["name"]),
                     description=str(row.get("description", "")),
                     price=price,
@@ -1166,11 +1425,7 @@ class GameService:
                 )
             )
 
-        return ShopView(
-            gold=character.money,
-            price_modifier_label=standing_label,
-            items=items,
-        )
+        return to_shop_view(gold=character.money, price_modifier_label=standing_label, items=items)
 
     def buy_shop_item_intent(self, character_id: int, item_id: str) -> ActionResult:
         character = self._require_character(character_id)
@@ -1200,14 +1455,14 @@ class GameService:
         inventory = list(getattr(character, "inventory", []) or [])
         equipped = self._equipment_state(character)
 
-        rows: list[SellItemView] = []
+        rows = []
         for item in inventory:
             item_name = str(item)
             price = self._sell_price_for_item(character_id, item_name)
             is_equipped = any(str(equipped.get(slot, "")) == item_name for slot in ("weapon", "armor", "trinket"))
-            rows.append(SellItemView(name=item_name, price=price, equipped=is_equipped))
+            rows.append(to_sell_item_view(name=item_name, price=price, equipped=is_equipped))
 
-        return SellInventoryView(
+        return to_sell_inventory_view(
             gold=int(getattr(character, "money", 0)),
             items=rows,
             empty_state_hint="No items available to sell. Explore or shop to build inventory first.",
@@ -1246,19 +1501,19 @@ class GameService:
     def get_equipment_view_intent(self, character_id: int) -> EquipmentView:
         character = self._require_character(character_id)
         equipped = self._equipment_state(character)
-        inventory_items: list[EquipmentItemView] = []
+        inventory_items = []
         for item in list(getattr(character, "inventory", []) or []):
             slot = self._infer_equipment_slot(item)
             is_equipped = bool(slot and equipped.get(slot) == item)
             inventory_items.append(
-                EquipmentItemView(
+                to_equipment_item_view(
                     name=item,
                     slot=slot,
                     equipable=slot is not None,
                     equipped=is_equipped,
                 )
             )
-        return EquipmentView(equipped_slots=dict(equipped), inventory_items=inventory_items)
+        return to_equipment_view(equipped_slots=dict(equipped), inventory_items=inventory_items)
 
     def equip_inventory_item_intent(self, character_id: int, item_name: str) -> ActionResult:
         character = self._require_character(character_id)
@@ -1325,7 +1580,7 @@ class GameService:
     def get_training_view_intent(self, character_id: int) -> TrainingView:
         character = self._require_character(character_id)
         standings = self.faction_standings_intent(character_id)
-        options: list[TrainingOptionView] = []
+        options = []
         for row in self._TRAINING_OPTIONS:
             unlock_key = str(row.get("unlock_key", ""))
             unlocked = self._has_interaction_unlock(character, unlock_key)
@@ -1341,7 +1596,7 @@ class GameService:
 
             can_buy = (not unlocked) and character.money >= cost and not availability_note
             options.append(
-                TrainingOptionView(
+                to_training_option_view(
                     training_id=str(row["id"]),
                     title=str(row["title"]),
                     cost=cost,
@@ -1351,13 +1606,13 @@ class GameService:
                     availability_note=availability_note,
                 )
             )
-        return TrainingView(gold=character.money, options=options)
+        return to_training_view(gold=character.money, options=options)
 
     def get_travel_prep_view_intent(self, character_id: int) -> TravelPrepView:
         character = self._require_character(character_id)
         active = self._active_travel_prep_profile(character)
         active_id = str((active or {}).get("id", "")).strip()
-        options: list[TravelPrepOptionView] = []
+        options = []
         for row in self._TRAVEL_PREP_ITEMS:
             prep_id = str(row.get("id", ""))
             price = int(row.get("price", 0))
@@ -1373,7 +1628,7 @@ class GameService:
                 availability_note = "Insufficient gold."
 
             options.append(
-                TravelPrepOptionView(
+                to_travel_prep_option_view(
                     prep_id=prep_id,
                     title=str(row.get("title", prep_id.replace("_", " ").title())),
                     price=price,
@@ -1383,7 +1638,7 @@ class GameService:
                     availability_note=availability_note,
                 )
             )
-        return TravelPrepView(
+        return to_travel_prep_view(
             gold=int(getattr(character, "money", 0)),
             active_summary=self._travel_prep_summary(active),
             options=options,
@@ -1443,8 +1698,10 @@ class GameService:
         seed = derive_seed(
             namespace="town.rumour_board",
             context={
+                "board_key": "rumour_board",
                 "character_id": character_id,
                 "day": day,
+                "location_id": int(getattr(character, "location_id", 0) or 0),
                 "threat": threat,
                 "broker_disposition": broker_disposition,
                 "intel_unlock": self._has_interaction_unlock(character, "intel_leverage"),
@@ -1498,7 +1755,7 @@ class GameService:
             if confidence in {"uncertain", "speculative"}:
                 text = f"[Unverified] {text}"
             items.append(
-                RumourItemView(
+                to_rumour_item_view(
                     rumour_id=str(row.get("id", "rumour")),
                     text=text,
                     confidence=confidence,
@@ -1522,7 +1779,7 @@ class GameService:
         empty_state_hint = (
             "No useful rumours today. Check again after tomorrow's turn; higher town threat and better standing with local informants improve rumour depth."
         )
-        return RumourBoardView(
+        return to_rumour_board_view(
             day=getattr(world, "current_turn", None),
             items=items,
             empty_state_hint=empty_state_hint,
@@ -1575,7 +1832,7 @@ class GameService:
             target = max(1, int(payload.get("target", 1)))
             status = str(payload.get("status", "unknown"))
             views.append(
-                QuestStateView(
+                to_quest_state_view(
                     quest_id=str(quest_id),
                     title=self._quest_title(str(quest_id)),
                     status=status,
@@ -1599,7 +1856,7 @@ class GameService:
         empty_state_hint = (
             "No quest postings yet. Explore nearby zones, advance a day, and check back at the board for new contracts."
         )
-        return QuestBoardView(quests=views, empty_state_hint=empty_state_hint)
+        return to_quest_board_view(quests=views, empty_state_hint=empty_state_hint)
 
     def get_quest_journal_intent(self, character_id: int) -> QuestJournalView:
         board = self.get_quest_board_intent(character_id)
@@ -1630,7 +1887,7 @@ class GameService:
         return QuestJournalView(sections=sections, empty_state_hint=empty_state_hint)
 
     def accept_quest_intent(self, character_id: int, quest_id: str) -> ActionResult:
-        self._require_character(character_id)
+        character = self._require_character(character_id)
         world = self._require_world()
         quests = self._world_quests(world)
         quest = quests.get(quest_id)
@@ -1644,7 +1901,49 @@ class GameService:
         current_turn = int(getattr(world, "current_turn", 0))
         quest["accepted_turn"] = current_turn
         quest["expires_turn"] = current_turn + 5
-        if self.world_repo:
+
+        operations: list[Callable[[object], None]] = []
+        if self.quest_state_repo is not None:
+            try:
+                from rpg.domain.models.quest import QuestState
+
+                seed_key = str(quest.get("seed_key", ""))
+                quest_state = QuestState(
+                    template_slug=str(quest_id),
+                    status="active",
+                    progress=int(quest.get("progress", 0) or 0),
+                    accepted_turn=current_turn,
+                    completed_turn=None,
+                    metadata={"seed_key": seed_key},
+                )
+                operation_builder = getattr(self.quest_state_repo, "build_save_active_with_history_operation", None)
+                if callable(operation_builder):
+                    operations.append(
+                        operation_builder(
+                            character_id=int(character_id),
+                            state=quest_state,
+                            target_count=max(1, int(quest.get("target", 1) or 1)),
+                            seed_key=seed_key,
+                            action="accepted",
+                            action_turn=current_turn,
+                            payload_json=json.dumps({"status": "active", "quest_id": str(quest_id)}),
+                        )
+                    )
+                else:
+                    self.quest_state_repo.save_active_with_history(
+                        character_id=int(character_id),
+                        state=quest_state,
+                        target_count=max(1, int(quest.get("target", 1) or 1)),
+                        seed_key=seed_key,
+                        action="accepted",
+                        action_turn=current_turn,
+                        payload_json=json.dumps({"status": "active", "quest_id": str(quest_id)}),
+                    )
+            except Exception:
+                pass
+
+        persisted = self._persist_character_world_atomic(character, world, operations=operations)
+        if not persisted and self.world_repo:
             self.world_repo.save(world)
         title = self._QUEST_TITLES.get(quest_id, quest_id)
         return ActionResult(messages=[f"Accepted quest: {title}."], game_over=False)
@@ -1669,17 +1968,116 @@ class GameService:
         character.xp += reward_xp
         character.money += reward_money
         level_messages = self._apply_level_progression(character)
-        self.character_repo.save(character)
 
         quest["status"] = "completed"
         quest["turned_in_turn"] = int(getattr(world, "current_turn", 0))
+        turned_in_turn = int(quest["turned_in_turn"])
         quest_flags = world.flags.setdefault("quest_world_flags", {}) if isinstance(world.flags, dict) else {}
         if isinstance(quest_flags, dict):
             quest_flags[f"{quest_id}_turned_in"] = True
+        world_flags = world.flags.setdefault("world_flags", {}) if isinstance(world.flags, dict) else {}
+        world_flag_key = f"quest:{quest_id}:turned_in"
+        if isinstance(world_flags, dict):
+            world_flags[world_flag_key] = True
+            if character.location_id is not None:
+                world_flags[f"location:{int(character.location_id)}:peaceful"] = True
 
-        self._apply_quest_completion_faction_effect(character_id)
-        if self.world_repo:
-            self.world_repo.save(world)
+        operations: list[Callable[[object], None]] = []
+        world_flag_operation_builder = getattr(self.world_repo, "build_set_world_flag_operation", None)
+        if callable(world_flag_operation_builder):
+            operations.append(
+                world_flag_operation_builder(
+                    world_id=int(getattr(world, "id", 1) or 1),
+                    flag_key=world_flag_key,
+                    flag_value="true",
+                    changed_turn=turned_in_turn,
+                    reason="quest_completion",
+                )
+            )
+            if character.location_id is not None:
+                operations.append(
+                    world_flag_operation_builder(
+                        world_id=int(getattr(world, "id", 1) or 1),
+                        flag_key=f"location:{int(character.location_id)}:peaceful",
+                        flag_value="true",
+                        changed_turn=turned_in_turn,
+                        reason="quest_completion_peaceful_window",
+                    )
+                )
+        if self.quest_state_repo is not None:
+            try:
+                from rpg.domain.models.quest import QuestState
+
+                seed_key = str(quest.get("seed_key", ""))
+                quest_state = QuestState(
+                    template_slug=str(quest_id),
+                    status="completed",
+                    progress=int(quest.get("progress", 0) or 0),
+                    accepted_turn=int(quest.get("accepted_turn", turned_in_turn) or turned_in_turn),
+                    completed_turn=turned_in_turn,
+                    metadata={"seed_key": seed_key},
+                )
+                operation_builder = getattr(self.quest_state_repo, "build_save_active_with_history_operation", None)
+                if callable(operation_builder):
+                    operations.append(
+                        operation_builder(
+                            character_id=int(character_id),
+                            state=quest_state,
+                            target_count=max(1, int(quest.get("target", 1) or 1)),
+                            seed_key=seed_key,
+                            action="completed",
+                            action_turn=turned_in_turn,
+                            payload_json=json.dumps(
+                                {
+                                    "reward_xp": int(reward_xp),
+                                    "reward_money": int(reward_money),
+                                    "quest_id": str(quest_id),
+                                }
+                            ),
+                        )
+                    )
+                else:
+                    self.quest_state_repo.save_active_with_history(
+                        character_id=int(character_id),
+                        state=quest_state,
+                        target_count=max(1, int(quest.get("target", 1) or 1)),
+                        seed_key=seed_key,
+                        action="completed",
+                        action_turn=turned_in_turn,
+                        payload_json=json.dumps(
+                            {
+                                "reward_xp": int(reward_xp),
+                                "reward_money": int(reward_money),
+                                "quest_id": str(quest_id),
+                            }
+                        ),
+                    )
+            except Exception:
+                pass
+
+        self._apply_quest_completion_faction_effect(character_id, operations=operations)
+        persisted = self._persist_character_world_atomic(character, world, operations=operations)
+        if not persisted:
+            self.character_repo.save(character)
+            if self.world_repo:
+                self.world_repo.save(world)
+                world_flag_setter = getattr(self.world_repo, "set_world_flag", None)
+                if callable(world_flag_setter):
+                    world_flag_setter(
+                        world_id=int(getattr(world, "id", 1) or 1),
+                        flag_key=world_flag_key,
+                        flag_value="true",
+                        changed_turn=turned_in_turn,
+                        reason="quest_completion",
+                    )
+                    if character.location_id is not None:
+                        world_flag_setter(
+                            world_id=int(getattr(world, "id", 1) or 1),
+                            flag_key=f"location:{int(character.location_id)}:peaceful",
+                            flag_value="true",
+                            changed_turn=turned_in_turn,
+                            reason="quest_completion_peaceful_window",
+                        )
 
         title = self._QUEST_TITLES.get(quest_id, quest_id)
         messages = [
@@ -1958,6 +2356,8 @@ class GameService:
             for enemy in plan.enemies
         ]
         if not enemies:
+            if str(getattr(plan, "source", "")) == "peaceful":
+                return ExploreView(has_encounter=False, message="The area is unusually calm today.")
             return ExploreView(has_encounter=False, message="You find nothing of interest today.")
         return ExploreView(has_encounter=True, message="Danger stirs nearby.", enemies=enemies)
 
@@ -2032,12 +2432,12 @@ class GameService:
         conditions = "Dodging" if is_dodging else "—"
 
         scene = scene_ctx or {}
-        scene_view = CombatSceneView(
+        scene_view = to_combat_scene_view(
             distance=scene.get("distance", "close"),
             terrain=scene.get("terrain", "open"),
             surprise=scene.get("surprise", "none"),
         )
-        player_view = CombatPlayerPanelView(
+        player_view = to_combat_player_panel_view(
             hp_current=player.hp_current,
             hp_max=player.hp_max,
             armor_class=stats.get("ac", getattr(player, "armour_class", 10)),
@@ -2047,14 +2447,14 @@ class GameService:
             sneak_ready=sneak_ready,
             conditions=conditions,
         )
-        enemy_view = CombatEnemyPanelView(
+        enemy_view = to_combat_enemy_panel_view(
             name=enemy.name,
             hp_current=getattr(enemy, "hp_current", 0),
             hp_max=getattr(enemy, "hp_max", 0),
             armor_class=getattr(enemy, "armour_class", 10),
             intent=getattr(enemy, "intent", None) or "Hostile",
         )
-        return CombatRoundView(
+        return to_combat_round_view(
             round_number=round_no,
             scene=scene_view,
             player=player_view,
@@ -2193,40 +2593,7 @@ class GameService:
             return 0
 
     def _apply_level_progression(self, character: Character) -> list[str]:
-        prior_level = max(1, int(getattr(character, "level", 1) or 1))
-        current_xp = max(0, int(getattr(character, "xp", 0) or 0))
-        current_level = prior_level
-
-        attrs = getattr(character, "attributes", {}) or {}
-        con_mod = self._ability_mod(attrs.get("constitution"))
-        hp_gain_base = max(2, 5 + con_mod)
-
-        gained_levels: list[tuple[int, int]] = []
-        while current_level < LEVEL_CAP and current_xp >= xp_required_for_level(current_level + 1):
-            current_level += 1
-            hp_gain = max(2, hp_gain_base)
-            character.hp_max = max(1, int(getattr(character, "hp_max", 1)) + hp_gain)
-            character.hp_current = min(character.hp_max, int(getattr(character, "hp_current", 1)) + hp_gain)
-            gained_levels.append((current_level, hp_gain))
-
-        character.level = current_level
-
-        if not gained_levels:
-            return []
-
-        messages = [f"Level up! You reached level {level} (+{hp_gain} max HP)." for level, hp_gain in gained_levels]
-        flags = getattr(character, "flags", None)
-        if not isinstance(flags, dict):
-            flags = {}
-            character.flags = flags
-        final_level, final_hp = gained_levels[-1]
-        flags["last_level_up"] = {
-            "from_level": int(prior_level),
-            "to_level": int(final_level),
-            "xp": int(current_xp),
-            "hp_gain_last": int(final_hp),
-        }
-        return messages
+        return self.progression_service.apply_level_progression(character)
 
     def faction_standings_intent(self, character_id: int) -> dict[str, int]:
         if not self.faction_repo:
@@ -2466,7 +2833,7 @@ class GameService:
         seed_id = str(row.get("seed_id", "story_seed"))
         stage = str(row.get("escalation_stage", "simmering")).replace("_", " ")
         text = f"[Story Seed] {row.get('pressure', 'Tension stirs among local powers.')}"
-        return RumourItemView(
+        return to_rumour_item_view(
             rumour_id=f"seed:{seed_id}",
             text=text,
             confidence="credible" if stage in {"escalated", "critical"} else "uncertain",
@@ -2483,7 +2850,7 @@ class GameService:
         text = f"[Echo] Folk still discuss the {kind} from day {turn}."
         if resolution:
             text = f"{text} Outcome: {resolution.replace('_', ' ')}."
-        return RumourItemView(
+        return to_rumour_item_view(
             rumour_id=f"memory:{turn}:{kind.replace(' ', '-')}",
             text=text,
             confidence="credible",
@@ -2502,7 +2869,7 @@ class GameService:
         text = f"[Flashpoint Echo] Day {turn}: {resolution or 'unsettled'} resolution after {channel} intervention. Severity: {severity}."
         if bias:
             text = f"{text} {bias.title()} influence is most discussed."
-        return RumourItemView(
+        return to_rumour_item_view(
             rumour_id=f"flashpoint:{turn}:{channel}",
             text=text,
             confidence="credible" if severity in {"high", "critical"} else "uncertain",
@@ -3099,13 +3466,8 @@ class GameService:
         standings = self.faction_standings_intent(character_id)
         if not standings:
             return 0
-        best = max(standings.values())
-        worst = min(standings.values())
-        if best >= 5:
-            return -2
-        if worst <= -5:
-            return 2
-        return 0
+        best = max(int(score) for score in standings.values())
+        return calculate_price_modifier(best)
 
     @staticmethod
     def _interaction_unlocks(character: Character) -> dict:
@@ -3322,17 +3684,76 @@ class GameService:
         if len(memories) > 10:
             del memories[:-10]
 
-    def _apply_quest_completion_faction_effect(self, character_id: int) -> None:
+    def _apply_quest_completion_faction_effect(
+        self,
+        character_id: int,
+        operations: list[Callable[[object], None]] | None = None,
+    ) -> None:
         if not self.faction_repo:
             return
+
+        faction_id = ""
         factions = self.faction_repo.list_all()
-        if not factions:
+        if factions:
+            faction_id = str(factions[0].id)
+        if not faction_id:
             return
+
+        operation_builder = getattr(self.faction_repo, "build_reputation_delta_operation", None)
+        if operations is not None and callable(operation_builder):
+            operations.append(
+                operation_builder(
+                    faction_id=faction_id,
+                    character_id=int(character_id),
+                    delta=3,
+                    reason="quest_completion",
+                    changed_turn=int(getattr(self._require_world(), "current_turn", 0)),
+                )
+            )
+            return
+
+        event_bus = getattr(getattr(self.progression, "event_bus", None), "publish", None)
+        if callable(event_bus):
+            event_bus(
+                FactionReputationChangedEvent(
+                    faction_id=faction_id,
+                    character_id=int(character_id),
+                    delta=3,
+                    reason="quest_completion",
+                    changed_turn=int(getattr(self._require_world(), "current_turn", 0)),
+                )
+            )
+
         target = f"character:{character_id}"
         faction = factions[0]
         faction.adjust_reputation(target, 3)
-        faction.influence = max(0, faction.influence + 1)
+        faction.influence = max(0, int(faction.influence) + 1)
         self.faction_repo.save(faction)
+
+    def _persist_character_world_atomic(
+        self,
+        character: Character,
+        world: object,
+        operations: Sequence[Callable[[object], None]] | None = None,
+    ) -> bool:
+        if not self.atomic_state_persistor or not self.world_repo:
+            for operation in operations or ():
+                try:
+                    operation(None)
+                except Exception:
+                    continue
+            return False
+        try:
+            self.atomic_state_persistor(character, world, operations)
+            return True
+        except TypeError:
+            self.atomic_state_persistor(character, world)
+            for operation in operations or ():
+                try:
+                    operation(None)
+                except Exception:
+                    continue
+            return True
 
     def _find_town_npc(self, npc_id: str) -> dict:
         target = (npc_id or "").strip().lower()

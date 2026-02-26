@@ -79,7 +79,38 @@ def _bootstrap_world_schema(engine) -> None:
                     name TEXT NOT NULL,
                     current_turn INTEGER DEFAULT 0,
                     threat_level INTEGER DEFAULT 0,
-                    flags TEXT
+                    flags TEXT,
+                    rng_seed INTEGER DEFAULT 1
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE world_flag (
+                    world_flag_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    world_id INTEGER NOT NULL,
+                    flag_key TEXT NOT NULL,
+                    flag_value TEXT,
+                    changed_turn INTEGER DEFAULT 0,
+                    reason TEXT DEFAULT 'system',
+                    UNIQUE(world_id, flag_key)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE world_history (
+                    world_history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    world_id INTEGER NOT NULL,
+                    changed_turn INTEGER DEFAULT 0,
+                    flag_key TEXT NOT NULL,
+                    old_value TEXT,
+                    new_value TEXT,
+                    reason TEXT DEFAULT 'system'
                 )
                 """
             )
@@ -193,6 +224,26 @@ class MysqlWorldRepositoryIntegrationTests(unittest.TestCase):
         self.assertEqual(4, world.current_turn)
         self.assertEqual(2, world.threat_level)
         self.assertEqual({}, world.flags)
+
+    def test_world_flag_round_trip_and_history_append(self) -> None:
+        world = self.repo.load_default()
+
+        self.repo.set_world_flag(
+            world_id=int(world.id),
+            flag_key="quest:first_hunt:turned_in",
+            flag_value="true",
+            changed_turn=3,
+            reason="quest_completion",
+        )
+
+        self.assertEqual(
+            {"quest:first_hunt:turned_in": "true"},
+            self.repo.list_world_flags(world_id=int(world.id)),
+        )
+
+        with self.SessionLocal() as session:
+            history_count = session.execute(text("SELECT COUNT(*) FROM world_history")).scalar_one()
+            self.assertEqual(1, history_count)
 
 
 if __name__ == "__main__":

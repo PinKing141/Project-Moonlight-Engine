@@ -55,6 +55,15 @@ class Open5eClient:
             backoff_seconds=self._backoff_seconds,
         )
 
+    def list_magicitems(self, page: int = 1) -> dict:
+        return get_json_with_retry(
+            self.client,
+            "/magicitems/",
+            params={"page": page},
+            retries=self._retries,
+            backoff_seconds=self._backoff_seconds,
+        )
+
     def list_races(self, page: int = 1) -> dict:
         return get_json_with_retry(
             self.client,

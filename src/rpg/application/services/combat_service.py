@@ -2,9 +2,16 @@ import random
 from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Tuple
 
+from rpg.application.services.feature_effect_registry import (
+    FeatureEffectContext,
+    default_feature_effect_registry,
+)
+from rpg.domain.events import CombatFeatureTriggered
 from rpg.domain.models.character import Character
 from rpg.domain.models.entity import Entity
-from rpg.domain.repositories import SpellRepository
+from rpg.domain.models.feature import Feature
+from rpg.domain.models.stats import ability_modifier, ability_scores_from_mapping
+from rpg.domain.repositories import FeatureRepository, SpellRepository
 from rpg.application.spells.spell_definitions import SPELL_DEFINITIONS
 
 
@@ -23,10 +30,7 @@ class CombatResult:
 
 
 def ability_mod(score: int | None) -> int:
-    try:
-        return (int(score) - 10) // 2
-    except Exception:
-        return 0
+    return ability_modifier(score)
 
 
 def proficiency_bonus(level: int) -> int:
@@ -95,9 +99,21 @@ def _slugify_spell_name(name: str) -> str:
 
 
 class CombatService:
-    def __init__(self, spell_repo: Optional[SpellRepository] = None, verbosity: str = "compact") -> None:
+    def __init__(
+        self,
+        spell_repo: Optional[SpellRepository] = None,
+        verbosity: str = "compact",
+        feature_repo: Optional[FeatureRepository] = None,
+        event_publisher: Optional[Callable[[object], None]] = None,
+        feature_effect_registry=None,
+        mechanical_flavour_builder: Optional[Callable[..., str]] = None,
+    ) -> None:
         self.spell_repo = spell_repo
         self.verbosity = verbosity  # compact | normal | debug
+        self.feature_repo = feature_repo
+        self.event_publisher = event_publisher
+        self.feature_effect_registry = feature_effect_registry or default_feature_effect_registry()
+        self.mechanical_flavour_builder = mechanical_flavour_builder
         self.rng = random.Random()
 
     def set_seed(self, seed: int) -> None:
@@ -167,55 +183,64 @@ class CombatService:
         "finesse",
     )
 
-    def _primary_attack_mod(self, player: Character) -> int:
+    @staticmethod
+    def _ability_scores(player: Character):
         attrs: Dict[str, int] = getattr(player, "attributes", {}) or {}
-        str_mod = ability_mod(attrs.get("strength") or attrs.get("might"))
-        dex_mod = ability_mod(attrs.get("dexterity") or attrs.get("agility"))
-        return max(str_mod, dex_mod)
+        return ability_scores_from_mapping(attrs)
+
+    def _primary_attack_mod(self, player: Character) -> int:
+        scores = self._ability_scores(player)
+        return max(scores.strength_mod, scores.dexterity_mod)
 
     def _mental_mod(self, player: Character) -> int:
-        attrs: Dict[str, int] = getattr(player, "attributes", {}) or {}
-        int_mod = ability_mod(attrs.get("intelligence") or attrs.get("wit"))
-        wis_mod = ability_mod(attrs.get("wisdom"))
-        cha_mod = ability_mod(attrs.get("charisma") or attrs.get("spirit"))
-        return max(int_mod, wis_mod, cha_mod)
+        scores = self._ability_scores(player)
+        return max(scores.intelligence_mod, scores.wisdom_mod, scores.charisma_mod)
 
     def _derive_weapon_profile(self, player: Character) -> tuple[str, int]:
         equipped = self._equipment_state(player)
         equipped_weapon = str(equipped.get("weapon", "") or "").strip().lower()
         if equipped_weapon:
             die = self._weapon_die_from_name(equipped_weapon)
-            attrs: Dict[str, int] = getattr(player, "attributes", {}) or {}
+            scores = self._ability_scores(player)
             if any(keyword in equipped_weapon for keyword in self._DEX_WEAPON_KEYWORDS):
-                mod = ability_mod(attrs.get("dexterity") or attrs.get("agility"))
+                mod = scores.dexterity_mod
             else:
-                mod = ability_mod(attrs.get("strength") or attrs.get("might"))
+                mod = scores.strength_mod
             return die, mod
 
         slug = (player.class_name or "").lower()
         die, ability_key = self._WEAPON_BY_CLASS.get(slug, ("d6", "strength"))
-        attrs: Dict[str, int] = getattr(player, "attributes", {}) or {}
-        fallback_map = {"strength": "might", "dexterity": "agility"}
-        mod = ability_mod(
-            attrs.get(ability_key)
-            or attrs.get(fallback_map.get(ability_key, ability_key))
-        )
+        scores = self._ability_scores(player)
+        mod_by_key = {
+            "strength": scores.strength_mod,
+            "dexterity": scores.dexterity_mod,
+            "constitution": scores.constitution_mod,
+            "intelligence": scores.intelligence_mod,
+            "wisdom": scores.wisdom_mod,
+            "charisma": scores.charisma_mod,
+        }
+        mod = mod_by_key.get(ability_key, scores.strength_mod)
         return die, mod
 
     def _derive_spell_mod(self, player: Character) -> int:
         slug = (player.class_name or "").lower()
         ability_key = self._SPELL_ABILITY.get(slug)
-        attrs: Dict[str, int] = getattr(player, "attributes", {}) or {}
+        scores = self._ability_scores(player)
+        mod_by_key = {
+            "strength": scores.strength_mod,
+            "dexterity": scores.dexterity_mod,
+            "constitution": scores.constitution_mod,
+            "intelligence": scores.intelligence_mod,
+            "wisdom": scores.wisdom_mod,
+            "charisma": scores.charisma_mod,
+        }
         if ability_key:
-            return ability_mod(attrs.get(ability_key))
-        int_mod = ability_mod(attrs.get("intelligence") or attrs.get("wit"))
-        wis_mod = ability_mod(attrs.get("wisdom"))
-        cha_mod = ability_mod(attrs.get("charisma") or attrs.get("spirit"))
-        return max(int_mod, wis_mod, cha_mod)
+            return mod_by_key.get(ability_key, 0)
+        return max(scores.intelligence_mod, scores.wisdom_mod, scores.charisma_mod)
 
     def _derive_ac(self, player: Character) -> int:
-        attrs: Dict[str, int] = getattr(player, "attributes", {}) or {}
-        dex_mod = ability_mod(attrs.get("dexterity") or attrs.get("agility"))
+        scores = self._ability_scores(player)
+        dex_mod = scores.dexterity_mod
         equipped = self._equipment_state(player)
         has_equipment_state = any(bool(str(equipped.get(slot, "") or "").strip()) for slot in ("weapon", "armor", "trinket"))
 
@@ -271,6 +296,81 @@ class CombatService:
                 return die
         return "d6"
 
+    def _character_features(self, player: Character) -> list[Feature]:
+        if self.feature_repo is None or player.id is None:
+            return []
+        try:
+            return list(self.feature_repo.list_for_character(player.id))
+        except Exception:
+            return []
+
+    def _resolve_feature_trigger(
+        self,
+        *,
+        features: list[Feature],
+        trigger_key: str,
+        player: Character,
+        enemy: Entity,
+        round_number: int,
+        is_crit: bool = False,
+    ) -> tuple[int, int, int]:
+        initiative_bonus = 0
+        attack_bonus = 0
+        bonus_damage = 0
+
+        context = FeatureEffectContext(
+            trigger_key=trigger_key,
+            round_number=round_number,
+            is_crit=is_crit,
+        )
+
+        for feature in features:
+            if str(feature.trigger_key) != str(trigger_key):
+                continue
+            outcome = self.feature_effect_registry.apply(feature, context)
+            added_initiative = int(outcome.initiative_bonus)
+            added_attack = int(outcome.attack_bonus)
+            added_damage = int(outcome.bonus_damage)
+            if added_initiative or added_attack or added_damage:
+                self._publish_feature_trigger(
+                    player=player,
+                    enemy=enemy,
+                    feature=feature,
+                    round_number=round_number,
+                )
+            initiative_bonus += added_initiative
+            attack_bonus += added_attack
+            bonus_damage += added_damage
+
+        return initiative_bonus, attack_bonus, bonus_damage
+
+    def _publish_feature_trigger(
+        self,
+        *,
+        player: Character,
+        enemy: Entity,
+        feature: Feature,
+        round_number: int,
+    ) -> None:
+        if self.event_publisher is None:
+            return
+        if player.id is None:
+            return
+        try:
+            self.event_publisher(
+                CombatFeatureTriggered(
+                    character_id=int(player.id),
+                    enemy_id=int(getattr(enemy, "id", 0) or 0),
+                    feature_slug=feature.slug,
+                    trigger_key=feature.trigger_key,
+                    effect_kind=feature.effect_kind,
+                    effect_value=int(feature.effect_value),
+                    round_number=int(round_number),
+                )
+            )
+        except Exception:
+            return
+
     def derive_player_stats(self, player: Character) -> dict:
         """Derive combat stats from attributes, gear, and class; avoids drift."""
         weapon_die, weapon_mod = self._derive_weapon_profile(player)
@@ -324,6 +424,31 @@ class CombatService:
             return
         self._log(log, text, level=level)
         tracker[key] = True
+
+    def _add_mechanical_flavour(
+        self,
+        log: List[CombatLogEntry],
+        *,
+        actor: str,
+        action: str,
+        enemy: Entity,
+        terrain: str,
+        round_no: int,
+    ) -> None:
+        if self.mechanical_flavour_builder is None:
+            return
+        try:
+            line = self.mechanical_flavour_builder(
+                actor=str(actor),
+                action=str(action),
+                enemy_kind=str(getattr(enemy, "kind", "creature") or "creature"),
+                terrain=str(terrain or "open"),
+                round_no=int(round_no),
+            )
+        except Exception:
+            return
+        if line:
+            self._log(log, str(line), level="normal")
 
     def _select_enemy_action(self, intent: str, foe: Entity, round_no: int, terrain: str = "open") -> tuple[str, Optional[str]]:
         """Return (action, advantage_for_attack)."""
@@ -433,11 +558,12 @@ class CombatService:
         mental_mod = derived["spell_mod"]
         prof = derived["proficiency"]
         player.armour_class = derived["ac"]
+        features = self._character_features(player)
         sneak_available = player.class_name == "rogue"
         rage_available = player.class_name == "barbarian"
         rage_rounds = 0
         player_dodge = False
-        attrs: Dict[str, int] = getattr(player, "attributes", {}) or {}
+        scores = self._ability_scores(player)
         surprise = (scene or {}).get("surprise")
         def _roll_initiative(with_adv: bool, base_bonus: int) -> int:
             if not with_adv:
@@ -446,7 +572,14 @@ class CombatService:
             r2 = self.rng.randint(1, 20)
             return max(r1, r2) + base_bonus
 
-        initiative_player = _roll_initiative(surprise == "player", ability_mod(attrs.get("dexterity") or attrs.get("agility")))
+        initiative_bonus, _, _ = self._resolve_feature_trigger(
+            features=features,
+            trigger_key="on_initiative",
+            player=player,
+            enemy=foe,
+            round_number=1,
+        )
+        initiative_player = _roll_initiative(surprise == "player", scores.initiative + initiative_bonus)
         initiative_enemy = _roll_initiative(surprise == "enemy", getattr(foe, "attack_bonus", 0))
         player_has_opening = initiative_player >= initiative_enemy
         self._log(log, f"Initiative: You {initiative_player} vs {foe.name} {initiative_enemy}.", level="normal")
@@ -486,8 +619,15 @@ class CombatService:
 
                     if action == "Attack":
                         sneak_die = "d6" if sneak_available else None
+                        _, roll_attack_bonus, _ = self._resolve_feature_trigger(
+                            features=features,
+                            trigger_key="on_attack_roll",
+                            player=player,
+                            enemy=foe,
+                            round_number=round_no,
+                        )
                         hit, is_crit, _, _ = self._attack_roll(
-                            0,
+                            roll_attack_bonus,
                             prof,
                             attack_mod,
                             foe.armour_class,
@@ -504,14 +644,39 @@ class CombatService:
                                 sneak_die if sneak_available else None,
                                 rage_rounds > 0 and 2 or 0,
                             )
+                            _, _, hit_bonus_damage = self._resolve_feature_trigger(
+                                features=features,
+                                trigger_key="on_attack_hit",
+                                player=player,
+                                enemy=foe,
+                                round_number=round_no,
+                                is_crit=is_crit,
+                            )
+                            dmg += hit_bonus_damage
                             foe.hp_current = max(0, foe.hp_current - dmg)
                             self._log(log, f"You deal {dmg} damage to {foe.name} ({foe.hp_current}/{foe.hp_max}).", level="compact")
                             sneak_available = False
                         else:
                             self._log(log, "Your strike fails to connect.", level="compact")
+                        self._add_mechanical_flavour(
+                            log,
+                            actor="player",
+                            action="attack",
+                            enemy=foe,
+                            terrain=terrain,
+                            round_no=round_no,
+                        )
 
                     elif action == "Cast Spell":
                         self._resolve_spell_cast(player, foe, action_payload, spell_mod, prof, log)
+                        self._add_mechanical_flavour(
+                            log,
+                            actor="player",
+                            action="cast_spell",
+                            enemy=foe,
+                            terrain=terrain,
+                            round_no=round_no,
+                        )
 
                     elif action == "Dodge":
                         player_dodge = True
@@ -585,6 +750,14 @@ class CombatService:
                         self._log(log, f"{foe.name} hits you for {dmg} damage ({player_hp}/{player.hp_max}).", level="compact")
                     else:
                         self._log(log, f"{foe.name} misses you.", level="compact")
+                    self._add_mechanical_flavour(
+                        log,
+                        actor="enemy",
+                        action=enemy_action,
+                        enemy=foe,
+                        terrain=terrain,
+                        round_no=round_no,
+                    )
 
             player_dodge = False
         player.flags.pop("dodging", None)

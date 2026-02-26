@@ -117,3 +117,27 @@ class EncounterPlanner:
         threat_budget = max(player_level * 7, 5)
         enemies = self._assemble_for_definition(chosen, entity_lookup, rng, threat_budget)
         return chosen, enemies[:max_enemies]
+
+
+_BIOME_HAZARDS: dict[str, tuple[str, ...]] = {
+    "tundra": ("Extreme Cold", "Whiteout Winds", "Thin Ice"),
+    "desert": ("Heatstroke", "Sandstorm", "Dehydration"),
+    "swamp": ("Quicksand", "Rot Fog", "Leech Swarm"),
+    "forest": ("Falling Snare", "Thorn Bramble", "Predator Tracks"),
+    "mountain": ("Rockslide", "High Gusts", "Loose Cliff"),
+    "coast": ("Rip Current", "Salt Squall", "Tide Surge"),
+    "wilderness": ("Treacherous Ground", "Sudden Storm", "Poisoned Water"),
+}
+
+
+def plan_biome_hazards(*, biome: str, difficulty: int, seed: int, max_hazards: int = 1) -> list[str]:
+    rng = random.Random(seed)
+    key = str(biome or "wilderness").strip().lower()
+    pool = list(_BIOME_HAZARDS.get(key, _BIOME_HAZARDS["wilderness"]))
+    if not pool:
+        return []
+
+    scale = max(1, int(difficulty))
+    requested = min(max_hazards, max(1, 1 + (scale - 2) // 2), len(pool))
+    rng.shuffle(pool)
+    return pool[:requested]

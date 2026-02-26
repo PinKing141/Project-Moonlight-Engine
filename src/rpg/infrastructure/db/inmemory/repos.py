@@ -17,17 +17,76 @@ from rpg.domain.repositories import (
 class InMemoryWorldRepository(WorldRepository):
     def __init__(self, seed: int = 1) -> None:
         self._world = World(id=1, name="Default World", rng_seed=seed)
+        self._world_flags: dict[str, str] = {}
+        self._world_history: list[dict[str, object]] = []
 
     def load_default(self) -> Optional[World]:
+        if not isinstance(getattr(self._world, "flags", None), dict):
+            self._world.flags = {}
+        self._world.flags["world_flags"] = dict(self._world_flags)
         return self._world
 
     def save(self, world: World) -> None:
+        if isinstance(getattr(world, "flags", None), dict):
+            stored = world.flags.get("world_flags")
+            if isinstance(stored, dict):
+                self._world_flags = {str(key): str(value) for key, value in stored.items()}
         self._world = world
+
+    def list_world_flags(self, world_id: int | None = None) -> dict[str, str]:
+        _ = world_id
+        return dict(self._world_flags)
+
+    def set_world_flag(
+        self,
+        *,
+        world_id: int,
+        flag_key: str,
+        flag_value: str | None,
+        changed_turn: int,
+        reason: str,
+    ) -> None:
+        _ = world_id
+        previous = self._world_flags.get(str(flag_key))
+        if flag_value is None:
+            self._world_flags.pop(str(flag_key), None)
+        else:
+            self._world_flags[str(flag_key)] = str(flag_value)
+        self._world_history.append(
+            {
+                "flag_key": str(flag_key),
+                "old_value": previous,
+                "new_value": None if flag_value is None else str(flag_value),
+                "changed_turn": int(changed_turn),
+                "reason": str(reason),
+            }
+        )
+
+    def build_set_world_flag_operation(
+        self,
+        *,
+        world_id: int,
+        flag_key: str,
+        flag_value: str | None,
+        changed_turn: int,
+        reason: str,
+    ):
+        def _operation(_session: object) -> None:
+            self.set_world_flag(
+                world_id=world_id,
+                flag_key=flag_key,
+                flag_value=flag_value,
+                changed_turn=changed_turn,
+                reason=reason,
+            )
+
+        return _operation
 
 
 class InMemoryCharacterRepository(CharacterRepository):
     def __init__(self, initial: Dict[int, Character]) -> None:
         self._characters = dict(initial)
+        self._progression_unlocks: list[dict[str, object]] = []
 
     def get(self, character_id: int) -> Character | None:
         return self._characters.get(character_id)
@@ -47,6 +106,68 @@ class InMemoryCharacterRepository(CharacterRepository):
         character.location_id = location_id
         self._characters[next_id] = character
         return character
+
+    def list_progression_unlocks(self, character_id: int) -> list[dict[str, object]]:
+        return [
+            dict(row)
+            for row in self._progression_unlocks
+            if int(row.get("character_id", 0)) == int(character_id)
+        ]
+
+    def record_progression_unlock(
+        self,
+        *,
+        character_id: int,
+        unlock_kind: str,
+        unlock_key: str,
+        unlocked_level: int,
+        created_turn: int,
+    ) -> None:
+        key = str(unlock_key)
+        kind = str(unlock_kind)
+        existing = next(
+            (
+                row
+                for row in self._progression_unlocks
+                if int(row.get("character_id", 0)) == int(character_id)
+                and str(row.get("unlock_kind", "")) == kind
+                and str(row.get("unlock_key", "")) == key
+            ),
+            None,
+        )
+        if existing is not None:
+            existing["unlocked_level"] = int(unlocked_level)
+            existing["created_turn"] = int(created_turn)
+            return
+        self._progression_unlocks.append(
+            {
+                "character_id": int(character_id),
+                "unlock_kind": kind,
+                "unlock_key": key,
+                "unlocked_level": int(unlocked_level),
+                "created_turn": int(created_turn),
+            }
+        )
+
+    def build_progression_unlock_operation(
+        self,
+        *,
+        character_id: int,
+        unlock_kind: str,
+        unlock_key: str,
+        unlocked_level: int,
+        created_turn: int,
+    ):
+        def _operation(_session: object) -> None:
+            self.record_progression_unlock(
+                character_id=character_id,
+                unlock_kind=unlock_kind,
+                unlock_key=unlock_key,
+                unlocked_level=unlocked_level,
+                created_turn=created_turn,
+            )
+
+        return _operation
 
 
 class InMemoryEntityRepository(EntityRepository):

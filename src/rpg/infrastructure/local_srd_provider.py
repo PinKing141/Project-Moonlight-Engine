@@ -69,6 +69,13 @@ class LocalSrdProvider:
     def list_classes(self, page: int = 1) -> dict:
         return self._paginate(self._load_rows("classes"), page=page)
 
+    def list_magicitems(self, page: int = 1) -> dict:
+        try:
+            rows = self._load_rows("magicitems")
+        except FileNotFoundError:
+            rows = self._load_rows("equipment")
+        return self._paginate(rows, page=page)
+
     def list_races(self, page: int = 1) -> dict:
         return self._paginate(self._load_rows("races"), page=page)
 

@@ -152,6 +152,26 @@ class ReplayHarnessTests(unittest.TestCase):
         self.assertEqual([item.rumour_id for item in board_a.items], [item.rumour_id for item in board_b.items])
         self.assertEqual([item.text for item in board_a.items], [item.text for item in board_b.items])
 
+    def test_replay_world_flag_peaceful_state_is_deterministic(self) -> None:
+        service_a, character_id_a = self._build_service()
+        service_b, character_id_b = self._build_service()
+
+        world_a = service_a._require_world()
+        world_a.flags.setdefault("world_flags", {})
+        world_a.flags["world_flags"]["location:1:peaceful"] = True
+        service_a.world_repo.save(world_a)
+
+        world_b = service_b._require_world()
+        world_b.flags.setdefault("world_flags", {})
+        world_b.flags["world_flags"]["location:1:peaceful"] = True
+        service_b.world_repo.save(world_b)
+
+        script = ["explore", "explore", "rest"]
+        snapshot_a = self._run_script(service_a, character_id_a, script)
+        snapshot_b = self._run_script(service_b, character_id_b, script)
+
+        self.assertEqual(snapshot_a, snapshot_b)
+
 
 if __name__ == "__main__":
     unittest.main()

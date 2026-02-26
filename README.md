@@ -61,6 +61,14 @@ Optional flavour enrichment (bounded, non-mechanical):
 When enabled, Datamuse is used only to append at most one short descriptive flavour line to encounter intros.
 Combat outcomes and game state remain deterministic and unchanged.
 
+Optional mechanical flavour enrichment (deterministic, no rules impact):
+
+- `RPG_MECHANICAL_FLAVOUR_DATAMUSE_ENABLED` (default `0`)
+- `RPG_FLAVOUR_MAX_WORDS` (default `8`)
+
+When enabled, Datamuse-backed vocabulary is used to add deterministic flavour lines to combat exchanges and biome hazard messaging.
+Rules outcomes remain unchanged.
+
 Run locally (prefers MySQL persistence, falls back to in-memory if unreachable):
 
 ```bash
@@ -100,6 +108,10 @@ Use MySQL schema + Open5e import:
 3) Import monsters from Open5e into MySQL (optionally pin them to the first location):
         ```bash
         python -m rpg.infrastructure.db.mysql.import_open5e_monsters --pages 2 --location-id 1
+        ```
+4) Import canonical magic items/equipment into MySQL item tables:
+        ```bash
+        python -m rpg.infrastructure.db.mysql.import_open5e_items --pages 2
         ```
 4) Run game pointing at MySQL (world state persists via `world` table):
         ```bash
@@ -175,5 +187,4 @@ Gameplay troubleshooting:
 
 Next steps:
 - Flesh out domain stats, factions, and encounter tables
-- Add Open5e importer to seed canonical entities
 - Add tests under `tests/`

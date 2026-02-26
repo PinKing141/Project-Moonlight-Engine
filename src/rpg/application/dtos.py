@@ -15,6 +15,7 @@ class EncounterPlan:
     definition_id: str | None = None
     faction_bias: str | None = None
     source: str = "table"
+    hazards: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -52,6 +53,17 @@ class CharacterSheetView:
     xp_to_next_level: int
     hp_current: int
     hp_max: int
+
+
+@dataclass
+class LevelUpPendingView:
+    character_id: int
+    current_level: int
+    next_level: int
+    xp_current: int
+    xp_required: int
+    growth_choices: List[str] = field(default_factory=list)
+    summary: str = ""
 
 
 @dataclass
