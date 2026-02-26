@@ -1,7 +1,9 @@
 import os
 import socket
 from urllib.parse import urlparse
+from rpg.domain.models.feature import Feature
 from rpg.application.services.encounter_intro_enricher import EncounterIntroEnricher
+from rpg.application.services.mechanical_flavour_enricher import MechanicalFlavourEnricher
 from rpg.application.services.event_bus import EventBus
 from rpg.application.services.faction_influence_service import register_faction_influence_handlers
 from rpg.application.services.game_service import GameService
@@ -15,6 +17,7 @@ from rpg.infrastructure.inmemory.inmemory_encounter_definition_repo import (
     InMemoryEncounterDefinitionRepository,
 )
 from rpg.infrastructure.inmemory.inmemory_faction_repo import InMemoryFactionRepository
+from rpg.infrastructure.inmemory.inmemory_feature_repo import InMemoryFeatureRepository
 from rpg.infrastructure.inmemory.inmemory_location_repo import InMemoryLocationRepository
 from rpg.infrastructure.inmemory.inmemory_world_repo import InMemoryWorldRepository
 from rpg.infrastructure.content_provider_factory import create_content_client_factory
@@ -63,6 +66,38 @@ def _build_encounter_intro_builder():
     return enricher.build_intro
 
 
+def _build_mechanical_flavour_builder():
+    enabled = os.getenv("RPG_MECHANICAL_FLAVOUR_DATAMUSE_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+    if not enabled:
+        return None
+
+    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "2"))
+    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "1"))
+    backoff_seconds = float(os.getenv("RPG_FLAVOUR_BACKOFF_S", "0.1"))
+    max_words = int(os.getenv("RPG_FLAVOUR_MAX_WORDS", "8"))
+
+    lexical = DatamuseClient(timeout=timeout, retries=retries, backoff_seconds=backoff_seconds)
+    enricher = MechanicalFlavourEnricher(lexical_client=lexical, enabled=True, max_words=max_words)
+
+    def _build(**kwargs) -> str:
+        if "actor" in kwargs:
+            return enricher.build_combat_line(
+                actor=str(kwargs.get("actor", "combatant")),
+                action=str(kwargs.get("action", "act")),
+                enemy_kind=str(kwargs.get("enemy_kind", "creature")),
+                terrain=str(kwargs.get("terrain", "open")),
+                round_no=int(kwargs.get("round_no", 1)),
+            )
+        return enricher.build_environment_line(
+            event_kind=str(kwargs.get("event_kind", "event")),
+            biome=str(kwargs.get("biome", "wilderness")),
+            hazard_name=str(kwargs.get("hazard_name", "hazard")),
+            world_turn=int(kwargs.get("world_turn", 0)),
+        )
+
+    return _build
+
+
 def _build_inmemory_game_service() -> GameService:
     verbosity = os.getenv("RPG_VERBOSITY", "compact").lower()
     use_external_creation_content = os.getenv("RPG_CREATION_EXTERNAL_CONTENT", "0").strip().lower() in {"1", "true", "yes"}
@@ -73,11 +108,43 @@ def _build_inmemory_game_service() -> GameService:
     name_generator = DnDCorpusNameGenerator()
     entity_repo = InMemoryEntityRepository(name_generator=name_generator)
     faction_repo = InMemoryFactionRepository()
+    feature_repo = InMemoryFeatureRepository(
+        {
+            "feature.sneak_attack": Feature(
+                id=1,
+                slug="feature.sneak_attack",
+                name="Sneak Attack",
+                trigger_key="on_attack_hit",
+                effect_kind="bonus_damage",
+                effect_value=2,
+                source="seed",
+            ),
+            "feature.darkvision": Feature(
+                id=2,
+                slug="feature.darkvision",
+                name="Darkvision",
+                trigger_key="on_initiative",
+                effect_kind="initiative_bonus",
+                effect_value=2,
+                source="seed",
+            ),
+            "feature.martial_precision": Feature(
+                id=3,
+                slug="feature.martial_precision",
+                name="Martial Precision",
+                trigger_key="on_attack_roll",
+                effect_kind="attack_bonus",
+                effect_value=2,
+                source="seed",
+            ),
+        }
+    )
     definition_repo = InMemoryEncounterDefinitionRepository()
     world_repo = InMemoryWorldRepository()
     event_bus = EventBus()
     progression = WorldProgression(world_repo, entity_repo, event_bus)
     encounter_intro_builder = _build_encounter_intro_builder()
+    mechanical_flavour_builder = _build_mechanical_flavour_builder()
     register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo)
     register_quest_handlers(event_bus, world_repo=world_repo, character_repo=char_repo)
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo)
@@ -91,9 +158,11 @@ def _build_inmemory_game_service() -> GameService:
         progression=progression,
         definition_repo=definition_repo,
         faction_repo=faction_repo,
+        feature_repo=feature_repo,
         open5e_client_factory=content_client_factory,
         name_generator=name_generator,
         encounter_intro_builder=encounter_intro_builder,
+        mechanical_flavour_builder=mechanical_flavour_builder,
     )
 
 
@@ -103,7 +172,10 @@ def _build_mysql_game_service():
         MysqlCharacterRepository,
         MysqlClassRepository,
         MysqlEntityRepository,
+        MysqlFactionRepository,
+        MysqlFeatureRepository,
         MysqlLocationRepository,
+        MysqlNarrativeStateRepository,
         MysqlWorldRepository,
         MysqlSpellRepository,
     )
@@ -113,14 +185,20 @@ def _build_mysql_game_service():
     loc_repo = MysqlLocationRepository()
     cls_repo = MysqlClassRepository()
     entity_repo = MysqlEntityRepository()
+    faction_repo = MysqlFactionRepository()
+    narrative_state_repo = MysqlNarrativeStateRepository()
+    feature_repo = MysqlFeatureRepository()
     world_repo = MysqlWorldRepository()
     name_generator = DnDCorpusNameGenerator()
     use_external_creation_content = os.getenv("RPG_CREATION_EXTERNAL_CONTENT", "0").strip().lower() in {"1", "true", "yes"}
     content_client_factory = create_content_client_factory() if use_external_creation_content else None
     encounter_intro_builder = _build_encounter_intro_builder()
+    mechanical_flavour_builder = _build_mechanical_flavour_builder()
+    spell_repo = MysqlSpellRepository()
 
     event_bus = EventBus()
     progression = WorldProgression(world_repo, entity_repo, event_bus)
+    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo)
     register_quest_handlers(event_bus, world_repo=world_repo, character_repo=char_repo)
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo)
 
@@ -135,12 +213,18 @@ def _build_mysql_game_service():
         location_repo=loc_repo,
         class_repo=cls_repo,
         entity_repo=entity_repo,
+        faction_repo=faction_repo,
+        quest_state_repo=narrative_state_repo,
+        location_state_repo=narrative_state_repo,
+        feature_repo=feature_repo,
+        spell_repo=spell_repo,
         world_repo=world_repo,
         progression=progression,
         atomic_state_persistor=save_character_and_world_atomic,
         open5e_client_factory=content_client_factory,
         name_generator=name_generator,
         encounter_intro_builder=encounter_intro_builder,
+        mechanical_flavour_builder=mechanical_flavour_builder,
     )
 
 

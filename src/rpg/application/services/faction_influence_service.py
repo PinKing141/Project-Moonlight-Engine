@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from rpg.application.services.event_bus import EventBus
-from rpg.domain.events import MonsterSlain
+from rpg.domain.events import FactionReputationChangedEvent, MonsterSlain
 from rpg.domain.repositories import EntityRepository, FactionRepository
 
 
@@ -18,19 +18,34 @@ class FactionInfluenceService:
 
     def register_handlers(self) -> None:
         self.event_bus.subscribe(MonsterSlain, self.on_monster_slain)
+        self.event_bus.subscribe(FactionReputationChangedEvent, self.on_faction_reputation_changed)
 
     def on_monster_slain(self, event: MonsterSlain) -> None:
         monster = self.entity_repo.get(event.monster_id)
         if monster is None or not monster.faction_id:
             return
 
-        faction = self.faction_repo.get(monster.faction_id)
+        self.event_bus.publish(
+            FactionReputationChangedEvent(
+                faction_id=str(monster.faction_id),
+                character_id=int(event.by_character_id),
+                delta=-2,
+                reason="monster_slain",
+                changed_turn=int(event.turn),
+            )
+        )
+
+    def on_faction_reputation_changed(self, event: FactionReputationChangedEvent) -> None:
+        faction = self.faction_repo.get(event.faction_id)
         if faction is None:
             return
 
-        target = f"character:{event.by_character_id}"
-        faction.adjust_reputation(target, -2)
-        faction.influence = max(0, faction.influence - 1)
+        target = f"character:{int(event.character_id)}"
+        faction.adjust_reputation(target, int(event.delta))
+        if int(event.delta) < 0:
+            faction.influence = max(0, int(faction.influence) - 1)
+        elif int(event.delta) > 0:
+            faction.influence = max(0, int(faction.influence) + 1)
         self.faction_repo.save(faction)
 
 

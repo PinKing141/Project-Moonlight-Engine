@@ -1,16 +1,14 @@
+from __future__ import annotations
+
 import random
 from typing import Dict, List
 
 from rpg.application.dtos import CharacterClassDetailView
+from rpg.application.mappers.character_creation_mapper import to_character_class_detail_view
 from rpg.application.services.balance_tables import DIFFICULTY_PRESET_PROFILES
 from rpg.domain.models.character_class import CharacterClass
 from rpg.domain.models.character_options import Background, DifficultyPreset, Race, Subrace
-from rpg.domain.repositories import CharacterRepository, ClassRepository, LocationRepository
-from rpg.domain.services.class_profiles import (
-    CLASS_COMBAT_PROFILE,
-    CLASS_DESCRIPTIONS,
-    DEFAULT_COMBAT_PROFILE,
-)
+from rpg.domain.repositories import CharacterRepository, ClassRepository, FeatureRepository, LocationRepository
 from rpg.domain.services.character_factory import ABILITY_ALIASES, create_new_character
 
 
@@ -33,6 +31,9 @@ class CharacterCreationService:
         ("languages", "Languages"),
         ("traits", "Traits"),
     )
+    _RACE_FEATURE_SLUGS = {
+        "dwarf": "feature.darkvision",
+    }
 
     def __init__(
         self,
@@ -41,11 +42,13 @@ class CharacterCreationService:
         location_repo: LocationRepository,
         open5e_client=None,
         name_generator=None,
+        feature_repo: FeatureRepository | None = None,
     ):
         self.character_repo = character_repo
         self.class_repo = class_repo
         self.location_repo = location_repo
         self.name_generator = name_generator
+        self.feature_repo = feature_repo
         self.backgrounds: List[Background] = self._default_backgrounds()
         self.difficulties: List[DifficultyPreset] = self._default_difficulties()
         self.starting_equipment: Dict[str, List[str]] = self._default_starting_equipment()
@@ -137,17 +140,12 @@ class CharacterCreationService:
         ]
 
     def class_detail_view(self, chosen_class: CharacterClass) -> CharacterClassDetailView:
-        profile = CLASS_COMBAT_PROFILE.get(chosen_class.slug, DEFAULT_COMBAT_PROFILE)
         recommended = self.format_attribute_line(chosen_class.base_attributes)
-        description = CLASS_DESCRIPTIONS.get(chosen_class.slug, "Adventurer ready for the unknown.")
-        return CharacterClassDetailView(
-            title=f"Class: {chosen_class.name}",
-            description=description,
-            primary_ability=chosen_class.primary_ability or "None",
-            hit_die=chosen_class.hit_die or "d8",
-            combat_profile_line=(
-                f"AC {profile['ac']}, +{profile['attack_bonus']} to hit, damage {profile['damage_die']}"
-            ),
+        return to_character_class_detail_view(
+            class_name=chosen_class.name,
+            class_slug=chosen_class.slug,
+            primary_ability=chosen_class.primary_ability,
+            hit_die=chosen_class.hit_die,
             recommended_line=recommended,
         )
 
@@ -222,6 +220,15 @@ class CharacterCreationService:
         character.location_id = starting_location.id if starting_location else None
 
         self.character_repo.create(character, character.location_id or 0)
+
+        if self.feature_repo is not None and effective_race is not None:
+            race_slug = str(getattr(effective_race, "name", "")).strip().lower()
+            feature_slug = self._RACE_FEATURE_SLUGS.get(race_slug)
+            if feature_slug and character.id is not None:
+                try:
+                    self.feature_repo.grant_feature_by_slug(character.id, feature_slug)
+                except Exception:
+                    pass
 
         return character
 

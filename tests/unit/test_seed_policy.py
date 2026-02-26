@@ -26,6 +26,15 @@ class SeedPolicyTests(unittest.TestCase):
         context = {"value": 10}
         self.assertNotEqual(derive_seed("encounter.plan", context), derive_seed("combat.resolve", context))
 
+    def test_unordered_set_values_produce_stable_seed(self) -> None:
+        context_a = {"flags": {"night", "storm", "wardens"}}
+        context_b = {"flags": {"wardens", "night", "storm"}}
+        self.assertEqual(derive_seed("world.tick", context_a), derive_seed("world.tick", context_b))
+
+    def test_non_finite_float_in_context_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            derive_seed("world.tick", {"threat": float("nan")})
+
 
 if __name__ == "__main__":
     unittest.main()

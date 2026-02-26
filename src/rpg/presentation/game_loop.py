@@ -589,6 +589,39 @@ def run_game_loop(game_service, character_id: int):
             _prompt_continue()
             break
 
+        pending_level_up = None
+        try:
+            pending_level_up = game_service.get_level_up_pending_intent(character_id)
+        except Exception:
+            pending_level_up = None
+        if pending_level_up is not None:
+            clear_screen()
+            _render_message_panel(
+                "Level Up",
+                [
+                    pending_level_up.summary or "Your experience allows a level up.",
+                    f"Level {pending_level_up.current_level} -> {pending_level_up.next_level}",
+                    f"XP {pending_level_up.xp_current}/{pending_level_up.xp_required}",
+                ],
+                border_style=_BORDER_CHARACTER,
+                panel_key="character",
+            )
+            choices = [str(choice).title() for choice in list(pending_level_up.growth_choices or [])]
+            choices.append("Keep Adventuring")
+            selection = arrow_menu("Choose Growth", choices)
+            if selection not in {-1, len(choices) - 1}:
+                chosen_kind = str(pending_level_up.growth_choices[selection])
+                result = game_service.submit_level_up_choice_intent(character_id, chosen_kind)
+                clear_screen()
+                _render_message_panel(
+                    "Level Up Result",
+                    list(result.messages or []),
+                    border_style=_BORDER_CHARACTER,
+                    panel_key="character",
+                )
+                _prompt_continue()
+                continue
+
         clear_screen()
         title_bits = []
         if view.race:

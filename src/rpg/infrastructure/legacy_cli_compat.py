@@ -4,6 +4,7 @@ from sqlalchemy import text
 
 from rpg.application.services.character_creation_service import CharacterCreationService
 from rpg.application.services.encounter_intro_enricher import EncounterIntroEnricher
+from rpg.application.services.mechanical_flavour_enricher import MechanicalFlavourEnricher
 from rpg.application.services.event_bus import EventBus
 from rpg.application.services.faction_influence_service import register_faction_influence_handlers
 from rpg.application.services.game_service import GameService
@@ -29,7 +30,10 @@ from rpg.infrastructure.db.mysql.repos import (
     MysqlCharacterRepository,
     MysqlClassRepository,
     MysqlEntityRepository,
+    MysqlFactionRepository,
     MysqlLocationRepository,
+    MysqlNarrativeStateRepository,
+    MysqlSpellRepository,
     MysqlWorldRepository,
 )
 from rpg.infrastructure.db.mysql.atomic_persistence import save_character_and_world_atomic
@@ -52,6 +56,38 @@ def _build_encounter_intro_builder():
         max_extra_lines=max_lines,
     )
     return enricher.build_intro
+
+
+def _build_mechanical_flavour_builder():
+    enabled = os.getenv("RPG_MECHANICAL_FLAVOUR_DATAMUSE_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+    if not enabled:
+        return None
+
+    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "2"))
+    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "1"))
+    backoff_seconds = float(os.getenv("RPG_FLAVOUR_BACKOFF_S", "0.1"))
+    max_words = int(os.getenv("RPG_FLAVOUR_MAX_WORDS", "8"))
+
+    lexical = DatamuseClient(timeout=timeout, retries=retries, backoff_seconds=backoff_seconds)
+    enricher = MechanicalFlavourEnricher(lexical_client=lexical, enabled=True, max_words=max_words)
+
+    def _build(**kwargs) -> str:
+        if "actor" in kwargs:
+            return enricher.build_combat_line(
+                actor=str(kwargs.get("actor", "combatant")),
+                action=str(kwargs.get("action", "act")),
+                enemy_kind=str(kwargs.get("enemy_kind", "creature")),
+                terrain=str(kwargs.get("terrain", "open")),
+                round_no=int(kwargs.get("round_no", 1)),
+            )
+        return enricher.build_environment_line(
+            event_kind=str(kwargs.get("event_kind", "event")),
+            biome=str(kwargs.get("biome", "wilderness")),
+            hazard_name=str(kwargs.get("hazard_name", "hazard")),
+            world_turn=int(kwargs.get("world_turn", 0)),
+        )
+
+    return _build
 
 
 def bootstrap() -> tuple[GameService, CharacterCreationService]:
@@ -187,6 +223,7 @@ def bootstrap_inmemory() -> tuple[GameService, CharacterCreationService]:
             faction_repo=faction_repo,
             atomic_state_persistor=save_character_and_world_atomic,
             encounter_intro_builder=_build_encounter_intro_builder(),
+            mechanical_flavour_builder=_build_mechanical_flavour_builder(),
         ),
         creation_service,
     )
@@ -198,10 +235,13 @@ def bootstrap_mysql() -> tuple[GameService, CharacterCreationService]:
     char_repo = MysqlCharacterRepository()
     class_repo = MysqlClassRepository()
     entity_repo = MysqlEntityRepository()
+    faction_repo = MysqlFactionRepository()
+    narrative_state_repo = MysqlNarrativeStateRepository()
     location_repo = MysqlLocationRepository()
+    spell_repo = MysqlSpellRepository()
     ensure_mysql_seed()
     progression = WorldProgression(world_repo, entity_repo, event_bus)
-    register_faction_influence_handlers(event_bus, faction_repo=None, entity_repo=entity_repo)
+    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo)
     register_quest_handlers(event_bus, world_repo=world_repo, character_repo=char_repo)
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo)
 
@@ -222,7 +262,12 @@ def bootstrap_mysql() -> tuple[GameService, CharacterCreationService]:
             location_repo=location_repo,
             world_repo=world_repo,
             progression=progression,
+            faction_repo=faction_repo,
+            quest_state_repo=narrative_state_repo,
+            location_state_repo=narrative_state_repo,
+            spell_repo=spell_repo,
             encounter_intro_builder=_build_encounter_intro_builder(),
+            mechanical_flavour_builder=_build_mechanical_flavour_builder(),
         ),
         creation_service,
     )

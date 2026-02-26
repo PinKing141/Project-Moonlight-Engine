@@ -1,5 +1,25 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import List, Optional
+
+
+class Biome(str, Enum):
+    WILDERNESS = "wilderness"
+    TUNDRA = "tundra"
+    DESERT = "desert"
+    SWAMP = "swamp"
+    FOREST = "forest"
+    MOUNTAIN = "mountain"
+    COAST = "coast"
+
+
+@dataclass(frozen=True)
+class HazardProfile:
+    key: str = "standard"
+    severity: int = 1
+    environmental_flags: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -16,9 +36,10 @@ class EncounterTableEntry:
 class Location:
     id: int
     name: str
-    biome: str = "wilderness"
+    biome: Biome | str = Biome.WILDERNESS.value
     base_level: int = 1
     recommended_level: int = 1
     factions: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
     encounters: List[EncounterTableEntry] = field(default_factory=list)
+    hazard_profile: HazardProfile = field(default_factory=HazardProfile)
