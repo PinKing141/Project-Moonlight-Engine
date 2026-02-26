@@ -22,6 +22,7 @@ from rpg.infrastructure.db.inmemory.repos import (
     InMemoryWorldRepository,
 )
 from rpg.infrastructure.inmemory.inmemory_faction_repo import InMemoryFactionRepository
+from rpg.infrastructure.inmemory.atomic_persistence import create_inmemory_atomic_persistor
 from rpg.infrastructure.content_provider_factory import create_content_client
 from rpg.infrastructure.datamuse_client import DatamuseClient
 from rpg.infrastructure.name_generation import DnDCorpusNameGenerator
@@ -214,6 +215,8 @@ def bootstrap_inmemory() -> tuple[GameService, CharacterCreationService]:
         name_generator=name_generator,
     )
 
+    atomic_persistor = create_inmemory_atomic_persistor(char_repo, world_repo)
+
     return (
         GameService(
             character_repo=char_repo,
@@ -222,7 +225,7 @@ def bootstrap_inmemory() -> tuple[GameService, CharacterCreationService]:
             world_repo=world_repo,
             progression=progression,
             faction_repo=faction_repo,
-            atomic_state_persistor=save_character_and_world_atomic,
+            atomic_state_persistor=atomic_persistor,
             encounter_intro_builder=_build_encounter_intro_builder(),
             mechanical_flavour_builder=_build_mechanical_flavour_builder(),
         ),

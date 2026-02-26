@@ -1,5 +1,8 @@
+import copy
+import inspect
 import json
 import random
+import time
 from collections.abc import Callable, Sequence
 from typing import Optional, cast
 
@@ -339,6 +342,8 @@ class GameService:
         self.verbose_level = verbose_level
         self.encounter_intro_builder = encounter_intro_builder or random_intro
         self.mechanical_flavour_builder = mechanical_flavour_builder
+        self._snapshot_limit = 24
+        self._snapshots: list[dict[str, object]] = []
         event_publisher = None
         if self.progression and getattr(self.progression, "event_bus", None):
             event_publisher = self.progression.event_bus.publish
@@ -2247,9 +2252,13 @@ class GameService:
                     continue
                 if str(quest.get("objective_kind", "kill_any")) != "kill_any":
                     continue
-                quest["progress"] = int(quest.get("target", 1))
-                quest["status"] = "ready_to_turn_in"
-                quest["completed_turn"] = world_turn
+                target_count = max(1, int(quest.get("target", 1) or 1))
+                current_progress = max(0, int(quest.get("progress", 0) or 0))
+                advanced_progress = min(target_count, current_progress + 1)
+                quest["progress"] = advanced_progress
+                if advanced_progress >= target_count:
+                    quest["status"] = "ready_to_turn_in"
+                    quest["completed_turn"] = world_turn
                 progressed = True
                 break
 
@@ -2433,6 +2442,71 @@ class GameService:
 
     def save_character_state(self, character: Character) -> None:
         self.character_repo.save(character)
+
+    def create_snapshot_intent(self, label: str | None = None) -> dict[str, object]:
+        now_ms = int(time.time() * 1000)
+        world_turn = 0
+        if self.world_repo:
+            world = self.world_repo.load_default()
+            world_turn = int(getattr(world, "current_turn", 0) if world is not None else 0)
+
+        snapshot_id = f"snapshot-{now_ms}-{len(self._snapshots) + 1}"
+        record = {
+            "snapshot_id": snapshot_id,
+            "label": str(label or "").strip() or f"Turn {world_turn}",
+            "captured_at_epoch_ms": now_ms,
+            "world_turn": world_turn,
+            "state": self._capture_snapshot_state(),
+        }
+        self._snapshots.append(record)
+        if len(self._snapshots) > self._snapshot_limit:
+            del self._snapshots[:-self._snapshot_limit]
+
+        return {
+            "snapshot_id": snapshot_id,
+            "label": record["label"],
+            "captured_at_epoch_ms": now_ms,
+            "world_turn": world_turn,
+        }
+
+    def list_snapshots_intent(self) -> list[dict[str, object]]:
+        output: list[dict[str, object]] = []
+        for row in reversed(self._snapshots):
+            captured_at = self._coerce_int(row.get("captured_at_epoch_ms"), default=0)
+            world_turn = self._coerce_int(row.get("world_turn"), default=0)
+            output.append(
+                {
+                    "snapshot_id": str(row.get("snapshot_id", "")),
+                    "label": str(row.get("label", "")),
+                    "captured_at_epoch_ms": captured_at,
+                    "world_turn": world_turn,
+                }
+            )
+        return output
+
+    def load_snapshot_intent(self, snapshot_id: str) -> ActionResult:
+        target = str(snapshot_id or "").strip()
+        record = next((row for row in self._snapshots if str(row.get("snapshot_id", "")) == target), None)
+        if record is None:
+            return ActionResult(messages=[f"Snapshot not found: {target}"], game_over=False)
+
+        state = record.get("state")
+        if not isinstance(state, dict):
+            return ActionResult(messages=[f"Snapshot payload is invalid: {target}"], game_over=False)
+
+        try:
+            self._restore_snapshot_state(state)
+        except Exception as exc:
+            return ActionResult(messages=[f"Failed to load snapshot {target}: {exc}"], game_over=False)
+
+        loaded_turn = self._coerce_int(record.get("world_turn"), default=0)
+
+        return ActionResult(
+            messages=[
+                f"Snapshot loaded: {str(record.get('label', target))} (turn {loaded_turn})."
+            ],
+            game_over=False,
+        )
 
     def encounter_intro_intent(self, enemy: Entity) -> str:
         try:
@@ -3853,24 +3927,31 @@ class GameService:
         world: object,
         operations: Sequence[Callable[[object], None]] | None = None,
     ) -> bool:
+        operation_rows = list(operations or ())
         if not self.atomic_state_persistor or not self.world_repo:
-            for operation in operations or ():
-                try:
-                    operation(None)
-                except Exception:
-                    continue
             return False
+        if operation_rows and not self._persistor_supports_operations(self.atomic_state_persistor):
+            raise RuntimeError(
+                "Configured atomic_state_persistor does not accept operation batches; "
+                "cannot guarantee atomic persistence for dependent side-effects."
+            )
+        if operation_rows:
+            self.atomic_state_persistor(character, world, operation_rows)
+            return True
+        self.atomic_state_persistor(character, world)
+        return True
+
+    @staticmethod
+    def _persistor_supports_operations(persistor: Callable[..., None]) -> bool:
         try:
-            self.atomic_state_persistor(character, world, operations)
-            return True
-        except TypeError:
-            self.atomic_state_persistor(character, world)
-            for operation in operations or ():
-                try:
-                    operation(None)
-                except Exception:
-                    continue
-            return True
+            signature = inspect.signature(persistor)
+        except Exception:
+            return False
+
+        for parameter in signature.parameters.values():
+            if parameter.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                return True
+        return len(signature.parameters) >= 3
 
     def _find_town_npc(self, npc_id: str) -> dict:
         target = (npc_id or "").strip().lower()
@@ -3879,18 +3960,97 @@ class GameService:
                 return npc
         raise ValueError(f"Unknown NPC: {npc_id}")
 
+    def _capture_snapshot_state(self) -> dict[str, object]:
+        state: dict[str, object] = {}
+        if self.world_repo is not None:
+            state["world"] = copy.deepcopy(self.world_repo.load_default())
+            for attr in ("_world", "_world_flags", "_world_history"):
+                if hasattr(self.world_repo, attr):
+                    state[f"world_repo:{attr}"] = copy.deepcopy(getattr(self.world_repo, attr))
+
+        if hasattr(self.character_repo, "_characters"):
+            state["character_repo:_characters"] = copy.deepcopy(getattr(self.character_repo, "_characters"))
+        else:
+            state["characters"] = copy.deepcopy(self.character_repo.list_all())
+
+        if hasattr(self.character_repo, "_progression_unlocks"):
+            state["character_repo:_progression_unlocks"] = copy.deepcopy(
+                getattr(self.character_repo, "_progression_unlocks")
+            )
+
+        if self.entity_repo is not None:
+            for attr in ("_entities", "_by_location"):
+                if hasattr(self.entity_repo, attr):
+                    state[f"entity_repo:{attr}"] = copy.deepcopy(getattr(self.entity_repo, attr))
+
+        if self.faction_repo is not None and hasattr(self.faction_repo, "_factions"):
+            state["faction_repo:_factions"] = copy.deepcopy(getattr(self.faction_repo, "_factions"))
+
+        return state
+
+    def _restore_snapshot_state(self, state: dict[str, object]) -> None:
+        if self.world_repo is not None:
+            for attr in ("_world", "_world_flags", "_world_history"):
+                key = f"world_repo:{attr}"
+                if key in state and hasattr(self.world_repo, attr):
+                    setattr(self.world_repo, attr, copy.deepcopy(state[key]))
+
+            world_obj = state.get("world")
+            if isinstance(world_obj, World):
+                self.world_repo.save(cast(World, copy.deepcopy(world_obj)))
+
+        if "character_repo:_characters" in state and hasattr(self.character_repo, "_characters"):
+            setattr(self.character_repo, "_characters", copy.deepcopy(state["character_repo:_characters"]))
+        else:
+            characters = state.get("characters")
+            if isinstance(characters, list):
+                for character in copy.deepcopy(characters):
+                    self.character_repo.save(character)
+
+        if "character_repo:_progression_unlocks" in state and hasattr(self.character_repo, "_progression_unlocks"):
+            setattr(
+                self.character_repo,
+                "_progression_unlocks",
+                copy.deepcopy(state["character_repo:_progression_unlocks"]),
+            )
+
+        if self.entity_repo is not None:
+            for attr in ("_entities", "_by_location"):
+                key = f"entity_repo:{attr}"
+                if key in state and hasattr(self.entity_repo, attr):
+                    setattr(self.entity_repo, attr, copy.deepcopy(state[key]))
+
+        if self.faction_repo is not None and "faction_repo:_factions" in state and hasattr(self.faction_repo, "_factions"):
+            setattr(self.faction_repo, "_factions", copy.deepcopy(state["faction_repo:_factions"]))
+
     @staticmethod
     def _npc_greeting(npc_name: str, temperament: str, disposition: int) -> str:
         if disposition >= 50:
             return f"{npc_name} smiles. 'You're a welcome sight.'"
         if disposition <= -50:
-            return f"{npc_name} narrows their eyes. 'Keep this brief.'"
+            return f"{npc_name} narrows their eyes. 'State your business and move on.'"
         tone = {
-            "warm": "'Good to see you. Need anything?'",
-            "stern": "'State your business.'",
+            "warm": "'Welcome back. Need anything from the inn?'",
+            "stern": "'Report quick. We keep watch rotations tight.'",
+            "curious": "'You've seen the old roads too? Tell me what you found.'",
             "cynical": "'Information has a price. Speak.'",
         }.get(temperament, "'Yes?'")
         return f"{npc_name} says {tone}"
+
+    @staticmethod
+    def _coerce_int(value: object, default: int = 0) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except Exception:
+                return int(default)
+        return int(default)
 
     def _run_encounter(self, character: Character, world, location: Optional[Location]) -> str:
         rng = random.Random(world.rng_seed + world.current_turn + character.location_id)
@@ -3942,6 +4102,88 @@ class GameService:
         world,
         location: Optional[Location],
     ) -> str:
+        combat_service = self.combat_service
+        if combat_service:
+            world_turn = int(getattr(world, "current_turn", 0) or 0)
+            seed = derive_seed(
+                namespace="combat.resolve.legacy_explore",
+                context={
+                    "player_id": int(character.id or 0),
+                    "enemy_id": int(monster.id or 0),
+                    "world_turn": world_turn,
+                    "location_id": int(character.location_id or 0),
+                    "terrain": str(getattr(location, "biome", "open") if location else "open"),
+                },
+            )
+            combat_service.set_seed(seed)
+            xp_before = int(getattr(character, "xp", 0) or 0)
+
+            def _auto_choose_action(options: list[str], player_state: Character, _enemy: Entity, _round_no: int, _scene: dict):
+                if "Use Item" in options and int(getattr(player_state, "hp_current", 0) or 0) <= max(1, int(getattr(player_state, "hp_max", 1) or 1) // 2):
+                    usable = combat_service.list_usable_items(player_state)
+                    if usable:
+                        return "Use Item", usable[0]
+                if "Cast Spell" in options and (getattr(player_state, "known_spells", None) or []):
+                    known = list(getattr(player_state, "known_spells", []) or [])
+                    if known:
+                        return "Cast Spell", "".join(ch if ch.isalnum() or ch == " " else "-" for ch in str(known[0]).lower()).replace(" ", "-")
+                if "Rage Attack" in options:
+                    return "Rage Attack"
+                return "Attack"
+
+            combat_result = combat_service.fight_turn_based(
+                character,
+                monster,
+                _auto_choose_action,
+                scene={
+                    "distance": "close",
+                    "terrain": str(getattr(location, "biome", "open") if location else "open"),
+                    "surprise": "none",
+                },
+            )
+
+            character.hp_current = int(getattr(combat_result.player, "hp_current", character.hp_current))
+            character.alive = bool(getattr(combat_result.player, "alive", character.alive))
+            character.inventory = list(getattr(combat_result.player, "inventory", character.inventory) or [])
+            character.flags = dict(getattr(combat_result.player, "flags", character.flags) or {})
+            character.spell_slots_current = int(getattr(combat_result.player, "spell_slots_current", getattr(character, "spell_slots_current", 0)) or 0)
+            character.xp = xp_before
+
+            if combat_result.fled:
+                return "You disengage and escape the encounter."
+
+            if combat_result.player_won or int(getattr(combat_result.enemy, "hp_current", 0) or 0) <= 0:
+                reward = self.apply_encounter_reward_intent(character, monster)
+                faction_note = f" for the {monster.faction_id}" if monster.faction_id else ""
+                if self.progression and getattr(self.progression, "event_bus", None):
+                    self.progression.event_bus.publish(
+                        MonsterSlain(
+                            monster_id=monster.id,
+                            location_id=int(character.location_id or 0),
+                            by_character_id=int(character.id or 0),
+                            turn=world.current_turn,
+                        )
+                    )
+                progression_messages = self._pop_progression_messages(character)
+                progression_suffix = f" {' '.join(progression_messages)}" if progression_messages else ""
+                return (
+                    f"You defeat {monster.name}{faction_note}. "
+                    f"(+{reward.xp_gain} XP, +{reward.money_gain} gold){progression_suffix}"
+                )
+
+            if character.hp_current <= 0:
+                character.alive = False
+                threat = f" from the {monster.faction_id}" if monster.faction_id else ""
+                return (
+                    f"{monster.name}{threat} overwhelms you in combat. "
+                    "You collapse and darkness closes in."
+                )
+
+            return (
+                f"You skirmish with {monster.name} but neither side is finished. "
+                f"You have {character.hp_current}/{character.hp_max} HP remaining."
+            )
+
         monster_hp = monster.hp
 
         might = character.attributes.get("might", 0)

@@ -25,6 +25,8 @@ class ContractCompatibilityTests(unittest.TestCase):
                 "submit_combat_action_intent",
                 "apply_encounter_reward_intent",
                 "save_character_state",
+                "create_snapshot_intent",
+                "load_snapshot_intent",
             ),
             COMMAND_INTENTS,
         )
@@ -35,6 +37,7 @@ class ContractCompatibilityTests(unittest.TestCase):
                 "combat_round_view_intent",
                 "list_spell_options",
                 "faction_standings_intent",
+                "list_snapshots_intent",
             ),
             QUERY_INTENTS,
         )

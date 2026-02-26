@@ -98,6 +98,24 @@ class EventBusTests(unittest.TestCase):
 
         self.assertEqual(["first", "second"], seen)
 
+    def test_publish_continues_when_one_handler_raises(self) -> None:
+        bus = EventBus()
+        seen: list[str] = []
+
+        class ExampleEvent:
+            pass
+
+        def _broken(_evt) -> None:
+            raise RuntimeError("boom")
+
+        bus.subscribe(ExampleEvent, _broken, priority=10)
+        bus.subscribe(ExampleEvent, lambda evt: seen.append("still-runs"), priority=20)
+
+        bus.publish(ExampleEvent())
+
+        self.assertEqual(["still-runs"], seen)
+        self.assertEqual(1, len(bus.last_publish_errors()))
+
 
 class WorldProgressionTests(unittest.TestCase):
     def test_tick_advances_turns_and_persists_once(self) -> None:

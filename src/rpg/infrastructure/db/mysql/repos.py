@@ -332,6 +332,31 @@ class MysqlCharacterRepository(CharacterRepository):
                 location_statement,
                 {"cid": character.id, "loc": character.location_id},
             )
+
+            for attr_name, value in (character.attributes or {}).items():
+                attr_id = self._resolve_attribute_id(session, str(attr_name))
+                if attr_id is None:
+                    continue
+                if dialect == "mysql":
+                    attr_statement = text(
+                        """
+                        INSERT INTO character_attribute (character_id, attribute_id, value)
+                        VALUES (:cid, :aid, :val)
+                        ON DUPLICATE KEY UPDATE value = VALUES(value)
+                        """
+                    )
+                else:
+                    attr_statement = text(
+                        """
+                        INSERT INTO character_attribute (character_id, attribute_id, value)
+                        VALUES (:cid, :aid, :val)
+                        ON CONFLICT(character_id, attribute_id) DO UPDATE SET value = excluded.value
+                        """
+                    )
+                session.execute(
+                    attr_statement,
+                    {"cid": character.id, "aid": attr_id, "val": int(value)},
+                )
             session.commit()
 
     def find_by_location(self, location_id: int) -> List[Character]:

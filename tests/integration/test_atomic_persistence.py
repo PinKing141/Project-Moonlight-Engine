@@ -79,6 +79,30 @@ class AtomicPersistenceIntegrationTests(unittest.TestCase):
             conn.execute(
                 text(
                     """
+                    CREATE TABLE attribute (
+                        attribute_id INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL UNIQUE
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE character_attribute (
+                        character_id INTEGER NOT NULL,
+                        attribute_id INTEGER NOT NULL,
+                        value INTEGER NOT NULL,
+                        PRIMARY KEY (character_id, attribute_id)
+                    )
+                    """
+                )
+            )
+            conn.execute(text("INSERT INTO attribute (attribute_id, name) VALUES (1, 'strength')"))
+            conn.execute(text("INSERT INTO attribute (attribute_id, name) VALUES (2, 'dexterity')"))
+            conn.execute(
+                text(
+                    """
                     INSERT INTO world (world_id, name, current_turn, threat_level, flags, rng_seed)
                     VALUES (1, 'Default World', 0, 0, '{}', 1)
                     """
@@ -108,6 +132,7 @@ class AtomicPersistenceIntegrationTests(unittest.TestCase):
             attack_bonus=4,
             damage_die="d8",
             speed=30,
+            attributes={"strength": 14, "dexterity": 12},
         )
         world = World(id=1, name="Default World", current_turn=4, threat_level=2, flags={"season": "rain"})
 
@@ -120,6 +145,17 @@ class AtomicPersistenceIntegrationTests(unittest.TestCase):
             loc_row = session.execute(
                 text("SELECT location_id FROM character_location WHERE character_id = 1")
             ).first()
+            attr_rows = session.execute(
+                text(
+                    """
+                    SELECT a.name, ca.value
+                    FROM character_attribute ca
+                    INNER JOIN attribute a ON a.attribute_id = ca.attribute_id
+                    WHERE ca.character_id = 1
+                    ORDER BY a.name
+                    """
+                )
+            ).all()
             world_row = session.execute(
                 text("SELECT current_turn, threat_level FROM world WHERE world_id = 1")
             ).first()
@@ -131,6 +167,7 @@ class AtomicPersistenceIntegrationTests(unittest.TestCase):
             self.assertEqual("d8", char_row.damage_die)
             self.assertEqual(30, char_row.speed)
             self.assertEqual(7, loc_row.location_id)
+            self.assertEqual([("dexterity", 12), ("strength", 14)], [(row.name, row.value) for row in attr_rows])
             self.assertEqual(4, world_row.current_turn)
             self.assertEqual(2, world_row.threat_level)
 
@@ -213,6 +250,35 @@ class AtomicPersistenceIntegrationTests(unittest.TestCase):
             world_turn = session.execute(text("SELECT current_turn FROM world WHERE world_id = 1")).scalar_one()
             self.assertEqual(0, int(char_count))
             self.assertEqual(0, int(world_turn))
+
+    def test_atomic_save_inserts_world_row_when_missing(self) -> None:
+        with self.SessionLocal.begin() as session:
+            session.execute(text("DELETE FROM world WHERE world_id = 1"))
+
+        character = Character(
+            id=5,
+            name="FreshWorldHero",
+            level=1,
+            xp=0,
+            money=1,
+            character_type_id=1,
+            location_id=2,
+            hp_current=9,
+            hp_max=10,
+        )
+        world = World(id=1, name="Default World", current_turn=3, threat_level=2, flags={"seeded": True}, rng_seed=17)
+
+        save_character_and_world_atomic(character, world)
+
+        with self.SessionLocal() as session:
+            world_row = session.execute(
+                text("SELECT name, current_turn, threat_level, rng_seed FROM world WHERE world_id = 1")
+            ).first()
+            self.assertIsNotNone(world_row)
+            self.assertEqual("Default World", world_row.name)
+            self.assertEqual(3, int(world_row.current_turn))
+            self.assertEqual(2, int(world_row.threat_level))
+            self.assertEqual(17, int(world_row.rng_seed))
 
 
 if __name__ == "__main__":
