@@ -112,6 +112,105 @@ class FeaturePipelineTests(unittest.TestCase):
 
         self.assertTrue(result.player_won)
 
+    def test_combat_round_counter_advances_without_shield_flags(self) -> None:
+        hero = Character(id=41, name="Ari", class_name="fighter", hp_current=40, hp_max=40)
+        hero.armour_class = 25
+        hero.attack_bonus = 0
+        hero.attack_min = 1
+        hero.attack_max = 1
+
+        enemy = Entity(
+            id=42,
+            name="Dummy",
+            level=1,
+            hp=200,
+            hp_current=200,
+            hp_max=200,
+            armour_class=25,
+            attack_min=1,
+            attack_max=1,
+            attack_bonus=0,
+            damage_die="d4",
+        )
+
+        service = CombatService()
+        service.set_seed(11)
+        seen_rounds: list[int] = []
+
+        def choose_dodge(_options, _player, _enemy, _round_no, _scene):
+            seen_rounds.append(int(_round_no))
+            return "Dodge"
+
+        service.fight_turn_based(hero, enemy, choose_dodge)
+
+        self.assertIn(2, seen_rounds)
+
+    def test_combat_does_not_mutate_original_inventory_on_copied_state(self) -> None:
+        hero = Character(id=51, name="Mira", class_name="fighter", hp_current=14, hp_max=20)
+        hero.attributes["strength"] = 32
+        hero.inventory = ["Healing Potion"]
+
+        enemy = Entity(
+            id=52,
+            name="Raider",
+            level=1,
+            hp=40,
+            hp_current=40,
+            hp_max=40,
+            armour_class=15,
+            attack_min=1,
+            attack_max=1,
+            attack_bonus=0,
+            damage_die="d4",
+        )
+
+        service = CombatService()
+        service.set_seed(13)
+
+        def choose_action(_options, _player, _enemy, round_no, _scene):
+            if round_no == 1:
+                return ("Use Item", "Healing Potion")
+            return "Flee"
+
+        result = service.fight_turn_based(hero, enemy, choose_action)
+        self.assertTrue(result.fled)
+        self.assertIn("Healing Potion", hero.inventory)
+
+    def test_shield_temp_bonus_is_cleared_on_flee_exit(self) -> None:
+        hero = Character(id=61, name="Aerin", class_name="wizard", hp_current=16, hp_max=16)
+        hero.attributes["strength"] = 32
+        hero.known_spells = ["Shield"]
+        hero.spell_slots_max = 1
+        hero.spell_slots_current = 1
+
+        enemy = Entity(
+            id=62,
+            name="Sentinel",
+            level=1,
+            hp=50,
+            hp_current=50,
+            hp_max=50,
+            armour_class=16,
+            attack_min=1,
+            attack_max=1,
+            attack_bonus=0,
+            damage_die="d4",
+        )
+
+        service = CombatService()
+        service.set_seed(21)
+
+        def choose_action(options, _player, _enemy, round_no, _scene):
+            if round_no == 1 and "Cast Spell" in options:
+                return ("Cast Spell", "shield")
+            return "Flee"
+
+        result = service.fight_turn_based(hero, enemy, choose_action)
+
+        self.assertTrue(result.fled)
+        self.assertNotIn("temp_ac_bonus", result.player.flags)
+        self.assertNotIn("shield_rounds", result.player.flags)
+
 
 if __name__ == "__main__":
     unittest.main()

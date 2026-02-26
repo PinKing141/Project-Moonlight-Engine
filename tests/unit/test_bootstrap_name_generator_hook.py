@@ -27,6 +27,7 @@ class BootstrapNameGeneratorHookTests(unittest.TestCase):
 
         self.assertIsNotNone(service.character_creation_service)
         self.assertIsInstance(service.character_creation_service.name_generator, DnDCorpusNameGenerator)
+        self.assertIsNotNone(service.atomic_state_persistor)
 
     def test_inmemory_bootstrap_passes_name_generator_to_character_and_entity_paths(self) -> None:
         with mock.patch.dict(os.environ, {"RPG_DATABASE_URL": ""}, clear=False), mock.patch.object(

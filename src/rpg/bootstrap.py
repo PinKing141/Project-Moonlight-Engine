@@ -20,6 +20,7 @@ from rpg.infrastructure.inmemory.inmemory_faction_repo import InMemoryFactionRep
 from rpg.infrastructure.inmemory.inmemory_feature_repo import InMemoryFeatureRepository
 from rpg.infrastructure.inmemory.inmemory_location_repo import InMemoryLocationRepository
 from rpg.infrastructure.inmemory.inmemory_world_repo import InMemoryWorldRepository
+from rpg.infrastructure.inmemory.atomic_persistence import create_inmemory_atomic_persistor
 from rpg.infrastructure.content_provider_factory import create_content_client_factory
 from rpg.infrastructure.datamuse_client import DatamuseClient
 from rpg.infrastructure.name_generation import DnDCorpusNameGenerator
@@ -141,6 +142,7 @@ def _build_inmemory_game_service() -> GameService:
     )
     definition_repo = InMemoryEncounterDefinitionRepository()
     world_repo = InMemoryWorldRepository()
+    atomic_persistor = create_inmemory_atomic_persistor(char_repo, world_repo)
     event_bus = EventBus()
     progression = WorldProgression(world_repo, entity_repo, event_bus)
     encounter_intro_builder = _build_encounter_intro_builder()
@@ -159,6 +161,7 @@ def _build_inmemory_game_service() -> GameService:
         definition_repo=definition_repo,
         faction_repo=faction_repo,
         feature_repo=feature_repo,
+        atomic_state_persistor=atomic_persistor,
         open5e_client_factory=content_client_factory,
         name_generator=name_generator,
         encounter_intro_builder=encounter_intro_builder,

@@ -2,12 +2,14 @@ import random
 import sys
 from pathlib import Path
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from rpg.application.services.event_bus import EventBus
 from rpg.application.services.game_service import GameService
 from rpg.application.services.world_progression import WorldProgression
+from rpg.application.services.combat_service import CombatResult
 from rpg.domain.events import MonsterSlain
 from rpg.domain.models.character import Character
 from rpg.domain.models.entity import Entity
@@ -92,12 +94,84 @@ class GameServiceTests(unittest.TestCase):
         rng = random.Random(11)
         message = service._resolve_combat(character, monster, rng, world, location)
 
-        self.assertIn("falls", message)
+        self.assertIn("defeat", message.lower())
         self.assertIn("gold", message)
         self.assertEqual(5, character.xp)
         self.assertEqual(2, character.money)
         self.assertEqual(1, len(slain_events))
         self.assertEqual(monster.id, slain_events[0].monster_id)
+
+    def test_resolve_combat_routes_through_combat_service_engine(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=5)
+        character = Character(id=7, name="Knight", location_id=2)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location = Location(id=2, name="Ruins")
+        location_repo = InMemoryLocationRepository({location.id: location})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        world = world_repo.load_default()
+        monster = Entity(id=99, name="Goblin", level=1, hp=1)
+        seen_actions: list[str] = []
+
+        def _fake_fight(player, enemy, choose_action, scene=None):
+            choice = choose_action(["Attack"], player, enemy, 1, scene or {})
+            if isinstance(choice, tuple):
+                seen_actions.append(str(choice[0]))
+            else:
+                seen_actions.append(str(choice))
+            won_player = Character(
+                id=player.id,
+                name=player.name,
+                level=player.level,
+                xp=player.xp,
+                money=player.money,
+                hp_max=player.hp_max,
+                hp_current=player.hp_current,
+                class_name=player.class_name,
+                base_attributes=dict(player.base_attributes),
+                location_id=player.location_id,
+                attack_min=player.attack_min,
+                attack_max=player.attack_max,
+                attack_bonus=player.attack_bonus,
+                damage_die=player.damage_die,
+                armour_class=player.armour_class,
+                armor=player.armor,
+                alive=player.alive,
+                character_type_id=player.character_type_id,
+                attributes=dict(player.attributes),
+                faction_id=player.faction_id,
+                inventory=list(player.inventory),
+                race=player.race,
+                race_traits=list(player.race_traits),
+                speed=player.speed,
+                background=player.background,
+                background_features=list(player.background_features),
+                proficiencies=list(player.proficiencies),
+                difficulty=player.difficulty,
+                flags=dict(player.flags),
+                incoming_damage_multiplier=player.incoming_damage_multiplier,
+                outgoing_damage_multiplier=player.outgoing_damage_multiplier,
+                spell_slots_max=player.spell_slots_max,
+                spell_slots_current=player.spell_slots_current,
+                cantrips=list(player.cantrips),
+                known_spells=list(player.known_spells),
+            )
+            defeated_enemy = Entity(id=enemy.id, name=enemy.name, level=enemy.level, hp=enemy.hp, hp_current=0, hp_max=enemy.hp)
+            return CombatResult(player=won_player, enemy=defeated_enemy, log=[], player_won=True)
+
+        with mock.patch.object(service.combat_service, "fight_turn_based", side_effect=_fake_fight) as patched:
+            message = service._resolve_combat(character, monster, random.Random(11), world, location)
+
+        self.assertTrue(patched.called)
+        self.assertEqual(["Attack"], seen_actions)
+        self.assertIn("defeat", message.lower())
 
     def test_apply_encounter_reward_intent_returns_reward_view_and_persists(self) -> None:
         world_repo = InMemoryWorldRepository(seed=8)

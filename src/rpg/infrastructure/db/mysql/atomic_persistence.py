@@ -17,6 +17,7 @@ def save_character_and_world_atomic(
     """Persist character and world updates in one DB transaction."""
     with SessionLocal.begin() as session:
         _upsert_character_row(session, character)
+        _upsert_character_attributes(session, character)
         _upsert_character_location(session, character)
         _upsert_world_row(session, world)
         for operation in operations or ():
@@ -112,24 +113,101 @@ def _upsert_character_location(session, character: Character) -> None:
     )
 
 
-def _upsert_world_row(session, world: World) -> None:
-    flags_payload = world.flags if isinstance(world.flags, str) else "{}" if world.flags is None else json.dumps(world.flags)
-    session.execute(
+def _upsert_character_attributes(session, character: Character) -> None:
+    attrs = dict(getattr(character, "attributes", {}) or {})
+    if not attrs:
+        return
+
+    names = [str(name) for name in attrs.keys()]
+    bind_names = [f"name_{idx}" for idx in range(len(names))]
+    params = {bind_name: names[idx] for idx, bind_name in enumerate(bind_names)}
+    placeholders = ", ".join(f":{bind_name}" for bind_name in bind_names)
+
+    rows = session.execute(
         text(
-            """
-            UPDATE world
-            SET current_turn = :turn,
-                threat_level = :threat,
-                flags = :flags,
-                rng_seed = :rng_seed
-            WHERE world_id = :wid
+            f"""
+            SELECT attribute_id, name
+            FROM attribute
+            WHERE name IN ({placeholders})
             """
         ),
+        params,
+    ).all()
+
+    id_by_name = {str(row.name): int(row.attribute_id) for row in rows}
+    if not id_by_name:
+        return
+
+    dialect = session.bind.dialect.name if session.bind is not None else "mysql"
+    if dialect == "mysql":
+        statement = text(
+            """
+            INSERT INTO character_attribute (character_id, attribute_id, value)
+            VALUES (:cid, :aid, :val)
+            ON DUPLICATE KEY UPDATE value = VALUES(value)
+            """
+        )
+    else:
+        statement = text(
+            """
+            INSERT INTO character_attribute (character_id, attribute_id, value)
+            VALUES (:cid, :aid, :val)
+            ON CONFLICT(character_id, attribute_id) DO UPDATE SET value = excluded.value
+            """
+        )
+
+    for name, value in attrs.items():
+        attr_id = id_by_name.get(str(name))
+        if attr_id is None:
+            continue
+        session.execute(
+            statement,
+            {
+                "cid": int(character.id or 0),
+                "aid": int(attr_id),
+                "val": int(value),
+            },
+        )
+
+
+def _upsert_world_row(session, world: World) -> None:
+    flags_payload = world.flags if isinstance(world.flags, str) else "{}" if world.flags is None else json.dumps(world.flags)
+    dialect = session.bind.dialect.name if session.bind is not None else "mysql"
+    if dialect == "mysql":
+        statement = text(
+            """
+            INSERT INTO world (world_id, name, current_turn, threat_level, flags, rng_seed)
+            VALUES (:wid, :name, :turn, :threat, :flags, :rng_seed)
+            ON DUPLICATE KEY UPDATE
+                name = VALUES(name),
+                current_turn = VALUES(current_turn),
+                threat_level = VALUES(threat_level),
+                flags = VALUES(flags),
+                rng_seed = VALUES(rng_seed)
+            """
+        )
+    else:
+        statement = text(
+            """
+            INSERT INTO world (world_id, name, current_turn, threat_level, flags, rng_seed)
+            VALUES (:wid, :name, :turn, :threat, :flags, :rng_seed)
+            ON CONFLICT(world_id) DO UPDATE SET
+                name = excluded.name,
+                current_turn = excluded.current_turn,
+                threat_level = excluded.threat_level,
+                flags = excluded.flags,
+                rng_seed = excluded.rng_seed
+            """
+        )
+
+    session.execute(
+        statement,
         {
-            "turn": world.current_turn,
-            "threat": world.threat_level,
+            "wid": int(getattr(world, "id", 1) or 1),
+            "name": str(getattr(world, "name", "Default World") or "Default World"),
+            "turn": int(getattr(world, "current_turn", 0) or 0),
+            "threat": int(getattr(world, "threat_level", 0) or 0),
             "flags": flags_payload,
             "rng_seed": int(getattr(world, "rng_seed", 1) or 1),
-            "wid": world.id,
         },
     )

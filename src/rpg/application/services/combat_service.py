@@ -1,4 +1,5 @@
 import random
+import copy
 from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -551,7 +552,14 @@ class CombatService:
         foe.hp_current = getattr(foe, "hp_current", foe.hp_max)
 
         player = replace(player)
-        player.flags = dict(getattr(player, "flags", {}) or {})
+        player.flags = copy.deepcopy(getattr(player, "flags", {}) or {})
+        player.inventory = list(getattr(player, "inventory", []) or [])
+        player.attributes = dict(getattr(player, "attributes", {}) or {})
+        player.race_traits = list(getattr(player, "race_traits", []) or [])
+        player.background_features = list(getattr(player, "background_features", []) or [])
+        player.proficiencies = list(getattr(player, "proficiencies", []) or [])
+        player.cantrips = list(getattr(player, "cantrips", []) or [])
+        player.known_spells = list(getattr(player, "known_spells", []) or [])
         player_hp = player.hp_current
         player.hp_max = getattr(player, "hp_max", player.hp_current)
 
@@ -660,6 +668,8 @@ class CombatService:
                             foe.hp_current = max(0, foe.hp_current - dmg)
                             self._log(log, f"You deal {dmg} damage to {foe.name} ({foe.hp_current}/{foe.hp_max}).", level="compact")
                             sneak_available = False
+                            if foe.hp_current <= 0:
+                                break
                         else:
                             self._log(log, "Your strike fails to connect.", level="compact")
                         self._add_mechanical_flavour(
@@ -672,7 +682,7 @@ class CombatService:
                         )
 
                     elif action == "Cast Spell":
-                        self._resolve_spell_cast(player, foe, action_payload, spell_mod, prof, log)
+                        self._resolve_spell_cast(player, foe, action_payload, mental_mod, prof, log)
                         self._add_mechanical_flavour(
                             log,
                             actor="player",
@@ -681,6 +691,8 @@ class CombatService:
                             terrain=terrain,
                             round_no=round_no,
                         )
+                        if foe.hp_current <= 0:
+                            break
 
                     elif action == "Dodge":
                         player_dodge = True
@@ -701,6 +713,13 @@ class CombatService:
                         if flee_roll >= 12:
                             self._log(log, "You slip away from the fight!", level="compact")
                             fled = True
+                            player.flags.pop("dodging", None)
+                            player.flags.pop("temp_ac_bonus", None)
+                            player.flags.pop("shield_rounds", None)
+                            if "rage_rounds" in player.flags:
+                                player.flags["rage_rounds"] = 0
+                            player.hp_current = player_hp
+                            player.alive = player_hp > 0
                             return CombatResult(player, foe, log, player_won=False, fled=True)
                         else:
                             self._log(log, "You fail to escape.", level="compact")
@@ -770,16 +789,21 @@ class CombatService:
                     )
 
             player_dodge = False
-        player.flags.pop("dodging", None)
-        if rage_rounds > 0:
-            rage_rounds -= 1
-            player.flags["rage_rounds"] = rage_rounds
-        if player.flags.get("shield_rounds"):
-            player.flags["shield_rounds"] = max(player.flags.get("shield_rounds", 0) - 1, 0)
-            if player.flags["shield_rounds"] <= 0:
-                player.flags.pop("temp_ac_bonus", None)
+            player.flags.pop("dodging", None)
+            if rage_rounds > 0:
+                rage_rounds -= 1
+                player.flags["rage_rounds"] = rage_rounds
+            if player.flags.get("shield_rounds"):
+                player.flags["shield_rounds"] = max(player.flags.get("shield_rounds", 0) - 1, 0)
+                if player.flags["shield_rounds"] <= 0:
+                    player.flags.pop("temp_ac_bonus", None)
             round_no += 1
             if round_no > 50:
+                player.flags.pop("dodging", None)
+                player.flags.pop("temp_ac_bonus", None)
+                player.flags.pop("shield_rounds", None)
+                if "rage_rounds" in player.flags:
+                    player.flags["rage_rounds"] = 0
                 player.hp_current = player_hp
                 player.alive = player_hp > 0
                 return CombatResult(
@@ -791,6 +815,11 @@ class CombatService:
 
         player.hp_current = player_hp
         player.alive = player_hp > 0
+        player.flags.pop("dodging", None)
+        player.flags.pop("temp_ac_bonus", None)
+        player.flags.pop("shield_rounds", None)
+        if "rage_rounds" in player.flags:
+            player.flags["rage_rounds"] = 0
 
         if foe.hp_current <= 0:
             xp_gain = max(getattr(foe, "level", 1) * 5, 1)

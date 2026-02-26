@@ -155,6 +155,31 @@ class TownSocialFlowTests(unittest.TestCase):
         self.assertEqual("bribe", outcome.approach)
         self.assertEqual(starting_gold - 8, after.money)
 
+    def test_silas_leverage_intel_advances_kill_any_without_instant_completion(self):
+        service, character_id = self._build_service()
+        character = service.character_repo.get(character_id)
+        character.attributes["wisdom"] = 30
+        character.flags.setdefault("interaction_unlocks", {})["intel_leverage"] = True
+        service.character_repo.save(character)
+
+        world = service.world_repo.load_default()
+        quests = service._world_quests(world)
+        quests["trail_patrol"] = {
+            "status": "active",
+            "objective_kind": "kill_any",
+            "target": 5,
+            "progress": 0,
+        }
+        service.world_repo.save(world)
+
+        outcome = service.submit_social_approach_intent(character_id, "broker_silas", "Leverage Intel")
+        self.assertTrue(outcome.success)
+
+        world_after = service.world_repo.load_default()
+        quest_after = service._world_quests(world_after)["trail_patrol"]
+        self.assertEqual(1, int(quest_after.get("progress", 0)))
+        self.assertEqual("active", str(quest_after.get("status", "")))
+
 
 if __name__ == "__main__":
     unittest.main()
