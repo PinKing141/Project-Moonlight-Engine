@@ -316,7 +316,7 @@ def _render_npc_interaction_header(interaction) -> None:
         table.add_column(style="white")
         table.add_row("Name", interaction.npc_name)
         table.add_row("Role", interaction.role)
-        table.add_row("Disposition", str(interaction.disposition))
+        table.add_row("Relationship", str(interaction.relationship))
         _CONSOLE.print(
             Panel.fit(
                 table,
@@ -330,7 +330,7 @@ def _render_npc_interaction_header(interaction) -> None:
 
     print("=== NPC Interaction ===")
     print(f"{interaction.npc_name} ({interaction.role})")
-    print(f"Disposition: {interaction.disposition}")
+    print(f"Relationship: {interaction.relationship}")
 
 
 def _render_social_result_header(outcome) -> None:
@@ -342,7 +342,7 @@ def _render_social_result_header(outcome) -> None:
         table.add_row("Approach", outcome.approach)
         table.add_row("Outcome", "Success" if outcome.success else "Failure")
         table.add_row("Roll", f"{outcome.roll_total} vs DC {outcome.target_dc}")
-        table.add_row("Disposition", f"{outcome.disposition_before} → {outcome.disposition_after}")
+        table.add_row("Relationship", f"{outcome.relationship_before} → {outcome.relationship_after}")
         _CONSOLE.print(
             Panel.fit(
                 table,
@@ -786,7 +786,7 @@ def _run_town(game_service, character_id: int):
             continue
 
         npc_options = [
-            f"{npc.name} ({npc.role}) [{npc.temperament}] disposition {npc.disposition}"
+            f"{npc.name} ({npc.role}) [{npc.temperament}] relationship {npc.relationship}"
             for npc in town_view.npcs
         ]
         npc_options.append("Back")

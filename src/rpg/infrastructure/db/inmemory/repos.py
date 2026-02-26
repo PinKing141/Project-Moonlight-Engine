@@ -15,6 +15,8 @@ from rpg.domain.repositories import (
 
 
 class InMemoryWorldRepository(WorldRepository):
+    _WORLD_HISTORY_MAX = 500
+
     def __init__(self, seed: int = 1) -> None:
         self._world = World(id=1, name="Default World", rng_seed=seed)
         self._world_flags: dict[str, str] = {}
@@ -61,6 +63,8 @@ class InMemoryWorldRepository(WorldRepository):
                 "reason": str(reason),
             }
         )
+        if len(self._world_history) > self._WORLD_HISTORY_MAX:
+            del self._world_history[:-self._WORLD_HISTORY_MAX]
 
     def build_set_world_flag_operation(
         self,
@@ -84,6 +88,8 @@ class InMemoryWorldRepository(WorldRepository):
 
 
 class InMemoryCharacterRepository(CharacterRepository):
+    _PROGRESSION_UNLOCKS_MAX = 500
+
     def __init__(self, initial: Dict[int, Character]) -> None:
         self._characters = dict(initial)
         self._progression_unlocks: list[dict[str, object]] = []
@@ -148,6 +154,8 @@ class InMemoryCharacterRepository(CharacterRepository):
                 "created_turn": int(created_turn),
             }
         )
+        if len(self._progression_unlocks) > self._PROGRESSION_UNLOCKS_MAX:
+            del self._progression_unlocks[:-self._PROGRESSION_UNLOCKS_MAX]
 
     def build_progression_unlock_operation(
         self,

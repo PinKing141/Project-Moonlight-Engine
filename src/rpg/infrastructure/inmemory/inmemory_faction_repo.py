@@ -12,6 +12,9 @@ class InMemoryFactionRepository(FactionRepository):
             "wild": Faction(id="wild", name="Wild Tribes", influence=2, alignment="chaotic"),
             "undead": Faction(id="undead", name="Restless Dead", influence=3, alignment="evil"),
             "wardens": Faction(id="wardens", name="Emerald Wardens", influence=1, alignment="neutral"),
+            "the_crown": Faction(id="the_crown", name="The Crown", influence=4, alignment="lawful"),
+            "thieves_guild": Faction(id="thieves_guild", name="The Thieves Guild", influence=3, alignment="chaotic"),
+            "arcane_syndicate": Faction(id="arcane_syndicate", name="The Arcane Syndicate", influence=3, alignment="neutral"),
         }
 
     def get(self, faction_id: str) -> Optional[Faction]:

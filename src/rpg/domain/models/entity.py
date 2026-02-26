@@ -21,6 +21,7 @@ class Entity:
     faction_id: Optional[str] = None
     kind: str = "beast"
     tags: List[str] = field(default_factory=list)
+    resistances: List[str] = field(default_factory=list)
     traits: List[str] = field(default_factory=list)
     loot_tags: List[str] = field(default_factory=list)
 

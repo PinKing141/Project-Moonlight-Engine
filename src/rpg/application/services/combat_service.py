@@ -123,6 +123,8 @@ class CombatService:
         "Healing Potion",
         "Healing Herbs",
         "Sturdy Rations",
+        "Focus Potion",
+        "Whetstone",
     )
 
     _WEAPON_BY_CLASS: Dict[str, Tuple[str, str]] = {
@@ -563,6 +565,7 @@ class CombatService:
         rage_available = player.class_name == "barbarian"
         rage_rounds = 0
         player_dodge = False
+        whetstone_bonus = 0
         scores = self._ability_scores(player)
         surprise = (scene or {}).get("surprise")
         def _roll_initiative(with_adv: bool, base_bonus: int) -> int:
@@ -653,6 +656,7 @@ class CombatService:
                                 is_crit=is_crit,
                             )
                             dmg += hit_bonus_damage
+                            dmg += whetstone_bonus
                             foe.hp_current = max(0, foe.hp_current - dmg)
                             self._log(log, f"You deal {dmg} damage to {foe.name} ({foe.hp_current}/{foe.hp_max}).", level="compact")
                             sneak_available = False
@@ -684,7 +688,13 @@ class CombatService:
                         self._log(log, "You focus on defense; incoming attacks have disadvantage.", level="compact")
 
                     elif action == "Use Item":
-                        player_hp = self._resolve_use_item(player, player_hp, log, preferred_item=action_payload)
+                        player_hp, whetstone_bonus = self._resolve_use_item(
+                            player,
+                            player_hp,
+                            log,
+                            preferred_item=action_payload,
+                            whetstone_bonus=whetstone_bonus,
+                        )
 
                     elif action == "Flee":
                         flee_roll = self.rng.randint(1, 20) + attack_mod
@@ -803,7 +813,8 @@ class CombatService:
         player_hp: int,
         log: List[CombatLogEntry],
         preferred_item: Optional[str] = None,
-    ) -> int:
+        whetstone_bonus: int = 0,
+    ) -> tuple[int, int]:
         inventory = list(getattr(player, "inventory", []) or [])
 
         usable_items = self.list_usable_items(player)
@@ -818,24 +829,49 @@ class CombatService:
             heal = roll_die("d4", rng=self.rng) + roll_die("d4", rng=self.rng) + 2
             player_hp = min(player.hp_max, player_hp + heal)
             self._log(log, f"You drink a potion and heal {heal} HP ({player_hp}/{player.hp_max}).", level="compact")
-            return player_hp
+            return player_hp, whetstone_bonus
 
         if selected_item == "Healing Herbs":
             player.inventory.remove("Healing Herbs")
             heal = roll_die("d4", rng=self.rng) + 1
             player_hp = min(player.hp_max, player_hp + heal)
             self._log(log, f"You apply healing herbs and recover {heal} HP ({player_hp}/{player.hp_max}).", level="compact")
-            return player_hp
+            return player_hp, whetstone_bonus
 
         if selected_item == "Sturdy Rations":
             player.inventory.remove("Sturdy Rations")
             heal = 2
             player_hp = min(player.hp_max, player_hp + heal)
             self._log(log, f"You take a quick ration break and recover {heal} HP ({player_hp}/{player.hp_max}).", level="compact")
-            return player_hp
+            return player_hp, whetstone_bonus
+
+        if selected_item == "Focus Potion":
+            player.inventory.remove("Focus Potion")
+            slot_max = int(getattr(player, "spell_slots_max", 0) or 0)
+            slots_now = int(getattr(player, "spell_slots_current", 0) or 0)
+            if slot_max > 0:
+                restored = 1 if slots_now < slot_max else 0
+                player.spell_slots_current = min(slot_max, slots_now + 1)
+                if restored:
+                    self._log(
+                        log,
+                        f"You drink a Focus Potion and restore 1 spell slot ({player.spell_slots_current}/{slot_max}).",
+                        level="compact",
+                    )
+                else:
+                    self._log(log, "Your spell slots are already full.", level="compact")
+            else:
+                self._log(log, "The potion has no effect without magical training.", level="compact")
+            return player_hp, whetstone_bonus
+
+        if selected_item == "Whetstone":
+            player.inventory.remove("Whetstone")
+            whetstone_bonus = 1
+            self._log(log, "You sharpen your weapon. Attacks deal +1 damage this encounter.", level="compact")
+            return player_hp, whetstone_bonus
 
         self._log(log, "No usable items found.", level="compact")
-        return player_hp
+        return player_hp, whetstone_bonus
 
     def _resolve_spell_cast(
         self,

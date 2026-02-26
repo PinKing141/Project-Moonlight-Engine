@@ -17,8 +17,8 @@ class FactionInfluenceService:
         self.event_bus = event_bus
 
     def register_handlers(self) -> None:
-        self.event_bus.subscribe(MonsterSlain, self.on_monster_slain)
-        self.event_bus.subscribe(FactionReputationChangedEvent, self.on_faction_reputation_changed)
+        self.event_bus.subscribe(MonsterSlain, self.on_monster_slain, priority=40)
+        self.event_bus.subscribe(FactionReputationChangedEvent, self.on_faction_reputation_changed, priority=40)
 
     def on_monster_slain(self, event: MonsterSlain) -> None:
         monster = self.entity_repo.get(event.monster_id)

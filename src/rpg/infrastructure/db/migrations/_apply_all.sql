@@ -10,3 +10,6 @@ SOURCE ./007_add_faction_reputation_persistence.sql;
 SOURCE ./008_add_location_biome_hazard_tables.sql;
 SOURCE ./009_add_quest_and_rumour_tables.sql;
 SOURCE ./010_add_world_flag_and_progression_tables.sql;
+SOURCE ./011_seed_factions.sql;
+SOURCE ./012_add_entity_tags.sql;
+SOURCE ./013_seed_new_consumables.sql;

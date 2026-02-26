@@ -169,7 +169,15 @@ class TownNpcView:
     name: str
     role: str
     temperament: str
-    disposition: int
+    relationship: int
+
+    @property
+    def disposition(self) -> int:
+        return self.relationship
+
+    @disposition.setter
+    def disposition(self, value: int) -> None:
+        self.relationship = int(value)
 
 
 @dataclass
@@ -190,9 +198,17 @@ class NpcInteractionView:
     npc_name: str
     role: str
     temperament: str
-    disposition: int
+    relationship: int
     greeting: str
     approaches: List[str] = field(default_factory=list)
+
+    @property
+    def disposition(self) -> int:
+        return self.relationship
+
+    @disposition.setter
+    def disposition(self, value: int) -> None:
+        self.relationship = int(value)
 
 
 @dataclass
@@ -203,9 +219,25 @@ class SocialOutcomeView:
     success: bool
     roll_total: int
     target_dc: int
-    disposition_before: int
-    disposition_after: int
+    relationship_before: int
+    relationship_after: int
     messages: List[str] = field(default_factory=list)
+
+    @property
+    def disposition_before(self) -> int:
+        return self.relationship_before
+
+    @disposition_before.setter
+    def disposition_before(self, value: int) -> None:
+        self.relationship_before = int(value)
+
+    @property
+    def disposition_after(self) -> int:
+        return self.relationship_after
+
+    @disposition_after.setter
+    def disposition_after(self, value: int) -> None:
+        self.relationship_after = int(value)
 
 
 @dataclass

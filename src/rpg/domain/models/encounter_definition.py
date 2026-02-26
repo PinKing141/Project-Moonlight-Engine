@@ -9,6 +9,7 @@ class EncounterSlot:
     """A single ingredient in an encounter definition."""
 
     entity_id: int
+    monster_slug: Optional[str] = None
     min_count: int = 1
     max_count: int = 1
     weight: int = 1

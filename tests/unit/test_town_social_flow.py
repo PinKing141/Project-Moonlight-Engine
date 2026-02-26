@@ -9,6 +9,7 @@ from rpg.application.services.game_service import GameService
 from rpg.application.services.world_progression import WorldProgression
 from rpg.domain.models.character import Character
 from rpg.domain.models.location import Location
+from rpg.infrastructure.inmemory.inmemory_faction_repo import InMemoryFactionRepository
 from rpg.infrastructure.db.inmemory.repos import (
     InMemoryCharacterRepository,
     InMemoryEntityRepository,
@@ -18,21 +19,28 @@ from rpg.infrastructure.db.inmemory.repos import (
 
 
 class TownSocialFlowTests(unittest.TestCase):
-    def _build_service(self):
+    def _build_service(self, *, with_factions: bool = False):
         event_bus = EventBus()
         world_repo = InMemoryWorldRepository(seed=13)
         character = Character(id=101, name="Iris", location_id=1)
         character.attributes["charisma"] = 14
+        character.money = 20
         character_repo = InMemoryCharacterRepository({character.id: character})
         entity_repo = InMemoryEntityRepository([])
         location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
         progression = WorldProgression(world_repo, entity_repo, event_bus)
+        faction_repo = InMemoryFactionRepository() if with_factions else None
+        if faction_repo is not None:
+            crown = faction_repo.get("the_crown")
+            if crown is not None:
+                crown.reputation[f"character:{character.id}"] = 14
         service = GameService(
             character_repo=character_repo,
             entity_repo=entity_repo,
             location_repo=location_repo,
             world_repo=world_repo,
             progression=progression,
+            faction_repo=faction_repo,
         )
         return service, character.id
 
@@ -55,17 +63,17 @@ class TownSocialFlowTests(unittest.TestCase):
         self.assertEqual(out_a.success, out_b.success)
         self.assertEqual(out_a.roll_total, out_b.roll_total)
         self.assertEqual(out_a.target_dc, out_b.target_dc)
-        self.assertEqual(out_a.disposition_after, out_b.disposition_after)
+        self.assertEqual(out_a.relationship_after, out_b.relationship_after)
 
-    def test_social_interaction_updates_persisted_disposition(self):
+    def test_social_interaction_updates_persisted_relationship(self):
         service, character_id = self._build_service()
         before = service.get_npc_interaction_intent(character_id, "captain_ren")
 
         outcome = service.submit_social_approach_intent(character_id, "captain_ren", "Direct")
         after = service.get_npc_interaction_intent(character_id, "captain_ren")
 
-        self.assertEqual(before.disposition, outcome.disposition_before)
-        self.assertEqual(after.disposition, outcome.disposition_after)
+        self.assertEqual(before.relationship, outcome.relationship_before)
+        self.assertEqual(after.relationship, outcome.relationship_after)
 
     def test_town_view_surfaces_active_story_seed_summary(self):
         service, character_id = self._build_service()
@@ -126,6 +134,26 @@ class TownSocialFlowTests(unittest.TestCase):
         self.assertIn("flashpoint", interaction.greeting.lower())
         self.assertIn("faction shift", interaction.greeting.lower())
         self.assertIn("critical", interaction.greeting.lower())
+
+    def test_npc_interaction_surfaces_invoke_faction_when_reputation_is_high(self):
+        service, character_id = self._build_service(with_factions=True)
+
+        interaction = service.get_npc_interaction_intent(character_id, "captain_ren")
+
+        self.assertIn("Invoke Faction", interaction.approaches)
+
+    def test_bribe_approach_consumes_gold_when_used(self):
+        service, character_id = self._build_service()
+        starting_gold = int(service.character_repo.get(character_id).money)
+
+        interaction = service.get_npc_interaction_intent(character_id, "innkeeper_mara")
+        self.assertIn("Bribe", interaction.approaches)
+
+        outcome = service.submit_social_approach_intent(character_id, "innkeeper_mara", "Bribe")
+        after = service.character_repo.get(character_id)
+
+        self.assertEqual("bribe", outcome.approach)
+        self.assertEqual(starting_gold - 8, after.money)
 
 
 if __name__ == "__main__":

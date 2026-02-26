@@ -37,7 +37,9 @@ def _bootstrap_entity_schema(engine) -> None:
                     attack_bonus INTEGER,
                     damage_dice TEXT,
                     hp_max INTEGER,
-                    kind TEXT
+                    kind TEXT,
+                    tags_json TEXT,
+                    resistances_json TEXT
                 )
                 """
             )

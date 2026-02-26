@@ -38,7 +38,7 @@ def _looks_like_local_mysql_unreachable(database_url: str) -> bool:
         return False
 
     port = parsed.port or 3306
-    timeout = float(os.getenv("RPG_DB_CONNECT_PROBE_TIMEOUT_S", "0.35"))
+    timeout = float(os.getenv("RPG_DB_CONNECT_PROBE_TIMEOUT_S", "1.5"))
 
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -52,8 +52,8 @@ def _build_encounter_intro_builder():
     if not enabled:
         return EncounterIntroEnricher(enabled=False).build_intro
 
-    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "2"))
-    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "1"))
+    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "0.4"))
+    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "0"))
     backoff_seconds = float(os.getenv("RPG_FLAVOUR_BACKOFF_S", "0.1"))
     max_lines = int(os.getenv("RPG_FLAVOUR_MAX_LINES", "1"))
 
@@ -71,8 +71,8 @@ def _build_mechanical_flavour_builder():
     if not enabled:
         return None
 
-    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "2"))
-    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "1"))
+    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "0.4"))
+    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "0"))
     backoff_seconds = float(os.getenv("RPG_FLAVOUR_BACKOFF_S", "0.1"))
     max_words = int(os.getenv("RPG_FLAVOUR_MAX_WORDS", "8"))
 
@@ -172,6 +172,7 @@ def _build_mysql_game_service():
         MysqlCharacterRepository,
         MysqlClassRepository,
         MysqlEntityRepository,
+        MysqlEncounterDefinitionRepository,
         MysqlFactionRepository,
         MysqlFeatureRepository,
         MysqlLocationRepository,
@@ -185,6 +186,7 @@ def _build_mysql_game_service():
     loc_repo = MysqlLocationRepository()
     cls_repo = MysqlClassRepository()
     entity_repo = MysqlEntityRepository()
+    definition_repo = MysqlEncounterDefinitionRepository()
     faction_repo = MysqlFactionRepository()
     narrative_state_repo = MysqlNarrativeStateRepository()
     feature_repo = MysqlFeatureRepository()
@@ -220,6 +222,7 @@ def _build_mysql_game_service():
         spell_repo=spell_repo,
         world_repo=world_repo,
         progression=progression,
+        definition_repo=definition_repo,
         atomic_state_persistor=save_character_and_world_atomic,
         open5e_client_factory=content_client_factory,
         name_generator=name_generator,
@@ -229,14 +232,30 @@ def _build_mysql_game_service():
 
 
 def create_game_service() -> GameService:
+    allow_fallback = os.getenv("RPG_DB_ALLOW_INMEMORY_FALLBACK", "0").strip().lower() in {"1", "true", "yes"}
     use_mysql = os.getenv("RPG_DATABASE_URL")
     if use_mysql:
         if _looks_like_local_mysql_unreachable(use_mysql):
-            print("MySQL appears unreachable, falling back to in-memory.")
+            message = (
+                "MySQL appears unreachable for RPG_DATABASE_URL. "
+                "Refusing silent in-memory fallback to avoid data loss. "
+                "Set RPG_DB_ALLOW_INMEMORY_FALLBACK=1 to opt into ephemeral mode."
+            )
+            if not allow_fallback:
+                raise RuntimeError(message)
+            print(f"WARNING: {message}")
             return _build_inmemory_game_service()
         try:
             return _build_mysql_game_service()
         except Exception as exc:  # pragma: no cover - best-effort fallback
-            print(f"MySQL unavailable, falling back to in-memory. Reason: {exc}")
+            message = (
+                "MySQL bootstrap failed for RPG_DATABASE_URL. "
+                "Refusing silent in-memory fallback to avoid data loss. "
+                "Set RPG_DB_ALLOW_INMEMORY_FALLBACK=1 to opt into ephemeral mode."
+            )
+            if not allow_fallback:
+                raise RuntimeError(f"{message} Reason: {exc}") from exc
+            print(f"WARNING: {message} Reason: {exc}")
+            return _build_inmemory_game_service()
 
     return _build_inmemory_game_service()

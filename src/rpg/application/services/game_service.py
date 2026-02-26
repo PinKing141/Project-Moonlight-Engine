@@ -1,7 +1,7 @@
 import json
 import random
 from collections.abc import Callable, Sequence
-from typing import Optional
+from typing import Optional, cast
 
 from rpg.application.dtos import (
     ActionResult,
@@ -98,6 +98,10 @@ class GameService:
         FIRST_HUNT_QUEST_ID: "First Hunt",
         "trail_patrol": "Trail Patrol",
         "supply_drop": "Supply Drop",
+        "crown_hunt_order": "Crown Hunt Order",
+        "syndicate_route_run": "Syndicate Route Run",
+        "forest_path_clearance": "Forest Path Clearance",
+        "ruins_wayfinding": "Ruins Wayfinding",
     }
     _TOWN_NPCS = (
         {
@@ -137,6 +141,18 @@ class GameService:
             "name": "Sturdy Rations",
             "description": "Field rations for long patrols.",
             "base_price": 4,
+        },
+        {
+            "id": "focus_potion",
+            "name": "Focus Potion",
+            "description": "Restores one spell slot during combat.",
+            "base_price": 14,
+        },
+        {
+            "id": "whetstone",
+            "name": "Whetstone",
+            "description": "Sharpens your weapon for +1 damage this encounter.",
+            "base_price": 11,
         },
         {
             "id": "wardens_token",
@@ -422,7 +438,8 @@ class GameService:
         if not self.encounter_service:
             return EncounterPlan(enemies=[], source="disabled"), character, world
 
-        location = self.location_repo.get(character.location_id) if self.location_repo else None
+        location_id = character.location_id
+        location = self.location_repo.get(int(location_id)) if self.location_repo and location_id is not None else None
         faction_bias = None
         if location and getattr(location, "factions", None):
             faction_bias = location.factions[0] if location.factions else None
@@ -528,16 +545,16 @@ class GameService:
         if self.location_state_repo is not None and character.location_id is not None:
             operation_builder = getattr(self.location_state_repo, "build_location_flag_change_operation", None)
             if callable(operation_builder):
-                operations.append(
-                    operation_builder(
-                        location_id=int(character.location_id),
-                        changed_turn=int(getattr(world, "current_turn", 0)),
-                        flag_key="hazard:last_resolution",
-                        old_value=None,
-                        new_value=lead_hazard,
-                        reason="explore_hazard_failed_check",
-                    )
+                operation = operation_builder(
+                    location_id=int(character.location_id),
+                    changed_turn=int(getattr(world, "current_turn", 0)),
+                    flag_key="hazard:last_resolution",
+                    old_value=None,
+                    new_value=lead_hazard,
+                    reason="explore_hazard_failed_check",
                 )
+                if callable(operation):
+                    operations.append(cast(Callable[[object], None], operation))
 
         persisted = self._persist_character_world_atomic(character, world, operations=operations)
         if not persisted:
@@ -568,7 +585,9 @@ class GameService:
     def get_player_view(self, player_id: int) -> str:
         world = self._require_world()
         character = self._require_character(player_id)
-        location = self.location_repo.get(character.location_id)
+        location = None
+        if self.location_repo and character.location_id is not None:
+            location = self.location_repo.get(int(character.location_id))
 
         location_line = (
             f"in {location.name} [{location.biome}]"
@@ -816,15 +835,15 @@ class GameService:
             row_choice = str(row.get("growth_choice", growth_choice) or growth_choice)
             unlock_key = f"level_{to_level}_{row_choice}"
             if callable(operation_builder):
-                operations.append(
-                    operation_builder(
-                        character_id=int(character.id or 0),
-                        unlock_kind="growth_choice",
-                        unlock_key=unlock_key,
-                        unlocked_level=to_level,
-                        created_turn=int(getattr(world, "current_turn", 0)) if world is not None else 0,
-                    )
+                operation = operation_builder(
+                    character_id=int(character.id or 0),
+                    unlock_kind="growth_choice",
+                    unlock_key=unlock_key,
+                    unlocked_level=to_level,
+                    created_turn=int(getattr(world, "current_turn", 0)) if world is not None else 0,
                 )
+                if callable(operation):
+                    operations.append(cast(Callable[[object], None], operation))
 
         self._set_progression_messages(character, level_messages)
 
@@ -1333,7 +1352,7 @@ class GameService:
                     name=npc["name"],
                     role=npc["role"],
                     temperament=npc["temperament"],
-                    disposition=disposition,
+                    relationship=disposition,
                 )
             )
         story_lines = self._active_story_seed_town_lines(world)
@@ -1364,12 +1383,17 @@ class GameService:
             approaches.append("Leverage Intel")
         if npc["id"] == "captain_ren" and self._has_interaction_unlock(character, "captain_favor"):
             approaches.append("Call In Favor")
+        dominant_faction, dominant_score = self._dominant_faction_standing(character_id)
+        if dominant_faction and dominant_score >= 10:
+            approaches.append("Invoke Faction")
+        if int(getattr(character, "money", 0) or 0) >= 8:
+            approaches.append("Bribe")
         return NpcInteractionView(
             npc_id=npc["id"],
             npc_name=npc["name"],
             role=npc["role"],
             temperament=npc["temperament"],
-            disposition=disposition,
+            relationship=disposition,
             greeting=greeting,
             approaches=approaches,
         )
@@ -1918,19 +1942,7 @@ class GameService:
                 )
                 operation_builder = getattr(self.quest_state_repo, "build_save_active_with_history_operation", None)
                 if callable(operation_builder):
-                    operations.append(
-                        operation_builder(
-                            character_id=int(character_id),
-                            state=quest_state,
-                            target_count=max(1, int(quest.get("target", 1) or 1)),
-                            seed_key=seed_key,
-                            action="accepted",
-                            action_turn=current_turn,
-                            payload_json=json.dumps({"status": "active", "quest_id": str(quest_id)}),
-                        )
-                    )
-                else:
-                    self.quest_state_repo.save_active_with_history(
+                    operation = operation_builder(
                         character_id=int(character_id),
                         state=quest_state,
                         target_count=max(1, int(quest.get("target", 1) or 1)),
@@ -1939,6 +1951,20 @@ class GameService:
                         action_turn=current_turn,
                         payload_json=json.dumps({"status": "active", "quest_id": str(quest_id)}),
                     )
+                    if callable(operation):
+                        operations.append(cast(Callable[[object], None], operation))
+                else:
+                    save_with_history = getattr(self.quest_state_repo, "save_active_with_history", None)
+                    if callable(save_with_history):
+                        save_with_history(
+                            character_id=int(character_id),
+                            state=quest_state,
+                            target_count=max(1, int(quest.get("target", 1) or 1)),
+                            seed_key=seed_key,
+                            action="accepted",
+                            action_turn=current_turn,
+                            payload_json=json.dumps({"status": "active", "quest_id": str(quest_id)}),
+                        )
             except Exception:
                 pass
 
@@ -1985,25 +2011,25 @@ class GameService:
         operations: list[Callable[[object], None]] = []
         world_flag_operation_builder = getattr(self.world_repo, "build_set_world_flag_operation", None)
         if callable(world_flag_operation_builder):
-            operations.append(
-                world_flag_operation_builder(
+            operation = world_flag_operation_builder(
+                world_id=int(getattr(world, "id", 1) or 1),
+                flag_key=world_flag_key,
+                flag_value="true",
+                changed_turn=turned_in_turn,
+                reason="quest_completion",
+            )
+            if callable(operation):
+                operations.append(cast(Callable[[object], None], operation))
+            if character.location_id is not None:
+                operation = world_flag_operation_builder(
                     world_id=int(getattr(world, "id", 1) or 1),
-                    flag_key=world_flag_key,
+                    flag_key=f"location:{int(character.location_id)}:peaceful",
                     flag_value="true",
                     changed_turn=turned_in_turn,
-                    reason="quest_completion",
+                    reason="quest_completion_peaceful_window",
                 )
-            )
-            if character.location_id is not None:
-                operations.append(
-                    world_flag_operation_builder(
-                        world_id=int(getattr(world, "id", 1) or 1),
-                        flag_key=f"location:{int(character.location_id)}:peaceful",
-                        flag_value="true",
-                        changed_turn=turned_in_turn,
-                        reason="quest_completion_peaceful_window",
-                    )
-                )
+                if callable(operation):
+                    operations.append(cast(Callable[[object], None], operation))
         if self.quest_state_repo is not None:
             try:
                 from rpg.domain.models.quest import QuestState
@@ -2019,25 +2045,7 @@ class GameService:
                 )
                 operation_builder = getattr(self.quest_state_repo, "build_save_active_with_history_operation", None)
                 if callable(operation_builder):
-                    operations.append(
-                        operation_builder(
-                            character_id=int(character_id),
-                            state=quest_state,
-                            target_count=max(1, int(quest.get("target", 1) or 1)),
-                            seed_key=seed_key,
-                            action="completed",
-                            action_turn=turned_in_turn,
-                            payload_json=json.dumps(
-                                {
-                                    "reward_xp": int(reward_xp),
-                                    "reward_money": int(reward_money),
-                                    "quest_id": str(quest_id),
-                                }
-                            ),
-                        )
-                    )
-                else:
-                    self.quest_state_repo.save_active_with_history(
+                    operation = operation_builder(
                         character_id=int(character_id),
                         state=quest_state,
                         target_count=max(1, int(quest.get("target", 1) or 1)),
@@ -2052,6 +2060,26 @@ class GameService:
                             }
                         ),
                     )
+                    if callable(operation):
+                        operations.append(cast(Callable[[object], None], operation))
+                else:
+                    save_with_history = getattr(self.quest_state_repo, "save_active_with_history", None)
+                    if callable(save_with_history):
+                        save_with_history(
+                            character_id=int(character_id),
+                            state=quest_state,
+                            target_count=max(1, int(quest.get("target", 1) or 1)),
+                            seed_key=seed_key,
+                            action="completed",
+                            action_turn=turned_in_turn,
+                            payload_json=json.dumps(
+                                {
+                                    "reward_xp": int(reward_xp),
+                                    "reward_money": int(reward_money),
+                                    "quest_id": str(quest_id),
+                                }
+                            ),
+                        )
             except Exception:
                 pass
 
@@ -2098,7 +2126,15 @@ class GameService:
         npc = self._find_town_npc(npc_id)
 
         normalized_approach = (approach or "").strip().lower()
-        if normalized_approach not in {"friendly", "direct", "intimidate", "leverage intel", "call in favor"}:
+        if normalized_approach not in {
+            "friendly",
+            "direct",
+            "intimidate",
+            "leverage intel",
+            "call in favor",
+            "invoke faction",
+            "bribe",
+        }:
             normalized_approach = "direct"
         if normalized_approach == "leverage intel" and not (
             npc["id"] == "broker_silas" and self._has_interaction_unlock(character, "intel_leverage")
@@ -2108,6 +2144,18 @@ class GameService:
             npc["id"] == "captain_ren" and self._has_interaction_unlock(character, "captain_favor")
         ):
             normalized_approach = "direct"
+        dominant_faction, dominant_score = self._dominant_faction_standing(character_id)
+        if normalized_approach == "invoke faction" and (not dominant_faction or dominant_score < 10):
+            normalized_approach = "direct"
+
+        bribe_cost = 8
+        did_bribe = normalized_approach == "bribe"
+        if did_bribe and int(getattr(character, "money", 0) or 0) < bribe_cost:
+            normalized_approach = "direct"
+            did_bribe = False
+        if did_bribe:
+            character.money = max(0, int(getattr(character, "money", 0) or 0) - bribe_cost)
+            self.character_repo.save(character)
 
         disposition_before = self._get_npc_disposition(world, npc["id"])
         skill_attr = {
@@ -2116,6 +2164,8 @@ class GameService:
             "intimidate": "strength",
             "leverage intel": "wisdom",
             "call in favor": "charisma",
+            "invoke faction": "charisma",
+            "bribe": "charisma",
         }[normalized_approach]
         score = int(getattr(character, "attributes", {}).get(skill_attr, 10))
         modifier = (score - 10) // 2
@@ -2127,9 +2177,18 @@ class GameService:
             dc -= 2
         if normalized_approach == "call in favor" and npc["id"] == "captain_ren":
             dc -= 3
+        if normalized_approach == "invoke faction":
+            dc -= 2 + max(0, (dominant_score - 10) // 10)
+        if normalized_approach == "bribe":
+            dc -= 4
         dc = max(8, min(18, dc))
 
         world_turn = getattr(world, "current_turn", 0)
+        social_state = self._world_social_flags(world)
+        nonce_key = f"nonce:{npc['id']}:{normalized_approach}:character:{character_id}"
+        prior_nonce = int(social_state.get(nonce_key, 0) or 0)
+        next_nonce = prior_nonce + 1
+        social_state[nonce_key] = next_nonce
         seed = derive_seed(
             namespace="social.check",
             context={
@@ -2138,6 +2197,7 @@ class GameService:
                 "approach": normalized_approach,
                 "world_turn": world_turn,
                 "disposition": disposition_before,
+                "event_nonce": next_nonce,
             },
         )
         roll = random.Random(seed).randint(1, 20)
@@ -2151,6 +2211,10 @@ class GameService:
             delta = 6 if success else -4
         if normalized_approach == "call in favor":
             delta = 7 if success else -5
+        if normalized_approach == "invoke faction":
+            delta = 9 if success else -3
+        if normalized_approach == "bribe":
+            delta = 10 if success else -2
         disposition_after = max(-100, min(100, disposition_before + delta))
         self._set_npc_disposition(world, npc["id"], disposition_after)
         self._append_npc_memory(
@@ -2215,6 +2279,11 @@ class GameService:
             if success
             else f"{npc['name']} remains unconvinced."
         )
+        approach_note = ""
+        if normalized_approach == "invoke faction" and dominant_faction:
+            approach_note = f"You invoke your standing with {dominant_faction}."
+        if normalized_approach == "bribe":
+            approach_note = f"You spend {bribe_cost} gold to grease the wheels."
         return SocialOutcomeView(
             npc_id=npc["id"],
             npc_name=npc["name"],
@@ -2222,13 +2291,14 @@ class GameService:
             success=success,
             roll_total=roll_total,
             target_dc=dc,
-            disposition_before=disposition_before,
-            disposition_after=disposition_after,
+            relationship_before=disposition_before,
+            relationship_after=disposition_after,
             messages=[
                 outcome_message,
                 f"Check: d20 + {modifier} = {roll_total} vs DC {dc}",
-                f"Disposition: {disposition_before} → {disposition_after}",
+                f"Relationship: {disposition_before} → {disposition_after}",
             ]
+            + ([approach_note] if approach_note else [])
             + story_messages,
         )
 
@@ -2509,9 +2579,10 @@ class GameService:
 
     def build_character_creation_summary(self, character: Character) -> CharacterCreationSummaryView:
         location_name = "Starting Town"
-        if self.location_repo and getattr(character, "location_id", None) is not None:
+        location_id = character.location_id
+        if self.location_repo and location_id is not None:
             try:
-                location = self.location_repo.get(character.location_id)
+                location = self.location_repo.get(int(location_id))
                 if location:
                     world = self.world_repo.load_default() if self.world_repo else None
                     location_name = self._settlement_display_name(world, location) or (location.name or location_name)
@@ -2546,6 +2617,26 @@ class GameService:
         elif monster.faction_id:
             loot_items.append(f"{monster.faction_id} sigil")
 
+        world_turn = 0
+        if self.world_repo:
+            world = self.world_repo.load_default()
+            world_turn = int(getattr(world, "current_turn", 0) or 0)
+        utility_seed = derive_seed(
+            namespace="loot.utility_consumable",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "monster_id": int(getattr(monster, "id", 0) or 0),
+                "monster_level": int(getattr(monster, "level", 1) or 1),
+                "world_turn": world_turn,
+            },
+        )
+        if not monster.loot_tags:
+            utility_roll = int(utility_seed) % 4
+            if utility_roll == 0:
+                loot_items.append("Focus Potion")
+            elif utility_roll == 1:
+                loot_items.append("Whetstone")
+
         character.xp += xp_gain
         character.money += money_gain
         progression_messages = self._apply_level_progression(character)
@@ -2561,7 +2652,8 @@ class GameService:
             world = self.world_repo.load_default()
             story_messages = self._resolve_active_story_seed_combat(world, character=character, monster=monster)
             if story_messages:
-                self.world_repo.save(world)
+                if world is not None:
+                    self.world_repo.save(world)
         return RewardOutcomeView(xp_gain=xp_gain, money_gain=money_gain, loot_items=loot_items)
 
     @staticmethod
@@ -2587,10 +2679,24 @@ class GameService:
 
     @staticmethod
     def _ability_mod(score: int | None) -> int:
+        if score is None:
+            return 0
         try:
             return (int(score) - 10) // 2
         except Exception:
             return 0
+
+    def _dominant_faction_standing(self, character_id: int) -> tuple[str | None, int]:
+        standings = self.faction_standings_intent(character_id)
+        best_id: str | None = None
+        best_score = 0
+        for faction_id, score in standings.items():
+            normalized_score = int(score)
+            if normalized_score <= best_score:
+                continue
+            best_id = str(faction_id)
+            best_score = normalized_score
+        return best_id, best_score
 
     def _apply_level_progression(self, character: Character) -> list[str]:
         return self.progression_service.apply_level_progression(character)
@@ -2622,7 +2728,9 @@ class GameService:
 
         world = self._require_world()
         character = self._require_character(player_id)
-        location = self.location_repo.get(character.location_id)
+        location = None
+        if self.location_repo and character.location_id is not None:
+            location = self.location_repo.get(int(character.location_id))
 
         if choice == "rest":
             self.rest(player_id)
@@ -3336,6 +3444,11 @@ class GameService:
                     rival_faction = rival_pool[rng.randrange(len(rival_pool))]
 
                 for faction in factions:
+                    has_tracked_standing = target in faction.reputation
+                    is_involved_faction = faction.id in {faction_bias, rival_faction}
+                    if not has_tracked_standing and not is_involved_faction:
+                        continue
+
                     delta = 0
                     if faction.id == faction_bias:
                         if resolution == "prosperity":
@@ -3467,6 +3580,10 @@ class GameService:
         if not standings:
             return 0
         best = max(int(score) for score in standings.values())
+        if 5 <= best < 10:
+            return -1
+        if -10 < best <= -5:
+            return 1
         return calculate_price_modifier(best)
 
     @staticmethod
@@ -3509,7 +3626,7 @@ class GameService:
             "armor": 3,
             "trinket": 2,
         }
-        base_price = base_by_slot.get(slot, 1)
+        base_price = base_by_slot.get(slot or "", 1)
         modifier = self._town_price_modifier(character_id)
         adjusted = int(base_price) - int(modifier)
         return max(1, adjusted)
@@ -3701,16 +3818,16 @@ class GameService:
 
         operation_builder = getattr(self.faction_repo, "build_reputation_delta_operation", None)
         if operations is not None and callable(operation_builder):
-            operations.append(
-                operation_builder(
-                    faction_id=faction_id,
-                    character_id=int(character_id),
-                    delta=3,
-                    reason="quest_completion",
-                    changed_turn=int(getattr(self._require_world(), "current_turn", 0)),
-                )
+            operation = operation_builder(
+                faction_id=faction_id,
+                character_id=int(character_id),
+                delta=3,
+                reason="quest_completion",
+                changed_turn=int(getattr(self._require_world(), "current_turn", 0)),
             )
-            return
+            if callable(operation):
+                operations.append(cast(Callable[[object], None], operation))
+                return
 
         event_bus = getattr(getattr(self.progression, "event_bus", None), "publish", None)
         if callable(event_bus):
@@ -3790,6 +3907,9 @@ class GameService:
     def _pick_monster(
         self, character: Character, location: Optional[Location], rng: random.Random
     ) -> Optional[Entity]:
+        if not self.entity_repo:
+            return None
+
         if location and location.encounters:
             candidates = self.entity_repo.get_many([entry.entity_id for entry in location.encounters])
             lookup = {entity.id: entity for entity in candidates}
@@ -3806,7 +3926,8 @@ class GameService:
                 entities, weights = zip(*weighted)
                 return rng.choices(list(entities), weights=list(weights), k=1)[0]
 
-        choices = self.entity_repo.list_by_location(character.location_id)
+        location_id = character.location_id
+        choices = self.entity_repo.list_by_location(int(location_id)) if location_id is not None else []
         if not choices:
             choices = self.entity_repo.list_for_level(target_level=character.level)
         if not choices:
@@ -3838,8 +3959,8 @@ class GameService:
                 self.progression.event_bus.publish(
                     MonsterSlain(
                         monster_id=monster.id,
-                        location_id=character.location_id,
-                        by_character_id=character.id,
+                        location_id=int(character.location_id or 0),
+                        by_character_id=int(character.id or 0),
                         turn=world.current_turn,
                     )
                 )
@@ -3871,6 +3992,8 @@ class GameService:
         )
 
     def _require_world(self):
+        if self.world_repo is None:
+            raise ValueError("World repository not configured")
         world = self.world_repo.load_default()
         if world is None:
             raise ValueError("World not initialized")

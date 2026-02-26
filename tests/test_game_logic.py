@@ -124,6 +124,30 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual(4, saved.money)
         self.assertIn("ritual notes", saved.inventory)
 
+    def test_apply_encounter_reward_intent_can_drop_new_utility_consumables(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=8)
+        world = world_repo.load_default()
+        world.current_turn = 3
+        world_repo.save(world)
+        character = Character(id=2, name="Nox", location_id=1, xp=0, money=0)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        monster = Entity(id=1, name="Sentry", level=1)
+        entity_repo = InMemoryEntityRepository([monster])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Gate")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        reward = service.apply_encounter_reward_intent(character, monster)
+
+        self.assertIn("Focus Potion", reward.loot_items)
+        saved = character_repo.get(character.id)
+        self.assertIn("Focus Potion", saved.inventory)
+
     def test_apply_encounter_reward_intent_levels_up_when_threshold_crossed(self) -> None:
         world_repo = InMemoryWorldRepository(seed=9)
         character = Character(id=14, name="Ryn", location_id=1, level=1, xp=20, hp_max=10, hp_current=7)
@@ -202,6 +226,18 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual(
             ("Use Item", "Healing Herbs"),
             GameService.submit_combat_action_intent(options, 1, item_name="Healing Herbs"),
+        )
+
+    def test_submit_combat_action_intent_maps_new_consumables(self) -> None:
+        options = ["Attack", "Use Item", "Dodge"]
+
+        self.assertEqual(
+            ("Use Item", "Focus Potion"),
+            GameService.submit_combat_action_intent(options, 1, item_name="Focus Potion"),
+        )
+        self.assertEqual(
+            ("Use Item", "Whetstone"),
+            GameService.submit_combat_action_intent(options, 1, item_name="Whetstone"),
         )
 
     def test_get_character_sheet_intent_exposes_xp_progress(self) -> None:

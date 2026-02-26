@@ -27,7 +27,9 @@ class MysqlEntityRepositoryTests(unittest.TestCase):
                         attack_bonus INTEGER,
                         damage_dice TEXT,
                         hp_max INTEGER,
-                        kind TEXT
+                        kind TEXT,
+                        tags_json TEXT,
+                        resistances_json TEXT
                     )
                     """
                 )
