@@ -1,0 +1,140 @@
+{
+  "aggregate_gate": {
+    "blockers": [],
+    "fail_count": 0,
+    "pass_count": 2,
+    "pass_rate": 0.6667,
+    "profile": "balanced",
+    "release_verdict": "go",
+    "target_max_fail_count": 0,
+    "target_max_warn_count": 1,
+    "target_min_pass_rate": 0.66,
+    "total": 3,
+    "warn_count": 1
+  },
+  "generated_at": "2026-02-25T04:23:07.980472+00:00",
+  "profile": "balanced",
+  "profile_thresholds": {
+    "max_fail_count": 0,
+    "max_warn_count": 1,
+    "min_pass_rate": 0.66,
+    "profile": "balanced"
+  },
+  "quality_targets": {
+    "max_active_seeds": 1,
+    "min_major_events": 1,
+    "semantic_min": 55,
+    "tension_max": 75,
+    "tension_min": 45
+  },
+  "script": [
+    "rest",
+    "rumour",
+    "travel",
+    "rest",
+    "social",
+    "travel",
+    "rest",
+    "rumour",
+    "explore",
+    "social",
+    "rest",
+    "travel",
+    "rest",
+    "travel",
+    "rumour",
+    "rest"
+  ],
+  "seeds": [
+    101,
+    202,
+    303
+  ],
+  "summaries": [
+    {
+      "final_turn": 11,
+      "injection_count": 2,
+      "injection_kinds": [
+        "story_seed",
+        "story_seed"
+      ],
+      "major_event_count": 1,
+      "quality_alerts": [
+        "semantic_below_target"
+      ],
+      "quality_status": "warn",
+      "rumour_signature": [
+        "memory:3:merchant-under-pressure",
+        "black_fletch",
+        "bridge_toll",
+        "crypt_lights"
+      ],
+      "script_len": 16,
+      "seed": 101,
+      "semantic_arc_band": "stable",
+      "semantic_arc_score": 50,
+      "story_seed_active": 1,
+      "story_seed_resolved": 1,
+      "story_seed_total": 2,
+      "tension_level": 56,
+      "threat_level": 7
+    },
+    {
+      "final_turn": 11,
+      "injection_count": 4,
+      "injection_kinds": [
+        "faction_flashpoint",
+        "story_seed",
+        "faction_flashpoint",
+        "story_seed"
+      ],
+      "major_event_count": 1,
+      "quality_alerts": [],
+      "quality_status": "pass",
+      "rumour_signature": [
+        "seed:seed_7_2399",
+        "memory:6:faction-flashpoint",
+        "flashpoint:6:social",
+        "bridge_toll"
+      ],
+      "script_len": 16,
+      "seed": 202,
+      "semantic_arc_band": "stable",
+      "semantic_arc_score": 63,
+      "story_seed_active": 1,
+      "story_seed_resolved": 1,
+      "story_seed_total": 2,
+      "tension_level": 66,
+      "threat_level": 9
+    },
+    {
+      "final_turn": 11,
+      "injection_count": 5,
+      "injection_kinds": [
+        "story_seed",
+        "faction_flashpoint",
+        "story_seed",
+        "faction_flashpoint",
+        "story_seed"
+      ],
+      "major_event_count": 2,
+      "quality_alerts": [],
+      "quality_status": "pass",
+      "rumour_signature": [
+        "seed:seed_7_6989",
+        "memory:6:faction-flashpoint",
+        "flashpoint:6:social",
+        "crypt_lights"
+      ],
+      "script_len": 16,
+      "seed": 303,
+      "semantic_arc_band": "strong",
+      "semantic_arc_score": 86,
+      "story_seed_active": 1,
+      "story_seed_resolved": 2,
+      "story_seed_total": 3,
+      "tension_level": 64,
+      "threat_level": 8
+    }
+  ]
+}
