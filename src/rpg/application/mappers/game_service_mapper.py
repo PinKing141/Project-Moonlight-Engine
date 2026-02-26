@@ -32,14 +32,14 @@ def to_town_npc_view(
     name: str,
     role: str,
     temperament: str,
-    disposition: int,
+    relationship: int,
 ) -> TownNpcView:
     return TownNpcView(
         id=npc_id,
         name=name,
         role=role,
         temperament=temperament,
-        disposition=disposition,
+        relationship=relationship,
     )
 
 

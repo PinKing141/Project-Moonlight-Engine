@@ -103,6 +103,8 @@ class InMemoryEntityRepository(EntityRepository):
                 existing.hp = entity.hp
                 existing.hp_max = entity.hp_max
                 existing.kind = entity.kind
+                existing.tags = list(entity.tags or [])
+                existing.resistances = list(entity.resistances or [])
                 updated += 1
                 entity_id = existing.id
             else:

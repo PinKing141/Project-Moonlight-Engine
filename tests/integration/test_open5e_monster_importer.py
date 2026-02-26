@@ -48,7 +48,9 @@ def _bootstrap_schema(engine) -> None:
                     attack_bonus INTEGER,
                     damage_dice TEXT,
                     hp_max INTEGER,
-                    kind TEXT
+                    kind TEXT,
+                    tags_json TEXT,
+                    resistances_json TEXT
                 )
                 """
             )
@@ -110,6 +112,7 @@ class Open5eMonsterImporterIntegrationTests(unittest.TestCase):
                         "armor_class": 14,
                         "hit_points": 37,
                         "type": "beast",
+                        "damage_resistances": "cold, poison",
                         "actions": [{"name": "Bite", "desc": "+5 to hit, (2d6+3) piercing damage."}],
                     }
                 ]
@@ -127,7 +130,7 @@ class Open5eMonsterImporterIntegrationTests(unittest.TestCase):
             row = session.execute(
                 text(
                     """
-                    SELECT entity_id, name, level, armour_class, attack_bonus, damage_dice, hp_max, kind
+                    SELECT entity_id, name, level, armour_class, attack_bonus, damage_dice, hp_max, kind, tags_json, resistances_json
                     FROM entity
                     WHERE name = 'Dire Wolf'
                     """
@@ -140,6 +143,9 @@ class Open5eMonsterImporterIntegrationTests(unittest.TestCase):
             self.assertEqual("2d6+3", row.damage_dice)
             self.assertEqual(37, row.hp_max)
             self.assertEqual("beast", row.kind)
+            self.assertIn("beast", str(row.tags_json or ""))
+            self.assertIn("cold", str(row.resistances_json or ""))
+            self.assertIn("poison", str(row.resistances_json or ""))
 
             location_id = session.execute(
                 text(
@@ -226,6 +232,46 @@ class Open5eMonsterImporterIntegrationTests(unittest.TestCase):
             ).scalar()
 
             self.assertEqual(2, location_id)
+
+    def test_importer_accepts_schema_alias_fields(self) -> None:
+        client = FakeOpen5eClient(
+            pages={
+                1: [
+                    {
+                        "monster_name": "Alias Drake",
+                        "cr": "2",
+                        "ac": 13,
+                        "hp": 31,
+                        "monster_type": "dragon",
+                        "resistances": "fire",
+                        "attacks": "+4 to hit, (1d10+2) slashing damage.",
+                    }
+                ]
+            }
+        )
+        importer = Open5eMonsterImporter(repository=self.repo, client=client)
+
+        result = importer.import_monsters(pages=1, start_page=1, location_id=1)
+
+        self.assertEqual(1, result.created)
+        with self.SessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    SELECT name, level, armour_class, attack_bonus, damage_dice, hp_max, kind, resistances_json
+                    FROM entity
+                    WHERE name = 'Alias Drake'
+                    """
+                )
+            ).first()
+            self.assertIsNotNone(row)
+            self.assertEqual(2, row.level)
+            self.assertEqual(13, row.armour_class)
+            self.assertEqual(4, row.attack_bonus)
+            self.assertEqual("1d10+2", row.damage_dice)
+            self.assertEqual(31, row.hp_max)
+            self.assertEqual("dragon", row.kind)
+            self.assertIn("fire", str(row.resistances_json or ""))
 
 
 if __name__ == "__main__":

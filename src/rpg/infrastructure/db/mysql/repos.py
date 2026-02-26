@@ -9,6 +9,7 @@ from rpg.domain.models.character_class import CharacterClass
 from rpg.domain.models.entity import Entity
 from rpg.domain.models.feature import Feature
 from rpg.domain.models.faction import Faction
+from rpg.domain.models.encounter_definition import EncounterDefinition, EncounterSlot
 from rpg.domain.models.location import HazardProfile, Location
 from rpg.domain.models.quest import QuestObjective, QuestObjectiveKind, QuestState, QuestTemplate
 from rpg.domain.models.world import World
@@ -17,6 +18,7 @@ from rpg.domain.repositories import (
     CharacterRepository,
     LocationStateRepository,
     ClassRepository,
+    EncounterDefinitionRepository,
     EntityRepository,
     FeatureRepository,
     FactionRepository,
@@ -87,6 +89,25 @@ def _default_combat_fields(level: int) -> tuple[int, int, str]:
     attack_bonus = 2 + level // 2
     damage_die = "d6" if level < 3 else "d8"
     return ac, attack_bonus, damage_die
+
+
+def _parse_json_list(raw_value) -> list[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+    if isinstance(raw_value, str):
+        text_value = raw_value.strip()
+        if not text_value:
+            return []
+        try:
+            parsed = json.loads(text_value)
+        except Exception:
+            parsed = [segment.strip() for segment in text_value.split(",") if segment.strip()]
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [str(parsed).strip()] if str(parsed).strip() else []
+    return []
 
 
 class MysqlClassRepository(ClassRepository):
@@ -555,6 +576,24 @@ class MysqlCharacterRepository(CharacterRepository):
         session.flush()
         return result.lastrowid
 
+    def _resolve_attribute_id(self, session, attr_name: str) -> Optional[int]:
+        return session.execute(
+            text("SELECT attribute_id FROM attribute WHERE name = :name LIMIT 1"),
+            {"name": attr_name},
+        ).scalar()
+
+    def _resolve_character_type_id(self, session) -> int:
+        existing = session.execute(
+            text("SELECT character_type_id FROM character_type WHERE name = 'player' LIMIT 1")
+        ).scalar()
+        if existing:
+            return existing
+        result = session.execute(
+            text("INSERT INTO character_type (name) VALUES ('player')")
+        )
+        session.flush()
+        return result.lastrowid
+
     def list_shop_items(self, *, character_id: int, max_items: int = 8) -> list[dict[str, object]]:
         with SessionLocal() as session:
             level = session.execute(
@@ -689,25 +728,6 @@ class MysqlFeatureRepository(FeatureRepository):
 
             return int(after) > int(before)
 
-    def _resolve_attribute_id(self, session, attr_name: str) -> Optional[int]:
-        return session.execute(
-            text("SELECT attribute_id FROM attribute WHERE name = :name LIMIT 1"),
-            {"name": attr_name},
-        ).scalar()
-
-    def _resolve_character_type_id(self, session) -> int:
-        existing = session.execute(
-            text("SELECT character_type_id FROM character_type WHERE name = 'player' LIMIT 1")
-        ).scalar()
-        if existing:
-            return existing
-        result = session.execute(
-            text("INSERT INTO character_type (name) VALUES ('player')")
-        )
-        session.flush()
-        return result.lastrowid
-
-
 class MysqlEntityRepository(EntityRepository):
     def get(self, entity_id: int) -> Optional[Entity]:
         results = self.get_many([entity_id])
@@ -747,6 +767,8 @@ class MysqlEntityRepository(EntityRepository):
                     "damage_dice": entity.damage_die,
                     "hp_max": entity.hp_max,
                     "kind": entity.kind,
+                    "tags_json": json.dumps(list(entity.tags or [])),
+                    "resistances_json": json.dumps(list(entity.resistances or [])),
                 }
 
                 existing_id = session.execute(
@@ -771,7 +793,9 @@ class MysqlEntityRepository(EntityRepository):
                                 attack_bonus = :attack_bonus,
                                 damage_dice = :damage_dice,
                                 hp_max = :hp_max,
-                                kind = :kind
+                                kind = :kind,
+                                tags_json = :tags_json,
+                                resistances_json = :resistances_json
                             WHERE entity_id = :entity_id
                             """
                         ),
@@ -783,8 +807,8 @@ class MysqlEntityRepository(EntityRepository):
                     result = session.execute(
                         text(
                             """
-                            INSERT INTO entity (entity_type_id, name, level, armour_class, attack_bonus, damage_dice, hp_max, kind)
-                            VALUES (:entity_type_id, :name, :level, :armour_class, :attack_bonus, :damage_dice, :hp_max, :kind)
+                            INSERT INTO entity (entity_type_id, name, level, armour_class, attack_bonus, damage_dice, hp_max, kind, tags_json, resistances_json)
+                            VALUES (:entity_type_id, :name, :level, :armour_class, :attack_bonus, :damage_dice, :hp_max, :kind, :tags_json, :resistances_json)
                             """
                         ),
                         payload,
@@ -869,6 +893,7 @@ class MysqlEntityRepository(EntityRepository):
                 text(
                     """
                     SELECT entity_id, name, level, armour_class, attack_bonus, damage_dice, hp_max, kind
+                              , tags_json, resistances_json
                     FROM entity
                     WHERE level BETWEEN :low AND :high
                     """
@@ -903,7 +928,8 @@ class MysqlEntityRepository(EntityRepository):
                         attack_bonus=attack_bonus,
                         damage_die=damage_die,
                         kind=row.kind or "beast",
-                        tags=[],
+                        tags=_parse_json_list(getattr(row, "tags_json", None)),
+                        resistances=_parse_json_list(getattr(row, "resistances_json", None)),
                     )
                 )
             return entities
@@ -914,6 +940,7 @@ class MysqlEntityRepository(EntityRepository):
                 text(
                     """
                     SELECT e.entity_id, e.name, e.level, e.entity_type_id, e.armour_class, e.attack_bonus, e.damage_dice, e.hp_max, e.kind
+                              , e.tags_json, e.resistances_json
                     FROM entity e
                     JOIN entity_location el ON el.entity_id = e.entity_id
                     WHERE el.location_id = :loc
@@ -950,7 +977,8 @@ class MysqlEntityRepository(EntityRepository):
                         attack_bonus=attack_bonus,
                         damage_die=damage_die,
                         kind=row.kind or "beast",
-                        tags=[],
+                        tags=_parse_json_list(getattr(row, "tags_json", None)),
+                        resistances=_parse_json_list(getattr(row, "resistances_json", None)),
                     )
                 )
             return entities
@@ -963,7 +991,8 @@ class MysqlEntityRepository(EntityRepository):
             rows = session.execute(
                 text(
                     """
-                    SELECT entity_id, name, level, armour_class, attack_bonus, damage_dice, hp_max, kind
+                          SELECT entity_id, name, level, armour_class, attack_bonus, damage_dice, hp_max, kind,
+                              tags_json, resistances_json
                     FROM entity
                     WHERE entity_id IN :ids
                     """
@@ -999,10 +1028,123 @@ class MysqlEntityRepository(EntityRepository):
                         attack_bonus=attack_bonus,
                         damage_die=damage_die,
                         kind=row.kind or "beast",
-                        tags=[],
+                        tags=_parse_json_list(getattr(row, "tags_json", None)),
+                        resistances=_parse_json_list(getattr(row, "resistances_json", None)),
                     )
                 )
             return entities
+
+
+class MysqlEncounterDefinitionRepository(EncounterDefinitionRepository):
+    _TABLE_BLUEPRINTS: tuple[dict[str, object], ...] = (
+        {
+            "id": "forest_patrol_table",
+            "name": "Forest Patrol Table",
+            "faction_id": "the_crown",
+            "base_threat": 1.15,
+            "level_min": 1,
+            "level_max": 4,
+            "location_ids": (1,),
+            "tags": ("forest", "patrol"),
+            "slots": (
+                {"monster_slug": "goblin", "candidates": ("Goblin",), "min_count": 1, "max_count": 2, "weight": 3},
+                {"monster_slug": "wolf", "candidates": ("Wolf", "Dire Wolf"), "min_count": 1, "max_count": 2, "weight": 2},
+            ),
+        },
+        {
+            "id": "ruins_ambush_table",
+            "name": "Ruins Ambush Table",
+            "faction_id": "thieves_guild",
+            "base_threat": 1.25,
+            "level_min": 2,
+            "level_max": 6,
+            "location_ids": (2,),
+            "tags": ("ruins", "ambush"),
+            "slots": (
+                {"monster_slug": "bandit", "candidates": ("Bandit", "Bandit Captain"), "min_count": 1, "max_count": 3, "weight": 3},
+                {"monster_slug": "skeleton", "candidates": ("Skeleton",), "min_count": 1, "max_count": 2, "weight": 2},
+            ),
+        },
+        {
+            "id": "caves_depths_table",
+            "name": "Caves Depths Table",
+            "faction_id": "arcane_syndicate",
+            "base_threat": 1.35,
+            "level_min": 3,
+            "level_max": 8,
+            "location_ids": (3,),
+            "tags": ("caves", "depths"),
+            "slots": (
+                {"monster_slug": "giant_rat", "candidates": ("Giant Rat", "Rat", "Dire Rat"), "min_count": 1, "max_count": 3, "weight": 2},
+                {"monster_slug": "ghoul", "candidates": ("Ghoul", "Skeleton"), "min_count": 1, "max_count": 2, "weight": 3},
+            ),
+        },
+    )
+
+    @staticmethod
+    def _resolve_entity_id(session, candidates: Sequence[str]) -> int | None:
+        lowered = [str(name).strip().lower() for name in candidates if str(name).strip()]
+        if not lowered:
+            return None
+        return session.execute(
+            text(
+                """
+                SELECT entity_id
+                FROM entity
+                WHERE LOWER(name) IN :names
+                ORDER BY entity_id
+                LIMIT 1
+                """
+            ).bindparams(bindparam("names", expanding=True)),
+            {"names": lowered},
+        ).scalar()
+
+    def _build_definitions(self, location_id: int | None = None) -> list[EncounterDefinition]:
+        definitions: list[EncounterDefinition] = []
+        with SessionLocal() as session:
+            for row in self._TABLE_BLUEPRINTS:
+                row_location_ids = [int(value) for value in row["location_ids"]]
+                if location_id is not None and row_location_ids and int(location_id) not in row_location_ids:
+                    continue
+
+                slots: list[EncounterSlot] = []
+                for slot_row in row["slots"]:
+                    entity_id = self._resolve_entity_id(session, slot_row["candidates"])
+                    if entity_id is None:
+                        continue
+                    slots.append(
+                        EncounterSlot(
+                            entity_id=int(entity_id),
+                            monster_slug=str(slot_row["monster_slug"]),
+                            min_count=int(slot_row["min_count"]),
+                            max_count=int(slot_row["max_count"]),
+                            weight=int(slot_row["weight"]),
+                        )
+                    )
+
+                if not slots:
+                    continue
+
+                definitions.append(
+                    EncounterDefinition(
+                        id=str(row["id"]),
+                        name=str(row["name"]),
+                        level_min=int(row["level_min"]),
+                        level_max=int(row["level_max"]),
+                        faction_id=str(row["faction_id"]),
+                        tags=[str(value) for value in row["tags"]],
+                        slots=slots,
+                        base_threat=float(row["base_threat"]),
+                        location_ids=row_location_ids,
+                    )
+                )
+        return definitions
+
+    def list_for_location(self, location_id: int) -> List[EncounterDefinition]:
+        return self._build_definitions(location_id=location_id)
+
+    def list_global(self) -> List[EncounterDefinition]:
+        return self._build_definitions(location_id=None)
 
 
 class MysqlFactionRepository(FactionRepository):

@@ -26,7 +26,7 @@ class StoryDirector:
         self.cadence_turns = max(1, int(cadence_turns))
 
     def register_handlers(self) -> None:
-        self.event_bus.subscribe(TickAdvanced, self.on_tick_advanced)
+        self.event_bus.subscribe(TickAdvanced, self.on_tick_advanced, priority=60)
 
     def on_tick_advanced(self, event: TickAdvanced) -> None:
         world = self.world_repo.load_default()

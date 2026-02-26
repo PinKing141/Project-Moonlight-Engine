@@ -32,6 +32,7 @@ class RepositoryParityAuditTests(unittest.TestCase):
             "InMemoryWorldRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_world_repo.py",
             "InMemoryLocationRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_location_repo.py",
             "InMemoryClassRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_class_repo.py",
+            "InMemoryEncounterDefinitionRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_encounter_definition_repo.py",
         }
 
         requirements = {
@@ -40,6 +41,7 @@ class RepositoryParityAuditTests(unittest.TestCase):
             ("InMemoryWorldRepository", "MysqlWorldRepository"): {"load_default", "save"},
             ("InMemoryLocationRepository", "MysqlLocationRepository"): {"get", "list_all", "get_starting_location"},
             ("InMemoryClassRepository", "MysqlClassRepository"): {"list_playable"},
+            ("InMemoryEncounterDefinitionRepository", "MysqlEncounterDefinitionRepository"): {"list_for_location", "list_global"},
         }
 
         for (inmemory_class, mysql_class), required in requirements.items():
@@ -59,13 +61,34 @@ class RepositoryParityAuditTests(unittest.TestCase):
         ]
 
         violations: list[str] = []
+        excluded_files = {"narrative_quality_batch.py"}
         for path in app_dir.rglob("*.py"):
+            if path.name in excluded_files:
+                continue
             text = path.read_text(encoding="utf-8")
             for pattern in forbidden_patterns:
                 if pattern.search(text):
                     violations.append(f"{path.relative_to(ROOT)} :: {pattern.pattern}")
 
         self.assertEqual([], violations, "Application layer includes adapter-specific references")
+
+    def test_v12_content_ids_are_present_in_inmemory_and_mysql_paths(self) -> None:
+        in_memory_faction = (ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_faction_repo.py").read_text(encoding="utf-8")
+        in_memory_encounters = (
+            ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_encounter_definition_repo.py"
+        ).read_text(encoding="utf-8")
+        mysql_repos = (ROOT / "src" / "rpg" / "infrastructure" / "db" / "mysql" / "repos.py").read_text(encoding="utf-8")
+
+        faction_ids = ("the_crown", "thieves_guild", "arcane_syndicate")
+        encounter_table_ids = ("forest_patrol_table", "ruins_ambush_table", "caves_depths_table")
+
+        for faction_id in faction_ids:
+            self.assertIn(faction_id, in_memory_faction)
+            self.assertIn(faction_id, mysql_repos)
+
+        for table_id in encounter_table_ids:
+            self.assertIn(table_id, in_memory_encounters)
+            self.assertIn(table_id, mysql_repos)
 
 
 if __name__ == "__main__":

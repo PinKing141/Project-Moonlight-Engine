@@ -4,11 +4,14 @@ from typing import Callable, DefaultDict, List, Type
 
 class EventBus:
     def __init__(self) -> None:
-        self._subscribers: DefaultDict[Type[object], List[Callable[[object], None]]] = defaultdict(list)
+        self._subscribers: DefaultDict[Type[object], List[tuple[int, int, Callable[[object], None]]]] = defaultdict(list)
+        self._next_order = 0
 
-    def subscribe(self, event_type: Type[object], handler: Callable[[object], None]) -> None:
-        self._subscribers[event_type].append(handler)
+    def subscribe(self, event_type: Type[object], handler: Callable[[object], None], *, priority: int = 100) -> None:
+        self._subscribers[event_type].append((int(priority), self._next_order, handler))
+        self._next_order += 1
+        self._subscribers[event_type].sort(key=lambda row: (row[0], row[1]))
 
     def publish(self, event: object) -> None:
-        for handler in self._subscribers[type(event)]:
+        for _, _, handler in self._subscribers[type(event)]:
             handler(event)

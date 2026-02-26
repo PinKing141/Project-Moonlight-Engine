@@ -164,8 +164,9 @@ class MysqlCharacterRepositoryStatsIntegrationTests(unittest.TestCase):
             location_id=1,
         )
         self.assertIsNotNone(created.id)
-
-        loaded = self.repo.get(int(created.id))
+        created_id = created.id
+        assert created_id is not None
+        loaded = self.repo.get(int(created_id))
 
         self.assertIsNotNone(loaded)
         assert loaded is not None
@@ -188,8 +189,9 @@ class MysqlCharacterRepositoryStatsIntegrationTests(unittest.TestCase):
         created.speed = 35
 
         self.repo.save(created)
-
-        loaded = self.repo.get(int(created.id))
+        created_id = created.id
+        assert created_id is not None
+        loaded = self.repo.get(int(created_id))
         self.assertIsNotNone(loaded)
         assert loaded is not None
         self.assertEqual(18, loaded.armour_class)

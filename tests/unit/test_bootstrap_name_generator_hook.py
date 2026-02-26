@@ -43,10 +43,24 @@ class BootstrapNameGeneratorHookTests(unittest.TestCase):
         goblin = service.entity_repo.get(1)
         self.assertEqual("Hooked-1", goblin.name)
 
-    def test_create_game_service_skips_mysql_when_localhost_unreachable(self) -> None:
+    def test_create_game_service_raises_when_localhost_unreachable_without_opt_in_fallback(self) -> None:
         with mock.patch.dict(
             os.environ,
             {"RPG_DATABASE_URL": "mysql+mysqlconnector://root@127.0.0.1:3307/rpg_game"},
+            clear=False,
+        ), mock.patch("rpg.bootstrap.socket.create_connection", side_effect=OSError("refused")), mock.patch.object(
+            bootstrap, "_build_mysql_game_service", side_effect=AssertionError("mysql path should be skipped")
+        ):
+            with self.assertRaises(RuntimeError):
+                bootstrap.create_game_service()
+
+    def test_create_game_service_skips_mysql_when_localhost_unreachable_with_opt_in_fallback(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "RPG_DATABASE_URL": "mysql+mysqlconnector://root@127.0.0.1:3307/rpg_game",
+                "RPG_DB_ALLOW_INMEMORY_FALLBACK": "1",
+            },
             clear=False,
         ), mock.patch("rpg.bootstrap.socket.create_connection", side_effect=OSError("refused")), mock.patch.object(
             bootstrap, "_build_mysql_game_service", side_effect=AssertionError("mysql path should be skipped")

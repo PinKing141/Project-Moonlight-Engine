@@ -30,6 +30,7 @@ from rpg.infrastructure.db.mysql.repos import (
     MysqlCharacterRepository,
     MysqlClassRepository,
     MysqlEntityRepository,
+    MysqlEncounterDefinitionRepository,
     MysqlFactionRepository,
     MysqlLocationRepository,
     MysqlNarrativeStateRepository,
@@ -44,8 +45,8 @@ def _build_encounter_intro_builder():
     if not enabled:
         return EncounterIntroEnricher(enabled=False).build_intro
 
-    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "2"))
-    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "1"))
+    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "0.4"))
+    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "0"))
     backoff_seconds = float(os.getenv("RPG_FLAVOUR_BACKOFF_S", "0.1"))
     max_lines = int(os.getenv("RPG_FLAVOUR_MAX_LINES", "1"))
 
@@ -63,8 +64,8 @@ def _build_mechanical_flavour_builder():
     if not enabled:
         return None
 
-    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "2"))
-    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "1"))
+    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "0.4"))
+    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "0"))
     backoff_seconds = float(os.getenv("RPG_FLAVOUR_BACKOFF_S", "0.1"))
     max_words = int(os.getenv("RPG_FLAVOUR_MAX_WORDS", "8"))
 
@@ -235,6 +236,7 @@ def bootstrap_mysql() -> tuple[GameService, CharacterCreationService]:
     char_repo = MysqlCharacterRepository()
     class_repo = MysqlClassRepository()
     entity_repo = MysqlEntityRepository()
+    definition_repo = MysqlEncounterDefinitionRepository()
     faction_repo = MysqlFactionRepository()
     narrative_state_repo = MysqlNarrativeStateRepository()
     location_repo = MysqlLocationRepository()
@@ -262,6 +264,7 @@ def bootstrap_mysql() -> tuple[GameService, CharacterCreationService]:
             location_repo=location_repo,
             world_repo=world_repo,
             progression=progression,
+            definition_repo=definition_repo,
             faction_repo=faction_repo,
             quest_state_repo=narrative_state_repo,
             location_state_repo=narrative_state_repo,

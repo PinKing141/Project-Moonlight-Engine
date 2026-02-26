@@ -45,7 +45,26 @@ def _cr_to_level(raw) -> int:
 
 
 def _parse_action_block(actions) -> tuple[Optional[int], Optional[str]]:
-    if not actions or not isinstance(actions, list):
+    if isinstance(actions, dict):
+        actions = actions.get("results", []) or actions.get("items", [])
+    if not actions:
+        return None, None
+    if not isinstance(actions, list):
+        if isinstance(actions, str):
+            actions = [{"name": "attack", "desc": actions}]
+        else:
+            return None, None
+
+    normalized_actions = []
+    for action in actions:
+        if isinstance(action, dict):
+            normalized_actions.append(action)
+            continue
+        normalized_actions.append({"name": "attack", "desc": str(action)})
+
+    actions = normalized_actions
+
+    if not actions:
         return None, None
 
     preferred = {
@@ -113,6 +132,24 @@ def _default_stats_for_level(level: int) -> tuple[int, int, int, int]:
     return hp, attack_min, attack_max, armor
 
 
+def _parse_csvish(raw_value) -> list[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, list):
+        return [str(item).strip().lower() for item in raw_value if str(item).strip()]
+    text_value = str(raw_value).strip().lower()
+    if not text_value:
+        return []
+    return [segment.strip() for segment in text_value.split(",") if segment.strip()]
+
+
+def _first_present(monster: dict, *keys: str):
+    for key in keys:
+        if key in monster and monster.get(key) is not None:
+            return monster.get(key)
+    return None
+
+
 class Open5eMonsterImporter:
     """Fetch Open5e monsters and persist them through a repository."""
 
@@ -141,19 +178,25 @@ class Open5eMonsterImporter:
         return summary
 
     def _map_monster(self, monster: dict) -> Entity:
-        level = _cr_to_level(monster.get("challenge_rating"))
-        name = monster.get("name", "Unknown Monster")
+        level = _cr_to_level(_first_present(monster, "challenge_rating", "cr", "challenge"))
+        name = _first_present(monster, "name", "monster_name", "title") or "Unknown Monster"
         hp_guess, attack_min, attack_max, armor = _default_stats_for_level(level)
 
-        armour_class_raw = monster.get("armor_class")
-        hit_points_raw = monster.get("hit_points")
-        to_hit_raw, dice_raw = _parse_action_block(monster.get("actions"))
+        armour_class_raw = _first_present(monster, "armor_class", "ac")
+        hit_points_raw = _first_present(monster, "hit_points", "hp", "hp_max")
+        to_hit_raw, dice_raw = _parse_action_block(_first_present(monster, "actions", "attacks", "action_list"))
         est_hit, est_dice = _estimate_from_level(level)
 
         armour_class = armour_class_raw if armour_class_raw is not None else max(10, 10 + level // 2 + armor)
         attack_bonus = to_hit_raw if to_hit_raw is not None else est_hit
         damage_dice = dice_raw or est_dice
         hit_points = hit_points_raw if hit_points_raw is not None else hp_guess
+        kind = str(_first_present(monster, "type", "monster_type") or "beast").lower()
+        subtype = str(_first_present(monster, "subtype", "sub_type") or "").strip().lower()
+        tags = [kind]
+        if subtype:
+            tags.append(subtype)
+        resistances = _parse_csvish(_first_present(monster, "damage_resistances", "resistances", "damageResistance"))
 
         return Entity(
             id=0,
@@ -168,5 +211,7 @@ class Open5eMonsterImporter:
             attack_min=attack_min,
             attack_max=attack_max,
             armor=armor,
-            kind=str(monster.get("type") or "beast").lower(),
+            kind=kind,
+            tags=tags,
+            resistances=resistances,
         )

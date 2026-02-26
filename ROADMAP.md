@@ -1712,3 +1712,238 @@ Prepare stable, documented, testable release of CLI RPG core.
 - Restrict future changes to bug fixes, maintenance, or user-approved scope additions.
 - Any new feature idea should be captured as backlog input before code changes.
 
+---
+
+## 22) Content Volume V12 — Domain Factions, Stats, and Encounters
+
+### Phase Goal
+Populate the game world with a baseline volume of playable content (factions, encounter tables, and stat tagging) to support future quest variety.
+
+### 22.1 Sequence
+
+#### `V12-T01` Faction Expansion
+- **Status:** `Done`
+- **Objective:** Introduce exactly 3 new factions to create a balanced political triangle.
+- **Action:**
+  1. Write MySQL migration `011_seed_factions.sql` inserting `the_crown`, `thieves_guild`, and `arcane_syndicate`.
+  2. Add the same 3 factions to `InMemoryFactionRepository`.
+- **Anti-Overcoding Guard:** Do not add new faction mechanics, UI screens, or relationship rules.
+- **Files (actual):**
+  - `src/rpg/infrastructure/db/migrations/011_seed_factions.sql`
+  - `src/rpg/infrastructure/inmemory/inmemory_faction_repo.py`
+  - `tests/unit/test_repository_parity_audit.py`
+- **Done Evidence:**
+  - Commit/patch refs: Added exactly three new faction data entries in migration + in-memory repository.
+
+#### `V12-T02` Biome-Specific Encounter Tables
+- **Status:** `Done`
+- **Objective:** Create 3 distinct encounter tables mapped to 3 distinct locations/biomes (`forest`, `ruins`, `caves`).
+- **Action:**
+  1. Define exactly 3 encounter table definitions with bounded Open5e-style monster slugs.
+  2. Expose those tables through both in-memory and MySQL encounter-definition repositories.
+- **Anti-Overcoding Guard:** Do not implement a procedural encounter generation algorithm.
+- **Files (actual):**
+  - `src/rpg/domain/models/encounter_definition.py`
+  - `src/rpg/infrastructure/inmemory/inmemory_encounter_definition_repo.py`
+  - `src/rpg/infrastructure/db/mysql/repos.py`
+  - `src/rpg/bootstrap.py`
+  - `src/rpg/infrastructure/legacy_cli_compat.py`
+  - `tests/unit/test_repository_parity_audit.py`
+- **Done Evidence:**
+  - Commit/patch refs: Added exactly three table IDs (`forest_patrol_table`, `ruins_ambush_table`, `caves_depths_table`) and wired MySQL composition to consume repository-backed definitions.
+
+#### `V12-T03` Domain Stat Tagging (Resistances/Types)
+- **Status:** `Done`
+- **Objective:** Add bounded stat tagging fields to entities (`tags`, `resistances`) and persist them through Open5e import + MySQL repository operations.
+- **Action:**
+  1. Update domain entity model to carry resistances.
+  2. Update Open5e monster importer to parse and map tags/resistances.
+  3. Add migration `012_add_entity_tags.sql` and persist/load these fields in MySQL repository.
+- **Anti-Overcoding Guard:** Do not add combat resistance calculations in this phase.
+- **Files (actual):**
+  - `src/rpg/domain/models/entity.py`
+  - `src/rpg/infrastructure/db/mysql/open5e_monster_importer.py`
+  - `src/rpg/infrastructure/db/mysql/repos.py`
+  - `src/rpg/infrastructure/db/migrations/012_add_entity_tags.sql`
+  - `tests/integration/test_open5e_monster_importer.py`
+  - `tests/test_mysql_repositories.py`
+  - `tests/integration/test_mysql_repositories.py`
+- **Done Evidence:**
+  - Commit/patch refs: Added persistent entity tag/resistance columns and importer parsing; repository upsert/load now round-trips those fields.
+
+### 22.2 Strict Exit Gates (Stop Checklist)
+- [x] **Data Limit Gate:** Exactly 3 new factions and exactly 3 encounter tables added.
+- [x] **Parity Gate:** `tests/unit/test_repository_parity_audit.py` passes with V12 coverage for factions/encounter tables.
+- [x] **Purity Gate:** No files under `src/rpg/presentation/` modified, and `Entity` remains isolated from API/DB parsing logic.
+- [x] **Bootstrap Gate:** `src/rpg/bootstrap.py` in-memory path injects `InMemoryFactionRepository` and `InMemoryEncounterDefinitionRepository` into `GameService`.
+- [x] **Test Matrix Gate:** `pytest tests/unit/ -q` passes, including `tests/unit/test_entity_model.py`.
+- [x] **Replayability Gate:** `tests/unit/test_replay_harness.py` passes.
+
+### 22.3 Scope Notes
+- Section 22 is strictly domain/infrastructure content volume work.
+- No new UI surface, no new combat resistance mechanics, and no procedural encounter generator are introduced.
+
+---
+
+## 23) Quest Arc Templates V13 — Faction and Biome Variety
+
+### Phase Goal
+Expand quest board variety with deterministic template additions only, reusing existing objective mechanics.
+
+### 23.1 Sequence
+
+#### `V13-T01` Add Four Quest Arc Templates
+- **Status:** `Done`
+- **Objective:** Add exactly 4 new quest templates to the deterministic posting pool.
+- **Action:**
+  1. Add exactly 2 faction-aligned templates.
+  2. Add exactly 2 biome-targeted templates.
+  3. Reuse existing objective kinds only: `kill_any` and `travel_count`.
+- **Anti-Overcoding Guard:** Do not add new objective mechanics, quest state schema, or progression handlers.
+- **Files (actual):**
+  - `src/rpg/application/services/quest_service.py`
+- **Done Evidence:**
+  - Commit/patch refs: Added exactly 4 templates (`crown_hunt_order`, `syndicate_route_run`, `forest_path_clearance`, `ruins_wayfinding`) with objective kinds bounded to `kill_any`/`travel_count`.
+
+#### `V13-T02` Update Quest Title Mapping
+- **Status:** `Done`
+- **Objective:** Add title mappings for the new template IDs.
+- **Action:**
+  1. Extend `_QUEST_TITLES` for all 4 new quest IDs.
+- **Anti-Overcoding Guard:** Do not change quest journal DTO shape or presentation rendering.
+- **Files (actual):**
+  - `src/rpg/application/services/game_service.py`
+- **Done Evidence:**
+  - Commit/patch refs: Extended `_QUEST_TITLES` with explicit mappings for all four new V13 template IDs.
+
+#### `V13-T03` Deterministic Pool Test Coverage
+- **Status:** `Done`
+- **Objective:** Extend quest-service unit checks to assert the expanded posting pool and existing objective-kind constraints.
+- **Action:**
+  1. Update `tests/unit/test_quest_service.py` to assert all template IDs are posted.
+  2. Assert objective kinds remain bounded to `kill_any`/`travel_count`.
+  3. Assert deterministic seed key formatting remains stable for new IDs.
+- **Anti-Overcoding Guard:** Keep tests focused on quest-service behavior; avoid presentation coupling.
+- **Files (actual):**
+  - `tests/unit/test_quest_service.py`
+- **Done Evidence:**
+  - Test assertions added: pool contains exactly 7 quest IDs (existing 3 + new 4), objective-kind bounds are preserved, and seed key prefixes are validated for the new IDs.
+
+### 23.2 Strict Exit Gates (Stop Checklist)
+- [x] **Scope Gate:** Exactly 4 templates added (2 faction-aligned, 2 biome-targeted), with no new objective mechanics.
+- [x] **Determinism Gate:** `pytest tests/unit/test_quest_service.py -q` passes with expanded pool assertions (`3 passed`).
+- [x] **Replayability Gate:** `pytest tests/unit/test_replay_harness.py -q` passes unchanged (`4 passed`).
+- [x] **Boundary Gate:** No files under `src/rpg/presentation/` modified.
+
+### 23.3 Scope Notes
+- Section 23 is strictly quest template volume and naming work.
+- No new UI surface, no new progression event types, and no quest schema migration are introduced.
+
+---
+
+## 24) Content Volume V14 — Social & Combat Utility Expansion
+
+### Phase Goal
+Deepen social and combat loops by adding bounded interaction approaches and tactical consumables without changing architecture boundaries or deterministic guarantees.
+
+### 24.1 Sequence
+
+#### `V14-T01` Faction & Economy Social Approaches
+- **Status:** `Done`
+- **Objective:** Add 2 new social approaches (`invoke_faction`, `bribe`) using existing interaction payloads.
+- **Action:**
+  1. Extended social option availability in `get_npc_interaction_intent`.
+  2. Resolved both approaches in `submit_social_approach_intent` with deterministic check seeds.
+  3. Applied bounded gating by faction standing and character gold.
+- **Anti-Overcoding Guard:** No presentation flow or DTO shape changes.
+- **Files (actual):**
+  - `src/rpg/application/services/game_service.py`
+  - `tests/unit/test_town_social_flow.py`
+- **Done Evidence:**
+  - Added exactly two new approaches (`Invoke Faction`, `Bribe`) and deterministic resolution behavior.
+
+#### `V14-T02` Tactical Combat Consumables
+- **Status:** `Done`
+- **Objective:** Introduce 2 non-heal consumables (`Focus Potion`, `Whetstone`) with bounded encounter-local effects.
+- **Action:**
+  1. Added consumables to combat item order and item-use handling.
+  2. Implemented `Focus Potion` (restore one spell slot up to max).
+  3. Implemented `Whetstone` (+1 damage for the current encounter only).
+  4. Added MySQL seed migration for both consumables.
+- **Anti-Overcoding Guard:** No status-effect engine or duration framework introduced.
+- **Files (actual):**
+  - `src/rpg/application/services/combat_service.py`
+  - `src/rpg/infrastructure/db/migrations/013_seed_new_consumables.sql`
+  - `src/rpg/infrastructure/db/migrations/_apply_all.sql`
+  - `tests/test_game_logic.py`
+- **Done Evidence:**
+  - Added exactly two combat consumables with bounded behavior and migration chain inclusion.
+
+#### `V14-T03` Economy & Loot Table Integration
+- **Status:** `Done`
+- **Objective:** Ensure deterministic acquisition paths for the new consumables.
+- **Action:**
+  1. Added both consumables to in-memory shop catalog.
+  2. Added deterministic utility drop integration in `apply_encounter_reward_intent` via `derive_seed`.
+- **Anti-Overcoding Guard:** Reused existing shop/reward contracts and deterministic seed policy.
+- **Files (actual):**
+  - `src/rpg/application/services/game_service.py`
+  - `tests/test_game_logic.py`
+- **Done Evidence:**
+  - New consumables appear through existing shop inventory and deterministic encounter reward path.
+
+### 24.2 Strict Exit Gates (Stop Checklist)
+- [x] **Data Limit Gate:** Exactly 2 new social approaches and exactly 2 new combat consumables added; no status-effect engine created.
+- [x] **Purity Gate:** Zero files in `src/rpg/presentation/` modified.
+- [x] **Test Matrix Gate:** `pytest tests/test_game_logic.py -q` (`14 passed`) and `pytest tests/unit/test_town_social_flow.py -q` (`8 passed`) are green.
+- [x] **Replayability Gate:** `pytest tests/unit/test_replay_harness.py -q` remains green (`4 passed`).
+
+### 24.3 Scope Notes
+- Section 24 is limited to social approach and consumable volume expansion.
+- No new UI routes, no new combat framework abstractions, and no architecture boundary changes were introduced.
+
+---
+
+## 25) Post-V14 Operations — Playtest, Balance, and Maintenance Freeze
+
+### Phase Goal
+Stabilize V1.0 gameplay quality through hands-on playtesting and numeric tuning, without adding new feature systems.
+
+### 25.1 Sequence
+
+#### `P25-T01` CLI Playtest Pass
+- **Status:** `In Progress`
+- **Objective:** Run repeated gameplay loops to assess pacing, encounter pressure, and economy stability.
+- **Action:**
+  1. Play via canonical CLI entrypoint: `python -m rpg`.
+  2. Track leveling pace, quest completion tempo, and gold flow.
+  3. Record anomalies as defects or backlog items.
+- **Anti-Overcoding Guard:** No new mechanics during playtest pass.
+
+#### `P25-T02` Balance-Only Tuning
+- **Status:** `Not Started`
+- **Objective:** Adjust live balance with data-only changes.
+- **Action:**
+  1. Tweak only numeric values in `src/rpg/application/services/balance_tables.py` when tuning is required.
+  2. Re-run focused gameplay tests after each tuning batch.
+- **Anti-Overcoding Guard:** Do not rewrite service logic for balance corrections.
+
+#### `P25-T03` Maintenance & Bug Fix Mode
+- **Status:** `In Progress`
+- **Objective:** Enforce implementation freeze after V14 content completion.
+- **Action:**
+  1. Restrict work to bug fixes, maintenance, and approved roadmap scope.
+  2. Capture feature ideas in `BACKLOG.md` only.
+  3. Open a new roadmap phase (e.g., V15) before implementing any backlog feature.
+- **Anti-Overcoding Guard:** No direct feature implementation from backlog.
+
+### 25.2 Strict Exit Gates (Stop Checklist)
+- [ ] **Playtest Gate:** At least one full CLI playtest cycle completed and notes captured.
+- [ ] **Balance Gate:** Any gameplay tuning is confined to `balance_tables.py` with regression checks.
+- [x] **Freeze Gate:** `BACKLOG.md` exists and is used for feature ideas instead of direct implementation.
+- [x] **Purity Gate:** No new presentation-path architecture shortcuts introduced.
+
+### 25.3 Scope Notes
+- Section 25 intentionally pauses feature expansion after V14.
+- Graphical client planning is allowed, but engine feature coding remains frozen until a new scoped roadmap section is opened.
+

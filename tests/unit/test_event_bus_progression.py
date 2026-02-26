@@ -69,6 +69,35 @@ class EventBusTests(unittest.TestCase):
 
         self.assertEqual(["alpha"], seen)
 
+    def test_publish_honors_priority_order(self) -> None:
+        bus = EventBus()
+        seen: list[str] = []
+
+        class ExampleEvent:
+            pass
+
+        bus.subscribe(ExampleEvent, lambda evt: seen.append("normal"), priority=100)
+        bus.subscribe(ExampleEvent, lambda evt: seen.append("early"), priority=10)
+        bus.subscribe(ExampleEvent, lambda evt: seen.append("late"), priority=200)
+
+        bus.publish(ExampleEvent())
+
+        self.assertEqual(["early", "normal", "late"], seen)
+
+    def test_publish_preserves_registration_order_for_same_priority(self) -> None:
+        bus = EventBus()
+        seen: list[str] = []
+
+        class ExampleEvent:
+            pass
+
+        bus.subscribe(ExampleEvent, lambda evt: seen.append("first"), priority=50)
+        bus.subscribe(ExampleEvent, lambda evt: seen.append("second"), priority=50)
+
+        bus.publish(ExampleEvent())
+
+        self.assertEqual(["first", "second"], seen)
+
 
 class WorldProgressionTests(unittest.TestCase):
     def test_tick_advances_turns_and_persists_once(self) -> None:

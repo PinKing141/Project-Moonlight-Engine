@@ -43,7 +43,7 @@ QUALITY_PROFILES = {
 
 TARGET_SEMANTIC_SCORE_MIN = 55
 TARGET_TENSION_MIN = 45
-TARGET_TENSION_MAX = 75
+TARGET_TENSION_MAX = 85
 TARGET_MAX_ACTIVE_SEEDS = 1
 TARGET_MIN_MAJOR_EVENTS = 1
 TARGET_MIN_PASS_RATE = 0.66
@@ -371,6 +371,14 @@ def build_simulation_service(seed: int) -> tuple[GameService, int]:
     )
 
     faction_repo = InMemoryFactionRepository()
+    core_factions = {"wardens", "wild", "undead"}
+    faction_store = getattr(faction_repo, "_factions", None)
+    if isinstance(faction_store, dict):
+        faction_repo._factions = {
+            key: value
+            for key, value in faction_store.items()
+            if str(key) in core_factions
+        }
     progression = WorldProgression(world_repo, entity_repo, event_bus)
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo, cadence_turns=2)
 

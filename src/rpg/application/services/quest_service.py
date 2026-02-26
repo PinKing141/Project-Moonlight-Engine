@@ -42,6 +42,42 @@ class QuestService:
             "reward_xp": 12,
             "reward_money": 8,
         },
+        {
+            "quest_id": "crown_hunt_order",
+            "status": "available",
+            "objective_kind": "kill_any",
+            "progress": 0,
+            "target": 2,
+            "reward_xp": 18,
+            "reward_money": 9,
+        },
+        {
+            "quest_id": "syndicate_route_run",
+            "status": "available",
+            "objective_kind": "travel_count",
+            "progress": 0,
+            "target": 3,
+            "reward_xp": 16,
+            "reward_money": 10,
+        },
+        {
+            "quest_id": "forest_path_clearance",
+            "status": "available",
+            "objective_kind": "kill_any",
+            "progress": 0,
+            "target": 3,
+            "reward_xp": 20,
+            "reward_money": 8,
+        },
+        {
+            "quest_id": "ruins_wayfinding",
+            "status": "available",
+            "objective_kind": "travel_count",
+            "progress": 0,
+            "target": 2,
+            "reward_xp": 14,
+            "reward_money": 9,
+        },
     )
 
     def __init__(
@@ -55,8 +91,8 @@ class QuestService:
         self.event_bus = event_bus
 
     def register_handlers(self) -> None:
-        self.event_bus.subscribe(TickAdvanced, self.on_tick_advanced)
-        self.event_bus.subscribe(MonsterSlain, self.on_monster_slain)
+        self.event_bus.subscribe(TickAdvanced, self.on_tick_advanced, priority=20)
+        self.event_bus.subscribe(MonsterSlain, self.on_monster_slain, priority=20)
 
     def on_tick_advanced(self, event: TickAdvanced) -> None:
         world = self.world_repo.load_default()
