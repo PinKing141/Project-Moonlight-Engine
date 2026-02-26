@@ -1,0 +1,48 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python build & packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test, lint, and type-check caches
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+
+# Logs and runtime outputs
+*.log
+*.out
+*.pid
+
+# Local environment/config files
+.env
+.env.*
+!.env.example
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.code-workspace
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
