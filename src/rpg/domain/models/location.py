@@ -39,6 +39,8 @@ class Location:
     biome: Biome | str = Biome.WILDERNESS.value
     base_level: int = 1
     recommended_level: int = 1
+    x: float = 0.0
+    y: float = 0.0
     factions: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
     encounters: List[EncounterTableEntry] = field(default_factory=list)

@@ -9,6 +9,26 @@ from rpg.domain.models.world import World
 from .connection import SessionLocal
 
 
+def _table_columns(session, table_name: str) -> set[str]:
+    dialect = session.bind.dialect.name if session.bind is not None else "mysql"
+    if dialect == "sqlite":
+        rows = session.execute(text(f"PRAGMA table_info({table_name})")).all()
+        return {str(row.name).lower() for row in rows}
+
+    rows = session.execute(
+        text(
+            """
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+            """
+        ),
+        {"table_name": str(table_name)},
+    ).all()
+    return {str(row.COLUMN_NAME).lower() for row in rows}
+
+
 def save_character_and_world_atomic(
     character: Character,
     world: World,
@@ -26,12 +46,13 @@ def save_character_and_world_atomic(
 
 def _upsert_character_row(session, character: Character) -> None:
     dialect = session.bind.dialect.name if session.bind is not None else "mysql"
-    if dialect == "mysql":
-        statement = text(
-            """
-            INSERT INTO `character` (character_id, name, alive, level, xp, money, character_type_id, hp_current, hp_max, armour_class, armor, attack_bonus, damage_die, speed)
-            VALUES (:cid, :name, :alive, :level, :xp, :money, :ctype, :hp_current, :hp_max, :armour_class, :armor, :attack_bonus, :damage_die, :speed)
-            ON DUPLICATE KEY UPDATE
+    columns = _table_columns(session, "character")
+    has_inventory_json = "inventory_json" in columns
+    has_flags_json = "flags_json" in columns
+
+    character_columns = "character_id, name, alive, level, xp, money, character_type_id, hp_current, hp_max, armour_class, armor, attack_bonus, damage_die, speed"
+    character_values = ":cid, :name, :alive, :level, :xp, :money, :ctype, :hp_current, :hp_max, :armour_class, :armor, :attack_bonus, :damage_die, :speed"
+    update_mysql = """
                 name = VALUES(name),
                 alive = VALUES(alive),
                 level = VALUES(level),
@@ -45,14 +66,8 @@ def _upsert_character_row(session, character: Character) -> None:
                 attack_bonus = VALUES(attack_bonus),
                 damage_die = VALUES(damage_die),
                 speed = VALUES(speed)
-            """
-        )
-    else:
-        statement = text(
-            """
-            INSERT INTO "character" (character_id, name, alive, level, xp, money, character_type_id, hp_current, hp_max, armour_class, armor, attack_bonus, damage_die, speed)
-            VALUES (:cid, :name, :alive, :level, :xp, :money, :ctype, :hp_current, :hp_max, :armour_class, :armor, :attack_bonus, :damage_die, :speed)
-            ON CONFLICT(character_id) DO UPDATE SET
+    """
+    update_sqlite = """
                 name = excluded.name,
                 alive = excluded.alive,
                 level = excluded.level,
@@ -66,6 +81,35 @@ def _upsert_character_row(session, character: Character) -> None:
                 attack_bonus = excluded.attack_bonus,
                 damage_die = excluded.damage_die,
                 speed = excluded.speed
+    """
+
+    if has_inventory_json:
+        character_columns += ", inventory_json"
+        character_values += ", :inventory_json"
+        update_mysql += ",\n                inventory_json = VALUES(inventory_json)"
+        update_sqlite += ",\n                inventory_json = excluded.inventory_json"
+    if has_flags_json:
+        character_columns += ", flags_json"
+        character_values += ", :flags_json"
+        update_mysql += ",\n                flags_json = VALUES(flags_json)"
+        update_sqlite += ",\n                flags_json = excluded.flags_json"
+
+    if dialect == "mysql":
+        statement = text(
+            f"""
+            INSERT INTO `character` ({character_columns})
+            VALUES ({character_values})
+            ON DUPLICATE KEY UPDATE
+{update_mysql}
+            """
+        )
+    else:
+        statement = text(
+            f"""
+            INSERT INTO "character" ({character_columns})
+            VALUES ({character_values})
+            ON CONFLICT(character_id) DO UPDATE SET
+{update_sqlite}
             """
         )
     session.execute(
@@ -85,6 +129,8 @@ def _upsert_character_row(session, character: Character) -> None:
             "attack_bonus": character.attack_bonus,
             "damage_die": character.damage_die,
             "speed": character.speed,
+            "inventory_json": json.dumps(list(getattr(character, "inventory", []) or [])),
+            "flags_json": json.dumps(dict(getattr(character, "flags", {}) or {})),
         },
     )
 

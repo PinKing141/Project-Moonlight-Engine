@@ -30,6 +30,15 @@ class CombatResult:
     fled: bool = False
 
 
+@dataclass
+class PartyCombatResult:
+    allies: List[Character]
+    enemies: List[Entity]
+    log: List[CombatLogEntry]
+    allies_won: bool
+    fled: bool = False
+
+
 def ability_mod(score: int | None) -> int:
     return ability_modifier(score)
 
@@ -100,6 +109,17 @@ def _slugify_spell_name(name: str) -> str:
 
 
 class CombatService:
+    _BACKLINE_CLASSES: Tuple[str, ...] = ("wizard", "sorcerer", "warlock", "bard")
+    _BACKLINE_NAME_KEYWORDS: Tuple[str, ...] = (
+        "archer",
+        "shaman",
+        "mage",
+        "warlock",
+        "witch",
+        "priest",
+        "acolyte",
+    )
+
     def __init__(
         self,
         spell_repo: Optional[SpellRepository] = None,
@@ -827,6 +847,630 @@ class CombatService:
             self._log(log, f"{foe.name} falls. +{xp_gain} XP.", level="compact")
 
         return CombatResult(player, foe, log, player_won=player_hp > 0 and foe.hp_current <= 0)
+
+    def fight_party_turn_based(
+        self,
+        allies: List[Character],
+        enemies: List[Entity],
+        choose_action: Callable[[List[str], Character, Entity, int, dict], tuple[str, Optional[str]] | str],
+        scene: Optional[dict] = None,
+        choose_target: Optional[Callable[[Character, List[Entity], int, dict], Optional[int]]] = None,
+        evaluate_ai_action: Optional[Callable[[object, List[object], List[object], int, dict], tuple[str, Optional[str]] | str]] = None,
+    ) -> PartyCombatResult:
+        log: List[CombatLogEntry] = []
+        active_allies: list[Character] = []
+        active_enemies: list[Entity] = []
+
+        for ally in allies:
+            row = replace(ally)
+            row.flags = copy.deepcopy(getattr(ally, "flags", {}) or {})
+            row.inventory = list(getattr(ally, "inventory", []) or [])
+            row.attributes = dict(getattr(ally, "attributes", {}) or {})
+            row.race_traits = list(getattr(ally, "race_traits", []) or [])
+            row.background_features = list(getattr(ally, "background_features", []) or [])
+            row.proficiencies = list(getattr(ally, "proficiencies", []) or [])
+            row.cantrips = list(getattr(ally, "cantrips", []) or [])
+            row.known_spells = list(getattr(ally, "known_spells", []) or [])
+            row.hp_max = int(getattr(row, "hp_max", getattr(row, "hp_current", 1)) or 1)
+            row.hp_current = int(getattr(row, "hp_current", row.hp_max) or row.hp_max)
+            active_allies.append(row)
+
+        for enemy in enemies:
+            row = replace(enemy)
+            row.hp_max = int(getattr(row, "hp_max", getattr(row, "hp", 1)) or 1)
+            row.hp_current = int(getattr(row, "hp_current", row.hp_max) or row.hp_max)
+            active_enemies.append(row)
+
+        if not active_allies or not active_enemies:
+            return PartyCombatResult(
+                allies=active_allies,
+                enemies=active_enemies,
+                log=log,
+                allies_won=bool(active_allies) and not bool(active_enemies),
+                fled=False,
+            )
+
+        terrain = str((scene or {}).get("terrain", "open"))
+        distance = str((scene or {}).get("distance", "close"))
+        surprise = (scene or {}).get("surprise")
+        player_actor_id = int(getattr(active_allies[0], "id", 0) or 0)
+
+        def _initiative_for_ally(actor: Character) -> int:
+            scores = self._ability_scores(actor)
+            roll = self.rng.randint(1, 20)
+            if surprise == "player":
+                roll = max(roll, self.rng.randint(1, 20))
+            total = int(roll + scores.initiative)
+            if self._is_swamp_terrain(terrain) and self._is_heavy_armor_user(actor):
+                total -= 100
+            return total
+
+        def _initiative_for_enemy(actor: Entity) -> int:
+            roll = self.rng.randint(1, 20)
+            if surprise == "enemy":
+                roll = max(roll, self.rng.randint(1, 20))
+            return int(roll + int(getattr(actor, "attack_bonus", 0) or 0))
+
+        initiative_rows: list[dict] = []
+        for ally in active_allies:
+            initiative_rows.append({"side": "ally", "actor": ally, "initiative": _initiative_for_ally(ally)})
+        for enemy in active_enemies:
+            initiative_rows.append({"side": "enemy", "actor": enemy, "initiative": _initiative_for_enemy(enemy)})
+
+        initiative_rows.sort(
+            key=lambda row: (
+                int(row["initiative"]),
+                1 if str(row["side"]) == "ally" else 0,
+                str(getattr(row["actor"], "name", "")).lower(),
+            ),
+            reverse=True,
+        )
+        ordered = [f"{getattr(row['actor'], 'name', '?')}:{int(row['initiative'])}" for row in initiative_rows]
+        self._log(log, f"Initiative queue: {', '.join(ordered)}.", level="normal")
+
+        round_no = 1
+        fled = False
+        while any(a.hp_current > 0 for a in active_allies) and any(e.hp_current > 0 for e in active_enemies):
+            if round_no > 50:
+                break
+            self._log(log, f"-- Round {round_no} --", level="debug")
+            self._apply_round_lair_action(
+                log=log,
+                round_no=round_no,
+                terrain=terrain,
+                allies=active_allies,
+                enemies=active_enemies,
+            )
+            round_engagements: dict[int, set[int]] = {}
+
+            for row in initiative_rows:
+                side = str(row["side"])
+                actor = row["actor"]
+                if int(getattr(actor, "hp_current", 0) or 0) <= 0:
+                    continue
+
+                living_allies = [a for a in active_allies if int(getattr(a, "hp_current", 0) or 0) > 0]
+                living_enemies = [e for e in active_enemies if int(getattr(e, "hp_current", 0) or 0) > 0]
+                if not living_allies or not living_enemies:
+                    break
+
+                if side == "ally":
+                    actor_character = actor
+                    is_player_actor = int(getattr(actor_character, "id", 0) or 0) == player_actor_id
+                    if is_player_actor:
+                        preview_targets = self._combat_target_pool(attacker=actor_character, opponents=living_enemies, action="Attack")
+                        target = preview_targets[0] if preview_targets else living_enemies[0]
+                        options = ["Attack", "Dash", "Dodge", "Use Item", "Flee"]
+                        has_magic = (getattr(actor_character, "spell_slots_current", 0) > 0) or bool(getattr(actor_character, "cantrips", []))
+                        if has_magic:
+                            options.insert(1, "Cast Spell")
+                        choice = choose_action(options, actor_character, target, round_no, {"distance": distance, "terrain": terrain, "surprise": surprise})
+                    else:
+                        if callable(evaluate_ai_action):
+                            choice = evaluate_ai_action(actor_character, living_allies, living_enemies, round_no, {"distance": distance, "terrain": terrain, "surprise": surprise})
+                        else:
+                            choice = self._evaluate_ai_action(actor_character, living_allies, living_enemies, round_no, {"distance": distance, "terrain": terrain, "surprise": surprise})
+                        target = living_enemies[0]
+
+                    action_payload = None
+                    action = choice
+                    if isinstance(choice, tuple):
+                        action, action_payload = choice
+
+                    spell_slug = str(action_payload or "").strip().lower() if str(action) == "Cast Spell" else ""
+                    should_target_allies = bool(spell_slug and self._is_healing_spell(spell_slug))
+                    if should_target_allies:
+                        target_candidates = list(living_allies)
+                    else:
+                        target_candidates = self._combat_target_pool(
+                            attacker=actor_character,
+                            opponents=living_enemies,
+                            action=str(action),
+                        )
+                    if not target_candidates:
+                        target_candidates = living_allies if should_target_allies else living_enemies
+                    target_index = self._select_party_target_index(
+                        actor=actor_character,
+                        target_candidates=target_candidates,
+                        allies=living_allies,
+                        enemies=living_enemies,
+                        round_no=round_no,
+                        scene_ctx={"distance": distance, "terrain": terrain, "surprise": surprise},
+                        action=str(action),
+                        choose_target=choose_target,
+                        should_target_allies=should_target_allies,
+                        is_player_actor=is_player_actor,
+                    )
+                    target = target_candidates[target_index]
+
+                    if str(action) == "Flee":
+                        flee_scores = self._ability_scores(actor_character)
+                        flee_roll = self.rng.randint(1, 20) + int(flee_scores.initiative)
+                        if flee_roll >= 12:
+                            fled = True
+                            self._log(log, f"{actor_character.name} orders a retreat and escapes.", level="compact")
+                            break
+                        self._log(log, f"{actor_character.name} fails to disengage.", level="compact")
+                        continue
+
+                    if str(action) == "Cast Spell":
+                        derived = self.derive_player_stats(actor_character)
+                        self._resolve_spell_cast_party(
+                            caster=actor_character,
+                            target=target,
+                            spell_slug=action_payload,
+                            spell_mod=int(derived.get("spell_mod", 0)),
+                            prof=int(derived.get("proficiency", 2)),
+                            attack_roll_shift=self._terrain_ranged_attack_shift(
+                                terrain=terrain,
+                                attacker=actor_character,
+                                action="cast_spell",
+                            ),
+                            log=log,
+                        )
+                        continue
+
+                    if str(action) == "Use Item":
+                        hp_after, _ = self._resolve_use_item(actor_character, int(getattr(actor_character, "hp_current", 1) or 1), log, preferred_item=action_payload, whetstone_bonus=0)
+                        actor_character.hp_current = hp_after
+                        continue
+
+                    if str(action) == "Dash":
+                        if self._is_treacherous_ground(terrain):
+                            dex_mod = self._ability_scores(actor_character).dexterity_mod
+                            check_total = self.rng.randint(1, 20) + dex_mod
+                            if check_total < 12:
+                                self._log(log, f"{actor_character.name} slips on treacherous ground and loses momentum.", level="compact")
+                                continue
+                        self._log(log, f"{actor_character.name} repositions.", level="compact")
+                        continue
+
+                    if str(action) == "Dodge":
+                        if self._is_treacherous_ground(terrain):
+                            dex_mod = self._ability_scores(actor_character).dexterity_mod
+                            check_total = self.rng.randint(1, 20) + dex_mod
+                            if check_total < 12:
+                                self._log(log, f"{actor_character.name} stumbles while dodging and loses the turn.", level="compact")
+                                continue
+                        self._log(log, f"{actor_character.name} braces defensively.", level="compact")
+                        continue
+
+                    derived = self.derive_player_stats(actor_character)
+                    terrain_attack_shift = self._terrain_ranged_attack_shift(
+                        terrain=terrain,
+                        attacker=actor_character,
+                        action="attack",
+                    )
+                    target_key = self._combat_actor_key(target)
+                    actor_key = self._combat_actor_key(actor_character)
+                    engaged = round_engagements.setdefault(target_key, set())
+                    flank_active = any(existing != actor_key for existing in engaged)
+                    engaged.add(actor_key)
+                    if flank_active:
+                        self._log(log, f"{actor_character.name} flanks {target.name}.", level="compact")
+                    if terrain_attack_shift:
+                        self._log(log, f"Dense cover disrupts line of sight ({terrain_attack_shift} to hit).", level="compact")
+                    hit, is_crit, _, _ = self._attack_roll(
+                        int(terrain_attack_shift),
+                        int(derived.get("proficiency", 2)),
+                        int(derived.get("weapon_mod", 0)),
+                        int(getattr(target, "armour_class", 10) or 10),
+                        "advantage" if flank_active else None,
+                        log,
+                        str(getattr(actor_character, "name", "Ally")),
+                        str(getattr(target, "name", "Enemy")),
+                    )
+                    if hit:
+                        sneak_die = "d6" if flank_active and str(getattr(actor_character, "class_name", "")).lower() == "rogue" else None
+                        dmg = self._deal_damage(
+                            str(derived.get("damage_die", "d6")),
+                            int(derived.get("damage_mod", 0)),
+                            is_crit,
+                            sneak_die,
+                            0,
+                        )
+                        if flank_active:
+                            dmg += 2
+                        target.hp_current = max(0, int(getattr(target, "hp_current", 0) or 0) - dmg)
+                        self._log(log, f"{actor_character.name} hits {target.name} for {dmg} damage ({target.hp_current}/{target.hp_max}).", level="compact")
+                    continue
+
+                enemy_actor = actor
+                targets = [a for a in active_allies if int(getattr(a, "hp_current", 0) or 0) > 0]
+                if not targets:
+                    break
+                if callable(evaluate_ai_action):
+                    enemy_choice = evaluate_ai_action(enemy_actor, living_enemies, living_allies, round_no, {"distance": distance, "terrain": terrain, "surprise": surprise})
+                    enemy_action = enemy_choice[0] if isinstance(enemy_choice, tuple) else str(enemy_choice)
+                else:
+                    enemy_action = str(self._evaluate_ai_action(enemy_actor, living_enemies, living_allies, round_no, {"distance": distance, "terrain": terrain, "surprise": surprise}))
+                target_pool = self._combat_target_pool(attacker=enemy_actor, opponents=targets, action=enemy_action)
+                if not target_pool:
+                    target_pool = targets
+                target = self._lowest_hp_target(target_pool)
+                if str(enemy_action).lower() == "flee":
+                    enemy_actor.hp_current = 0
+                    self._log(log, f"{enemy_actor.name} flees.", level="compact")
+                    continue
+
+                target_ac = self._derive_ac(target)
+                enemy_attack_shift = self._terrain_ranged_attack_shift(
+                    terrain=terrain,
+                    attacker=enemy_actor,
+                    action=enemy_action,
+                )
+                hit, is_crit, _, _ = self._attack_roll(
+                    int(getattr(enemy_actor, "attack_bonus", 0) or 0) + int(enemy_attack_shift),
+                    0,
+                    0,
+                    int(target_ac),
+                    None,
+                    log,
+                    str(getattr(enemy_actor, "name", "Enemy")),
+                    str(getattr(target, "name", "Ally")),
+                )
+                if hit:
+                    dmg = self._deal_damage(
+                        str(getattr(enemy_actor, "damage_die", "d4") or "d4"),
+                        0,
+                        is_crit,
+                        None,
+                        0,
+                    )
+                    target.hp_current = max(0, int(getattr(target, "hp_current", 0) or 0) - dmg)
+                    self._log(log, f"{enemy_actor.name} hits {target.name} for {dmg} damage ({target.hp_current}/{target.hp_max}).", level="compact")
+                else:
+                    self._log(log, f"{enemy_actor.name} misses {target.name}.", level="compact")
+
+            if fled:
+                break
+            round_no += 1
+
+        allies_won = any(a.hp_current > 0 for a in active_allies) and not any(e.hp_current > 0 for e in active_enemies)
+        if allies_won and active_allies:
+            lead = active_allies[0]
+            xp_gain = sum(max(1, int(getattr(enemy, "level", 1) or 1) * 5) for enemy in active_enemies if int(getattr(enemy, "hp_current", 0) or 0) <= 0)
+            if xp_gain > 0:
+                lead.xp = int(getattr(lead, "xp", 0) or 0) + int(xp_gain)
+                self._log(log, f"Party victory. {lead.name} gains +{xp_gain} XP.", level="compact")
+        return PartyCombatResult(
+            allies=active_allies,
+            enemies=active_enemies,
+            log=log,
+            allies_won=allies_won,
+            fled=fled,
+        )
+
+    def _select_party_target_index(
+        self,
+        *,
+        actor: Character,
+        target_candidates: list,
+        allies: list[Character],
+        enemies: list[Entity],
+        round_no: int,
+        scene_ctx: dict,
+        action: str,
+        choose_target,
+        should_target_allies: bool,
+        is_player_actor: bool,
+    ) -> int:
+        if not target_candidates:
+            return 0
+
+        if callable(choose_target):
+            if is_player_actor:
+                try:
+                    selected = choose_target(actor, allies, enemies, round_no, scene_ctx, action)
+                except TypeError:
+                    selected = choose_target(actor, target_candidates, round_no, scene_ctx)
+            else:
+                selected = None
+
+            if isinstance(selected, tuple) and len(selected) == 2:
+                side_key = str(selected[0] or "").strip().lower()
+                idx = int(selected[1]) if isinstance(selected[1], int) else -1
+                if side_key in {"ally", "allies"} and should_target_allies and 0 <= idx < len(allies):
+                    chosen = allies[idx]
+                    return target_candidates.index(chosen) if chosen in target_candidates else 0
+                if side_key in {"enemy", "enemies"} and (not should_target_allies) and 0 <= idx < len(enemies):
+                    chosen = enemies[idx]
+                    return target_candidates.index(chosen) if chosen in target_candidates else 0
+
+            if isinstance(selected, int) and 0 <= int(selected) < len(target_candidates):
+                return int(selected)
+
+        if should_target_allies:
+            return int(target_candidates.index(self._lowest_hp_target(target_candidates)))
+        if is_player_actor:
+            return 0
+        return int(target_candidates.index(self._lowest_hp_target(target_candidates)))
+
+    def _combat_target_pool(self, *, attacker, opponents: list, action: str) -> list:
+        if not opponents:
+            return []
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action != "attack":
+            return list(opponents)
+        if not self._is_melee_actor(attacker):
+            return list(opponents)
+
+        vanguard = [row for row in opponents if self._combat_lane(row) == "vanguard"]
+        if vanguard:
+            return vanguard
+        return list(opponents)
+
+    @staticmethod
+    def _is_swamp_terrain(terrain: str) -> bool:
+        normalized = str(terrain or "").strip().lower()
+        return normalized in {"swamp", "wetland", "marsh", "bog"}
+
+    @staticmethod
+    def _is_treacherous_ground(terrain: str) -> bool:
+        normalized = str(terrain or "").strip().lower()
+        return normalized in {"mountain", "mountains", "volcano", "volcanic"}
+
+    @staticmethod
+    def _is_dense_cover_terrain(terrain: str) -> bool:
+        normalized = str(terrain or "").strip().lower()
+        return normalized in {"forest", "jungle", "woodland"}
+
+    def _terrain_ranged_attack_shift(self, *, terrain: str, attacker, action: str) -> int:
+        if not self._is_dense_cover_terrain(terrain):
+            return 0
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in {"attack", "cast_spell"}:
+            return 0
+        if self._is_melee_actor(attacker):
+            return 0
+        return -2
+
+    def _is_heavy_armor_user(self, actor: Character) -> bool:
+        equipment = self._equipment_state(actor)
+        armor = str(equipment.get("armor", "") or "").strip().lower()
+        if not armor:
+            inventory = [str(item or "").strip().lower() for item in list(getattr(actor, "inventory", []) or [])]
+            armor = " ".join(inventory)
+        return any(keyword in armor for keyword in ("chain mail", "plate", "splint", "heavy"))
+
+    def _combat_lane(self, actor) -> str:
+        if isinstance(actor, Character):
+            flags = getattr(actor, "flags", None)
+            if isinstance(flags, dict):
+                forced = str(flags.get("combat_lane", "") or "").strip().lower()
+                if forced in {"vanguard", "rearguard"}:
+                    return forced
+            class_slug = str(getattr(actor, "class_name", "") or "").strip().lower()
+            if class_slug in self._BACKLINE_CLASSES:
+                return "rearguard"
+            return "vanguard"
+
+        flags = getattr(actor, "tags", None)
+        if isinstance(flags, list):
+            normalized = {str(item or "").strip().lower() for item in flags}
+            if "lane:rearguard" in normalized:
+                return "rearguard"
+            if "lane:vanguard" in normalized:
+                return "vanguard"
+
+        name_key = str(getattr(actor, "name", "") or "").strip().lower()
+        if any(keyword in name_key for keyword in self._BACKLINE_NAME_KEYWORDS):
+            return "rearguard"
+        return "vanguard"
+
+    def _is_melee_actor(self, actor) -> bool:
+        if isinstance(actor, Character):
+            return self._combat_lane(actor) == "vanguard"
+        return self._combat_lane(actor) == "vanguard"
+
+    @staticmethod
+    def _lowest_hp_target(targets: list):
+        return min(
+            targets,
+            key=lambda row: (
+                int(getattr(row, "hp_current", 0) or 0),
+                int(getattr(row, "hp_max", 0) or 0),
+                str(getattr(row, "name", "")).lower(),
+            ),
+        )
+
+    @staticmethod
+    def _is_healing_spell(spell_slug: str) -> bool:
+        definition = SPELL_DEFINITIONS.get(str(spell_slug or "").strip().lower())
+        return bool(definition and str(getattr(definition, "damage_type", "")).lower() == "healing")
+
+    def _evaluate_ai_action(self, actor, allies: list, enemies: list, round_no: int, scene_ctx: dict):
+        _ = round_no
+        _ = scene_ctx
+        living_allies = [row for row in allies if int(getattr(row, "hp_current", 0) or 0) > 0]
+        living_enemies = [row for row in enemies if int(getattr(row, "hp_current", 0) or 0) > 0]
+        if not living_allies or not living_enemies:
+            return "Attack"
+
+        if not isinstance(actor, Character):
+            hp_max = max(1, int(getattr(actor, "hp_max", getattr(actor, "hp_current", 1)) or 1))
+            hp_now = int(getattr(actor, "hp_current", hp_max) or hp_max)
+            if hp_now <= max(1, hp_max // 4) and len(living_enemies) < len(living_allies):
+                return "flee"
+            return "attack"
+
+        is_character = isinstance(actor, Character)
+        if is_character:
+            known_spells = [str(name or "") for name in list(getattr(actor, "known_spells", []) or [])]
+            healing_slug = next(
+                (
+                    _slugify_spell_name(name)
+                    for name in known_spells
+                    if self._is_healing_spell(_slugify_spell_name(name))
+                ),
+                None,
+            )
+            if healing_slug and int(getattr(actor, "spell_slots_current", 0) or 0) > 0:
+                critical_ally = next(
+                    (
+                        row
+                        for row in sorted(living_allies, key=lambda unit: int(getattr(unit, "hp_current", 0) or 0))
+                        if int(getattr(row, "hp_current", 0) or 0) <= max(1, int(getattr(row, "hp_max", 1) or 1) // 4)
+                    ),
+                    None,
+                )
+                if critical_ally is not None:
+                    return ("Cast Spell", healing_slug)
+
+        return "Attack"
+
+    @staticmethod
+    def _combat_actor_key(actor) -> int:
+        raw_id = getattr(actor, "id", None)
+        if raw_id is None:
+            return abs(hash((str(getattr(actor, "name", "?")), str(getattr(actor, "class_name", "?")))))
+        try:
+            return int(raw_id)
+        except Exception:
+            return abs(hash(str(raw_id)))
+
+    def _apply_round_lair_action(
+        self,
+        *,
+        log: List[CombatLogEntry],
+        round_no: int,
+        terrain: str,
+        allies: list[Character],
+        enemies: list[Entity],
+    ) -> None:
+        normalized = str(terrain or "").strip().lower()
+        if normalized not in {"volcano", "volcanic", "mountain", "mountains"}:
+            return
+        if round_no % 3 != 0:
+            return
+
+        self._log(log, "Lair Action: A violent terrain surge erupts across the vanguard!", level="compact")
+        impacted = [
+            row
+            for row in list(allies) + list(enemies)
+            if int(getattr(row, "hp_current", 0) or 0) > 0 and self._combat_lane(row) == "vanguard"
+        ]
+        for actor in impacted:
+            save_mod = self._ability_scores(actor).dexterity_mod if isinstance(actor, Character) else 0
+            save_roll = self.rng.randint(1, 20) + int(save_mod)
+            if save_roll >= 12:
+                self._log(log, f"{actor.name} weathers the surge.", level="compact")
+                continue
+            damage = roll_die("d6", rng=self.rng) + roll_die("d6", rng=self.rng)
+            hp_now = int(getattr(actor, "hp_current", 0) or 0)
+            actor.hp_current = max(0, hp_now - damage)
+            self._log(log, f"{actor.name} takes {damage} lair damage ({actor.hp_current}/{getattr(actor, 'hp_max', hp_now)}).", level="compact")
+
+    def _resolve_spell_cast_party(
+        self,
+        *,
+        caster: Character,
+        target,
+        spell_slug: Optional[str],
+        spell_mod: int,
+        prof: int,
+        attack_roll_shift: int,
+        log: List[CombatLogEntry],
+    ) -> None:
+        known = getattr(caster, "known_spells", []) or []
+        target_slug = spell_slug or (_slugify_spell_name(known[0]) if known else None)
+        if not target_slug:
+            self._log(log, f"{caster.name} has no spells to cast.", level="compact")
+            return
+
+        definition = SPELL_DEFINITIONS.get(str(target_slug).strip().lower())
+        if not definition:
+            self._log(log, f"{target_slug} is not implemented in combat yet.", level="compact")
+            return
+
+        spell = self.spell_repo.get_by_slug(target_slug) if self.spell_repo else None
+        level_int = spell.level_int if spell else 0
+        if level_int > 0:
+            slots = int(getattr(caster, "spell_slots_current", 0) or 0)
+            if slots <= 0:
+                self._log(log, f"{caster.name} has no spell slots remaining.", level="compact")
+                return
+            caster.spell_slots_current = max(slots - 1, 0)
+            self._log(log, f"{caster.name} expends a spell slot.", level="compact")
+
+        target_name = str(getattr(target, "name", "target"))
+        target_ac = int(getattr(target, "armour_class", 10) or 10)
+        spell_dc = 8 + int(prof) + int(spell_mod)
+
+        def _apply_damage(amount: int, damage_type: str | None) -> None:
+            if str(damage_type or "").lower() == "healing":
+                hp_max = int(getattr(target, "hp_max", getattr(target, "hp_current", 1)) or 1)
+                hp_now = int(getattr(target, "hp_current", hp_max) or hp_max)
+                healed = min(hp_max, hp_now + amount)
+                target.hp_current = healed
+                self._log(log, f"{caster.name} restores {amount} HP to {target_name} ({target.hp_current}/{hp_max}).", level="compact")
+            else:
+                hp_now = int(getattr(target, "hp_current", 0) or 0)
+                hp_max = int(getattr(target, "hp_max", hp_now) or hp_now)
+                target.hp_current = max(0, hp_now - amount)
+                self._log(log, f"{caster.name}'s spell hits {target_name} for {amount} {damage_type or 'damage'} ({target.hp_current}/{hp_max}).", level="compact")
+
+        if definition.resolution == "spell_attack":
+            if attack_roll_shift:
+                self._log(log, f"Dense cover disrupts spell trajectory ({attack_roll_shift} to hit).", level="compact")
+            hit, is_crit, _, _ = self._attack_roll(
+                int(attack_roll_shift),
+                int(prof),
+                int(spell_mod),
+                target_ac,
+                None,
+                log,
+                caster.name,
+                target_name,
+            )
+            if not hit:
+                self._log(log, f"{caster.name}'s spell misses.", level="compact")
+                return
+            dice_expr = definition.damage_dice or "1d6"
+            dmg = _roll_dice_expr(dice_expr, ability_mod=int(spell_mod), rng=self.rng)
+            if is_crit:
+                dmg += _roll_dice_expr(dice_expr, ability_mod=0, rng=self.rng)
+            _apply_damage(dmg, definition.damage_type)
+            return
+
+        if definition.resolution == "save":
+            save_roll = self.rng.randint(1, 20)
+            self._log(log, f"{target_name} attempts a save: {save_roll} vs DC {spell_dc}.", level="debug")
+            if save_roll >= spell_dc:
+                self._log(log, f"{target_name} resists the spell.", level="compact")
+                return
+            dmg = _roll_dice_expr(definition.damage_dice or "1d6", ability_mod=int(spell_mod), rng=self.rng)
+            _apply_damage(dmg, definition.damage_type)
+            return
+
+        dmg = _roll_dice_expr(definition.damage_dice or "1d4", ability_mod=int(spell_mod), rng=self.rng)
+        if definition.slug == "shield":
+            bonus = 5
+            caster.flags["temp_ac_bonus"] = bonus
+            caster.flags["shield_rounds"] = 1
+            self._log(log, f"A shimmering barrier grants {caster.name} +{bonus} AC until next turn.", level="compact")
+            return
+        _apply_damage(dmg, definition.damage_type)
 
     def list_usable_items(self, player: Character) -> List[str]:
         inventory = list(getattr(player, "inventory", []) or [])

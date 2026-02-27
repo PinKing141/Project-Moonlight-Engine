@@ -128,6 +128,7 @@ class FactionStandingsViewIntentTests(unittest.TestCase):
         view = service.get_faction_standings_view_intent(character_id)
 
         self.assertEqual({}, view.standings)
+        self.assertEqual({}, view.descriptions)
         self.assertTrue(view.empty_state_hint)
         self.assertIn("No standings tracked yet", view.empty_state_hint)
         self.assertIn("reputation", view.empty_state_hint.lower())
@@ -135,16 +136,58 @@ class FactionStandingsViewIntentTests(unittest.TestCase):
     def test_view_intent_passes_through_standings_payload(self) -> None:
         faction_repo = _StubFactionRepository(
             {
-                "wardens": Faction(id="wardens", name="Wardens", influence=3, reputation={"character:88": 4}),
+                "wardens": Faction(
+                    id="wardens",
+                    name="Wardens",
+                    influence=3,
+                    description="A regional order guarding border settlements.",
+                    reputation={"character:88": 4},
+                ),
                 "wild": Faction(id="wild", name="Wild Tribes", influence=2, reputation={"character:88": -2}),
             }
         )
         service, character_id = self._build_service(faction_repo)
+        character = service.character_repo.get(character_id)
+        character.flags = {"discovered_factions": ["wardens", "wild"]}
+        service.character_repo.save(character)
 
         view = service.get_faction_standings_view_intent(character_id)
 
         self.assertEqual({"wardens": 4, "wild": -2}, view.standings)
+        self.assertEqual(
+            {"wardens": "A regional order guarding border settlements."},
+            view.descriptions,
+        )
         self.assertTrue(view.empty_state_hint)
+
+    def test_view_intent_filters_to_discovered_factions(self) -> None:
+        faction_repo = _StubFactionRepository(
+            {
+                "wardens": Faction(
+                    id="wardens",
+                    name="Wardens",
+                    influence=3,
+                    description="A regional order guarding border settlements.",
+                    reputation={"character:88": 4},
+                ),
+                "wild": Faction(
+                    id="wild",
+                    name="Wild Tribes",
+                    influence=2,
+                    description="A loose coalition of frontier tribes.",
+                    reputation={"character:88": -2},
+                ),
+            }
+        )
+        service, character_id = self._build_service(faction_repo)
+        character = service.character_repo.get(character_id)
+        character.flags = {"discovered_factions": ["wardens"]}
+        service.character_repo.save(character)
+
+        view = service.get_faction_standings_view_intent(character_id)
+
+        self.assertEqual({"wardens": 4}, view.standings)
+        self.assertEqual({"wardens": "A regional order guarding border settlements."}, view.descriptions)
 
 
 if __name__ == "__main__":

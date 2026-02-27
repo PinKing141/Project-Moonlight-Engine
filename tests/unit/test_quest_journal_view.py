@@ -161,6 +161,32 @@ class QuestJournalViewTests(unittest.TestCase):
         self.assertEqual("ready_to_turn_in", supply_drop.status)
         self.assertEqual(supply_drop.target, supply_drop.progress)
 
+    def test_travel_to_quest_completes_when_arriving_at_target_location(self):
+        service, world_repo, character_id = self._build_service()
+        world = world_repo.load_default()
+        world.flags.setdefault("quests", {})
+        world.flags["quests"] = {
+            "courier_run": {
+                "status": "active",
+                "objective_kind": "travel_to",
+                "objective_target_location_id": 2,
+                "progress": 0,
+                "target": 1,
+                "reward_xp": 14,
+                "reward_money": 9,
+                "owner_character_id": character_id,
+            }
+        }
+        world_repo.save(world)
+
+        service.travel_intent(character_id, destination_id=2, travel_mode="road")
+        board = service.get_quest_board_intent(character_id)
+        courier_run = next(quest for quest in board.quests if quest.quest_id == "courier_run")
+
+        self.assertEqual("ready_to_turn_in", courier_run.status)
+        self.assertEqual(courier_run.target, courier_run.progress)
+        self.assertIn("Reach destination", courier_run.objective_summary)
+
 
 if __name__ == "__main__":
     unittest.main()

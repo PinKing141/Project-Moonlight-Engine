@@ -30,6 +30,11 @@ from rpg.domain.repositories import (
 from rpg.infrastructure.db.mysql.open5e_monster_importer import UpsertResult
 from .connection import SessionLocal
 
+try:
+    from rpg.infrastructure.inmemory.generated_taklamakan_faction_flavour import FACTION_DESCRIPTION_OVERRIDES
+except Exception:
+    FACTION_DESCRIPTION_OVERRIDES = {}
+
 
 DEFAULT_CLASS_BASE_ATTRIBUTES: Dict[str, Dict[str, int]] = {
     "barbarian": {"STR": 15, "DEX": 12, "CON": 14, "INT": 8, "WIS": 10, "CHA": 10},
@@ -110,6 +115,44 @@ def _parse_json_list(raw_value) -> list[str]:
     return []
 
 
+def _parse_json_dict(raw_value) -> dict[str, object]:
+    if raw_value is None:
+        return {}
+    if isinstance(raw_value, dict):
+        return {str(key): value for key, value in raw_value.items()}
+    if isinstance(raw_value, str):
+        text_value = raw_value.strip()
+        if not text_value:
+            return {}
+        try:
+            parsed = json.loads(text_value)
+        except Exception:
+            return {}
+        if isinstance(parsed, dict):
+            return {str(key): value for key, value in parsed.items()}
+    return {}
+
+
+def _table_columns(session, table_name: str) -> set[str]:
+    dialect = session.bind.dialect.name if session.bind is not None else "mysql"
+    if dialect == "sqlite":
+        rows = session.execute(text(f"PRAGMA table_info({table_name})")).all()
+        return {str(row.name).lower() for row in rows}
+
+    rows = session.execute(
+        text(
+            """
+            SELECT COLUMN_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = :table_name
+            """
+        ),
+        {"table_name": str(table_name)},
+    ).all()
+    return {str(row.COLUMN_NAME).lower() for row in rows}
+
+
 class MysqlClassRepository(ClassRepository):
     def list_playable(self) -> List[CharacterClass]:
         with SessionLocal() as session:
@@ -167,21 +210,39 @@ class MysqlClassRepository(ClassRepository):
 
 
 class MysqlCharacterRepository(CharacterRepository):
+    @staticmethod
+    def _character_json_column_flags(session) -> tuple[bool, bool]:
+        columns = _table_columns(session, "character")
+        return "inventory_json" in columns, "flags_json" in columns
+
+    @staticmethod
+    def _character_json_payload(character: Character) -> tuple[str, str]:
+        inventory_payload = json.dumps(list(getattr(character, "inventory", []) or []))
+        flags_payload = json.dumps(dict(getattr(character, "flags", {}) or {}))
+        return inventory_payload, flags_payload
+
     def get(self, character_id: int) -> Optional[Character]:
         with SessionLocal() as session:
+            has_inventory_json, has_flags_json = self._character_json_column_flags(session)
+            extra_select = ""
+            if has_inventory_json:
+                extra_select += ", c.inventory_json AS inventory_json"
+            if has_flags_json:
+                extra_select += ", c.flags_json AS flags_json"
             row = session.execute(
                 text(
-                    """
+                    f"""
                     SELECT c.character_id, c.name, c.alive, c.level, c.xp, c.money,
                               c.character_type_id, c.hp_current, c.hp_max,
                               c.armour_class, c.armor, c.attack_bonus, c.damage_die, c.speed,
+                              {"" if not extra_select else extra_select[2:]},
                            cl.location_id, cls.name AS class_name
                     FROM `character` c
                     LEFT JOIN character_location cl ON cl.character_id = c.character_id
                     LEFT JOIN character_class cc ON cc.character_id = c.character_id
                     LEFT JOIN class cls ON cls.class_id = cc.class_id
                     WHERE c.character_id = :cid
-                    """
+                    """.replace(",\n                              ,", ",")
                 ),
                 {"cid": character_id},
             ).first()
@@ -209,21 +270,30 @@ class MysqlCharacterRepository(CharacterRepository):
                 speed=row.speed if row.speed is not None else 30,
                 class_name=row.class_name,
                 attributes=attributes,
+                inventory=_parse_json_list(getattr(row, "inventory_json", None)),
+                flags=_parse_json_dict(getattr(row, "flags_json", None)),
             )
 
     def list_all(self) -> List[Character]:
         with SessionLocal() as session:
+            has_inventory_json, has_flags_json = self._character_json_column_flags(session)
+            extra_select = ""
+            if has_inventory_json:
+                extra_select += ", c.inventory_json AS inventory_json"
+            if has_flags_json:
+                extra_select += ", c.flags_json AS flags_json"
             rows = session.execute(
                 text(
-                    """
+                    f"""
                     SELECT c.character_id, c.name, c.alive, c.level, c.xp, c.money,
                               c.character_type_id, c.hp_current, c.hp_max,
                               c.armour_class, c.armor, c.attack_bonus, c.damage_die, c.speed,
+                              {"" if not extra_select else extra_select[2:]},
                               cl.location_id
                     FROM `character` c
                     LEFT JOIN character_location cl ON cl.character_id = c.character_id
                     ORDER BY c.character_id
-                    """
+                    """.replace(",\n                              ,", ",")
                 )
             ).all()
 
@@ -244,6 +314,8 @@ class MysqlCharacterRepository(CharacterRepository):
                     attack_bonus=row.attack_bonus if row.attack_bonus is not None else 2,
                     damage_die=row.damage_die if row.damage_die is not None else "d6",
                     speed=row.speed if row.speed is not None else 30,
+                    inventory=_parse_json_list(getattr(row, "inventory_json", None)),
+                    flags=_parse_json_dict(getattr(row, "flags_json", None)),
                 )
                 for row in rows
             ]
@@ -251,12 +323,12 @@ class MysqlCharacterRepository(CharacterRepository):
     def save(self, character: Character) -> None:
         with SessionLocal() as session:
             dialect = session.bind.dialect.name if session.bind is not None else "mysql"
-            if dialect == "mysql":
-                character_statement = text(
-                    """
-                    INSERT INTO `character` (character_id, name, alive, level, xp, money, character_type_id, hp_current, hp_max, armour_class, armor, attack_bonus, damage_die, speed)
-                    VALUES (:cid, :name, :alive, :level, :xp, :money, :ctype, :hp_current, :hp_max, :armour_class, :armor, :attack_bonus, :damage_die, :speed)
-                    ON DUPLICATE KEY UPDATE
+            has_inventory_json, has_flags_json = self._character_json_column_flags(session)
+            inventory_payload, flags_payload = self._character_json_payload(character)
+
+            character_columns = "character_id, name, alive, level, xp, money, character_type_id, hp_current, hp_max, armour_class, armor, attack_bonus, damage_die, speed"
+            character_values = ":cid, :name, :alive, :level, :xp, :money, :ctype, :hp_current, :hp_max, :armour_class, :armor, :attack_bonus, :damage_die, :speed"
+            update_mysql = """
                         name = VALUES(name),
                         alive = VALUES(alive),
                         level = VALUES(level),
@@ -270,21 +342,8 @@ class MysqlCharacterRepository(CharacterRepository):
                         attack_bonus = VALUES(attack_bonus),
                         damage_die = VALUES(damage_die),
                         speed = VALUES(speed)
-                    """
-                )
-                location_statement = text(
-                    """
-                    INSERT INTO character_location (character_id, location_id)
-                    VALUES (:cid, :loc)
-                    ON DUPLICATE KEY UPDATE location_id = VALUES(location_id)
-                    """
-                )
-            else:
-                character_statement = text(
-                    """
-                    INSERT INTO "character" (character_id, name, alive, level, xp, money, character_type_id, hp_current, hp_max, armour_class, armor, attack_bonus, damage_die, speed)
-                    VALUES (:cid, :name, :alive, :level, :xp, :money, :ctype, :hp_current, :hp_max, :armour_class, :armor, :attack_bonus, :damage_die, :speed)
-                    ON CONFLICT(character_id) DO UPDATE SET
+            """
+            update_sqlite = """
                         name = excluded.name,
                         alive = excluded.alive,
                         level = excluded.level,
@@ -298,6 +357,42 @@ class MysqlCharacterRepository(CharacterRepository):
                         attack_bonus = excluded.attack_bonus,
                         damage_die = excluded.damage_die,
                         speed = excluded.speed
+            """
+
+            if has_inventory_json:
+                character_columns += ", inventory_json"
+                character_values += ", :inventory_json"
+                update_mysql += ",\n                        inventory_json = VALUES(inventory_json)"
+                update_sqlite += ",\n                        inventory_json = excluded.inventory_json"
+            if has_flags_json:
+                character_columns += ", flags_json"
+                character_values += ", :flags_json"
+                update_mysql += ",\n                        flags_json = VALUES(flags_json)"
+                update_sqlite += ",\n                        flags_json = excluded.flags_json"
+
+            if dialect == "mysql":
+                character_statement = text(
+                    f"""
+                    INSERT INTO `character` ({character_columns})
+                    VALUES ({character_values})
+                    ON DUPLICATE KEY UPDATE
+{update_mysql}
+                    """
+                )
+                location_statement = text(
+                    """
+                    INSERT INTO character_location (character_id, location_id)
+                    VALUES (:cid, :loc)
+                    ON DUPLICATE KEY UPDATE location_id = VALUES(location_id)
+                    """
+                )
+            else:
+                character_statement = text(
+                    f"""
+                    INSERT INTO "character" ({character_columns})
+                    VALUES ({character_values})
+                    ON CONFLICT(character_id) DO UPDATE SET
+{update_sqlite}
                     """
                 )
                 location_statement = text(
@@ -325,6 +420,8 @@ class MysqlCharacterRepository(CharacterRepository):
                     "attack_bonus": character.attack_bonus,
                     "damage_die": character.damage_die,
                     "speed": character.speed,
+                    "inventory_json": inventory_payload,
+                    "flags_json": flags_payload,
                 },
             )
             # Upsert location mapping
@@ -361,19 +458,26 @@ class MysqlCharacterRepository(CharacterRepository):
 
     def find_by_location(self, location_id: int) -> List[Character]:
         with SessionLocal() as session:
+            has_inventory_json, has_flags_json = self._character_json_column_flags(session)
+            extra_select = ""
+            if has_inventory_json:
+                extra_select += ", c.inventory_json AS inventory_json"
+            if has_flags_json:
+                extra_select += ", c.flags_json AS flags_json"
             rows = session.execute(
                 text(
-                    """
+                    f"""
                     SELECT c.character_id, c.name, c.alive, c.level, c.xp, c.money,
                               c.character_type_id, c.hp_current, c.hp_max,
                               c.armour_class, c.armor, c.attack_bonus, c.damage_die, c.speed,
+                              {"" if not extra_select else extra_select[2:]},
                            cl.location_id, cls.name AS class_name
                     FROM `character` c
                     INNER JOIN character_location cl ON cl.character_id = c.character_id
                     LEFT JOIN character_class cc ON cc.character_id = c.character_id
                     LEFT JOIN class cls ON cls.class_id = cc.class_id
                     WHERE cl.location_id = :loc
-                    """
+                    """.replace(",\n                              ,", ",")
                 ),
                 {"loc": location_id},
             ).all()
@@ -400,6 +504,8 @@ class MysqlCharacterRepository(CharacterRepository):
                         speed=row.speed if row.speed is not None else 30,
                         class_name=row.class_name,
                         attributes=attributes,
+                        inventory=_parse_json_list(getattr(row, "inventory_json", None)),
+                        flags=_parse_json_dict(getattr(row, "flags_json", None)),
                     )
                 )
             return characters
@@ -407,11 +513,23 @@ class MysqlCharacterRepository(CharacterRepository):
     def create(self, character: Character, location_id: int) -> Character:
         with SessionLocal() as session:
             ctype_id = self._resolve_character_type_id(session)
+            has_inventory_json, has_flags_json = self._character_json_column_flags(session)
+            inventory_payload, flags_payload = self._character_json_payload(character)
+
+            create_columns = "character_type_id, name, alive, level, xp, money, hp_current, hp_max, armour_class, armor, attack_bonus, damage_die, speed"
+            create_values = ":ctype, :name, 1, :level, :xp, :money, :hp_current, :hp_max, :armour_class, :armor, :attack_bonus, :damage_die, :speed"
+            if has_inventory_json:
+                create_columns += ", inventory_json"
+                create_values += ", :inventory_json"
+            if has_flags_json:
+                create_columns += ", flags_json"
+                create_values += ", :flags_json"
+
             result = session.execute(
                 text(
-                    """
-                    INSERT INTO `character` (character_type_id, name, alive, level, xp, money, hp_current, hp_max, armour_class, armor, attack_bonus, damage_die, speed)
-                    VALUES (:ctype, :name, 1, :level, :xp, :money, :hp_current, :hp_max, :armour_class, :armor, :attack_bonus, :damage_die, :speed)
+                    f"""
+                    INSERT INTO `character` ({create_columns})
+                    VALUES ({create_values})
                     """
                 ),
                 {
@@ -427,6 +545,8 @@ class MysqlCharacterRepository(CharacterRepository):
                     "attack_bonus": character.attack_bonus,
                     "damage_die": character.damage_die,
                     "speed": character.speed,
+                    "inventory_json": inventory_payload,
+                    "flags_json": flags_payload,
                 },
             )
             character_id = result.lastrowid
@@ -1219,6 +1339,7 @@ class MysqlFactionRepository(FactionRepository):
                 name=str(row.name),
                 influence=int(row.influence),
                 alignment=str(row.alignment),
+                description=str(FACTION_DESCRIPTION_OVERRIDES.get(str(row.slug), "")),
                 reputation=reputation,
             )
 
@@ -1243,6 +1364,7 @@ class MysqlFactionRepository(FactionRepository):
                         name=str(row.name),
                         influence=int(row.influence),
                         alignment=str(row.alignment),
+                        description=str(FACTION_DESCRIPTION_OVERRIDES.get(str(row.slug), "")),
                         reputation=self._load_reputation(session, int(row.faction_id)),
                     )
                 )
@@ -2254,6 +2376,8 @@ class MysqlLocationRepository(LocationRepository):
                 name=row.place_name,
                 biome=row.biome_key or "wilderness",
                 base_level=1,
+                x=float(row.x or 0),
+                y=float(row.y or 0),
                 hazard_profile=HazardProfile(
                     key=row.hazard_profile_key or "standard",
                     environmental_flags=env_flags,
@@ -2292,6 +2416,8 @@ class MysqlLocationRepository(LocationRepository):
                         name=row.place_name,
                         biome=row.biome_key or "wilderness",
                         base_level=1,
+                        x=float(row.x or 0),
+                        y=float(row.y or 0),
                         hazard_profile=HazardProfile(
                             key=row.hazard_profile_key or "standard",
                             environmental_flags=env_flags,
@@ -2332,6 +2458,8 @@ class MysqlLocationRepository(LocationRepository):
                 name=row.place_name,
                 biome=row.biome_key or "wilderness",
                 base_level=1,
+                x=float(row.x or 0),
+                y=float(row.y or 0),
                 hazard_profile=HazardProfile(
                     key=row.hazard_profile_key or "standard",
                     environmental_flags=env_flags,

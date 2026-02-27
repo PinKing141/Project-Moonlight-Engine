@@ -1,6 +1,7 @@
 import copy
 import inspect
 import json
+import math
 import random
 import time
 from collections.abc import Callable, Sequence
@@ -97,6 +98,174 @@ from rpg.domain.repositories import (
 class GameService:
     _RUMOUR_HISTORY_MAX = 12
     _RUMOUR_HISTORY_TURN_WINDOW = 8
+    _TRAVEL_MAX_RADIUS = 150.0
+    _TRAVEL_SPEED_DIVISOR = 25.0
+    _MAX_ACTIVE_COMPANIONS = 3
+    _MAX_CAMPAIGN_RECRUITED_COMPANIONS = 3
+    _COMPANION_LEAD_DISCOVERY_BASE_CHANCE = 4
+    _RISK_DESCRIPTORS = {
+        1: "Safe",
+        2: "Guarded",
+        3: "Frontier",
+        4: "Perilous",
+        5: "Lawless",
+    }
+    _COMPANION_TEMPLATES = {
+        "npc_silas": {
+            "name": "Silas",
+            "description": "A streetwise scout who trades caution for certainty.",
+            "class_name": "rogue",
+            "faction_id": "ironcoin_syndicate",
+            "hp_max": 16,
+            "attributes": {"dexterity": 16, "strength": 10, "constitution": 12, "intelligence": 12, "wisdom": 11, "charisma": 13},
+            "known_spells": [],
+            "spell_slots_max": 0,
+            "default_unlocked": True,
+            "req_reputation": {},
+            "req_completed_quest": "",
+            "locked_by_companions": [],
+        },
+        "npc_elara": {
+            "name": "Elara",
+            "description": "An arcane tactician whose calm focus anchors fragile alliances.",
+            "class_name": "wizard",
+            "faction_id": "shrouded_athenaeum",
+            "hp_max": 14,
+            "attributes": {"dexterity": 12, "strength": 8, "constitution": 11, "intelligence": 16, "wisdom": 12, "charisma": 10},
+            "known_spells": ["Fire Bolt", "Magic Missile", "Cure Wounds"],
+            "spell_slots_max": 2,
+            "default_unlocked": True,
+            "req_reputation": {},
+            "req_completed_quest": "",
+            "locked_by_companions": [],
+        },
+        "captain_ren": {
+            "name": "Captain Ren",
+            "description": "A disciplined veteran who protects the line and never breaks formation.",
+            "class_name": "fighter",
+            "faction_id": "the_crown",
+            "hp_max": 20,
+            "attributes": {"dexterity": 12, "strength": 15, "constitution": 14, "intelligence": 10, "wisdom": 12, "charisma": 11},
+            "known_spells": [],
+            "spell_slots_max": 0,
+            "default_unlocked": True,
+            "req_reputation": {},
+            "req_completed_quest": "",
+            "locked_by_companions": [],
+        },
+        "npc_vael": {
+            "name": "Vael",
+            "description": "An Obsidian Cabal necromancer forged by forbidden fieldwork.",
+            "class_name": "wizard",
+            "faction_id": "tower_obsidian",
+            "hp_max": 15,
+            "attributes": {"dexterity": 11, "strength": 8, "constitution": 12, "intelligence": 17, "wisdom": 12, "charisma": 11},
+            "known_spells": ["Ray of Sickness", "Magic Missile", "Shield"],
+            "spell_slots_max": 2,
+            "default_unlocked": False,
+            "req_reputation": {},
+            "req_completed_quest": "",
+            "locked_by_companions": ["npc_seraphine"],
+        },
+        "npc_seraphine": {
+            "name": "Seraphine",
+            "description": "An Alabaster Sanctum battle-cleric sworn to bind dangerous magic.",
+            "class_name": "cleric",
+            "faction_id": "tower_alabaster",
+            "hp_max": 17,
+            "attributes": {"dexterity": 10, "strength": 12, "constitution": 13, "intelligence": 11, "wisdom": 17, "charisma": 13},
+            "known_spells": ["Cure Wounds", "Shield of Faith", "Sacred Flame"],
+            "spell_slots_max": 2,
+            "default_unlocked": False,
+            "req_reputation": {},
+            "req_completed_quest": "",
+            "locked_by_companions": ["npc_vael"],
+        },
+        "npc_kaelen": {
+            "name": "Kaelen",
+            "description": "A Briarwood ranger who turns wilderness pressure into battlefield advantage.",
+            "class_name": "ranger",
+            "faction_id": "wardens",
+            "hp_max": 18,
+            "attributes": {"dexterity": 16, "strength": 11, "constitution": 13, "intelligence": 11, "wisdom": 15, "charisma": 10},
+            "known_spells": ["Hunter's Mark", "Cure Wounds"],
+            "spell_slots_max": 2,
+            "default_unlocked": False,
+            "req_reputation": {},
+            "req_completed_quest": "",
+            "locked_by_companions": ["npc_mirelle"],
+        },
+        "npc_mirelle": {
+            "name": "Mirelle",
+            "description": "A Silent Hand infiltrator who thrives on sabotage and precision strikes.",
+            "class_name": "rogue",
+            "faction_id": "thieves_guild",
+            "hp_max": 16,
+            "attributes": {"dexterity": 17, "strength": 9, "constitution": 12, "intelligence": 13, "wisdom": 12, "charisma": 14},
+            "known_spells": [],
+            "spell_slots_max": 0,
+            "default_unlocked": False,
+            "req_reputation": {},
+            "req_completed_quest": "",
+            "locked_by_companions": ["npc_kaelen"],
+        },
+    }
+    _TOWER_SPELL_KEYWORDS: dict[str, tuple[str, ...]] = {
+        "tower_crimson": (
+            "fire",
+            "flame",
+            "burn",
+            "ember",
+            "force",
+        ),
+        "tower_cobalt": (
+            "cold",
+            "frost",
+            "ice",
+            "psychic",
+            "mind",
+            "enchantment",
+        ),
+        "tower_emerald": (
+            "acid",
+            "poison",
+            "venom",
+            "toxic",
+            "nature",
+            "transmutation",
+        ),
+        "tower_aurelian": (
+            "lightning",
+            "thunder",
+            "storm",
+            "air",
+            "light",
+            "divination",
+            "illusion",
+        ),
+        "tower_obsidian": (
+            "necrotic",
+            "shadow",
+            "entropy",
+            "death",
+            "necromancy",
+        ),
+        "tower_alabaster": (
+            "radiant",
+            "heal",
+            "healing",
+            "restores",
+            "restore",
+            "regains",
+            "regain hit points",
+            "regains hit points",
+            "temporary hit points",
+            "abjuration",
+            "protection",
+            "ward",
+            "binding",
+        ),
+    }
     _QUEST_TITLES = {
         FIRST_HUNT_QUEST_ID: "First Hunt",
         "trail_patrol": "Trail Patrol",
@@ -402,6 +571,7 @@ class GameService:
         character.alive = True
         if hasattr(character, "spell_slots_max"):
             character.spell_slots_current = getattr(character, "spell_slots_max", 0)
+        self._recover_party_runtime_state(character, context="rest")
 
         if self.atomic_state_persistor and self.world_repo:
             world = self.advance_world(ticks=1, persist=False)
@@ -674,6 +844,15 @@ class GameService:
             "turn": int(getattr(world, "current_turn", 0)),
             "seed": int(seed),
         }
+        lead_message = self._roll_companion_lead_discovery(
+            character,
+            world_turn=int(getattr(world, "current_turn", 0)),
+            context_key="explore",
+            location_name=str(getattr(location, "name", "unknown") if location else "unknown"),
+            world_threat=int(getattr(world, "threat_level", 0) or 0),
+        )
+        if lead_message:
+            message = f"{message} {lead_message}".strip()
         self.character_repo.save(character)
         if self.world_repo:
             self.world_repo.save(world)
@@ -910,15 +1089,24 @@ class GameService:
 
         current_location_id = getattr(character, "location_id", None)
         current_location = self.location_repo.get(current_location_id) if current_location_id is not None else None
+        discovered = self._discovered_locations(character, current_location)
         locations = self.location_repo.list_all()
         destinations: list[TravelDestinationView] = []
         for location in locations:
             if current_location_id is not None and location.id == current_location_id:
                 continue
+            if current_location is not None and not self._is_within_travel_radius(current_location, location):
+                continue
             location_type = "town" if self._is_town_location(location) else "wilderness"
             biome = str(getattr(location, "biome", "") or "unknown")
             recommended_level = getattr(location, "recommended_level", "?")
-            display_name = self._settlement_display_name(world, location)
+            is_discovered = int(getattr(location, "id", 0) or 0) in discovered
+            display_name = self._travel_destination_name(
+                world=world,
+                source=current_location,
+                destination=location,
+                discovered=is_discovered,
+            )
             risk_hint = self._travel_risk_hint(
                 character_id=character_id,
                 world_turn=world_turn,
@@ -936,7 +1124,11 @@ class GameService:
                 travel_mode="road",
                 prep_profile=prep_profile,
             )
-            preview = f"{location_type.title()} • {biome} • Lv {recommended_level} • Days {road_days} • Risk {risk_hint}"
+            risk_descriptor = self._travel_risk_descriptor(location=location, risk_hint=risk_hint)
+            preview = f"{location_type.title()} • {biome} • Lv {recommended_level} • Days {road_days} • Risk {risk_descriptor}"
+            flavour_hint = self._location_flavour_hint(location)
+            if flavour_hint:
+                preview = f"{preview} • {flavour_hint}"
             if prep_summary:
                 preview = f"{preview} • Prep {prep_summary}"
             destinations.append(
@@ -952,7 +1144,174 @@ class GameService:
                     prep_summary=prep_summary,
                 )
             )
-        return destinations
+        return sorted(destinations, key=lambda row: (int(row.estimated_days), str(row.name).lower()))
+
+    def _travel_destination_name(
+        self,
+        *,
+        world: World | None,
+        source: Location | None,
+        destination: Location,
+        discovered: bool,
+    ) -> str:
+        if discovered:
+            return self._settlement_display_name(world, destination)
+        direction = self._get_direction(source, destination)
+        return f"Unknown Settlement to the {direction}"
+
+    @staticmethod
+    def _discovered_locations(character: Character, current_location: Location | None) -> set[int]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            return {int(getattr(current_location, "id", 0) or 0)} if current_location is not None else set()
+        raw = flags.get("discovered_locations", [])
+        discovered: set[int] = set()
+        if isinstance(raw, list):
+            for value in raw:
+                try:
+                    discovered.add(int(value))
+                except (TypeError, ValueError):
+                    continue
+        if current_location is not None:
+            discovered.add(int(getattr(current_location, "id", 0) or 0))
+        return {item for item in discovered if item > 0}
+
+    @staticmethod
+    def _location_faction_ids(location: Location | None) -> set[str]:
+        if location is None:
+            return set()
+
+        discovered: set[str] = set()
+        factions = getattr(location, "factions", None)
+        if isinstance(factions, list):
+            for faction_id in factions:
+                normalized = str(faction_id or "").strip()
+                if normalized:
+                    discovered.add(normalized)
+
+        hazard = getattr(location, "hazard_profile", None)
+        flags = getattr(hazard, "environmental_flags", None)
+        if isinstance(flags, list):
+            for item in flags:
+                text = str(item or "")
+                if text.startswith("faction:") and ":" in text:
+                    normalized = text.split(":", 1)[1].strip()
+                    if normalized:
+                        discovered.add(normalized)
+
+        tags = getattr(location, "tags", None)
+        if isinstance(tags, list):
+            for item in tags:
+                text = str(item or "")
+                if text.startswith("faction:") and ":" in text:
+                    normalized = text.split(":", 1)[1].strip()
+                    if normalized:
+                        discovered.add(normalized)
+
+        return discovered
+
+    def _discovered_factions(self, character: Character, current_location: Location | None = None) -> set[str]:
+        discovered: set[str] = set()
+        flags = getattr(character, "flags", None)
+        if isinstance(flags, dict):
+            raw = flags.get("discovered_factions", [])
+            if isinstance(raw, list):
+                for value in raw:
+                    normalized = str(value or "").strip()
+                    if normalized:
+                        discovered.add(normalized)
+
+        discovered.update(self._location_faction_ids(current_location))
+        return discovered
+
+    def _record_discovered_factions(self, character: Character, location: Location | None) -> None:
+        discovered = self._discovered_factions(character, current_location=location)
+        discovered.update(self._location_faction_ids(location))
+
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        flags["discovered_factions"] = sorted(discovered)
+
+    @classmethod
+    def _travel_risk_descriptor(cls, *, location: Location, risk_hint: str) -> str:
+        hazard = getattr(location, "hazard_profile", None)
+        severity = int(getattr(hazard, "severity", 1) or 1)
+        tier = max(1, min(5, severity))
+        normalized_hint = str(risk_hint or "").strip().lower()
+        if normalized_hint == "high":
+            tier = min(5, tier + 1)
+        elif normalized_hint == "low":
+            tier = max(1, tier - 1)
+        return str(cls._RISK_DESCRIPTORS.get(tier, "Unknown"))
+
+    @classmethod
+    def _is_within_travel_radius(cls, source: Location, destination: Location) -> bool:
+        src_x = float(getattr(source, "x", 0.0) or 0.0)
+        src_y = float(getattr(source, "y", 0.0) or 0.0)
+        dst_x = float(getattr(destination, "x", 0.0) or 0.0)
+        dst_y = float(getattr(destination, "y", 0.0) or 0.0)
+        distance = math.sqrt((dst_x - src_x) ** 2 + (dst_y - src_y) ** 2)
+        return distance <= float(cls._TRAVEL_MAX_RADIUS)
+
+    @staticmethod
+    def _get_direction(source: Location | None, destination: Location) -> str:
+        if source is None:
+            return "Unknown"
+        src_x = float(getattr(source, "x", 0.0) or 0.0)
+        src_y = float(getattr(source, "y", 0.0) or 0.0)
+        dst_x = float(getattr(destination, "x", 0.0) or 0.0)
+        dst_y = float(getattr(destination, "y", 0.0) or 0.0)
+        dx = dst_x - src_x
+        dy = dst_y - src_y
+
+        if abs(dx) > abs(dy) * 2:
+            return "East" if dx > 0 else "West"
+        if abs(dy) > abs(dx) * 2:
+            return "South" if dy > 0 else "North"
+        if dy < 0 and dx > 0:
+            return "North-East"
+        if dy < 0 and dx < 0:
+            return "North-West"
+        if dy > 0 and dx > 0:
+            return "South-East"
+        if dy > 0 and dx < 0:
+            return "South-West"
+        if dx == 0 and dy == 0:
+            return "Here"
+        return "Unknown"
+
+    @staticmethod
+    def _location_flavour_hint(location: Location) -> str:
+        hazard = getattr(location, "hazard_profile", None)
+        flags = getattr(hazard, "environmental_flags", None)
+        if isinstance(flags, list):
+            culture_raw = next(
+                (
+                    str(item).split(":", 1)[1].strip()
+                    for item in flags
+                    if str(item).startswith("culture_raw:") and ":" in str(item)
+                ),
+                "",
+            )
+            if culture_raw:
+                return f"Culture {culture_raw}"
+
+        tags = getattr(location, "tags", None)
+        if isinstance(tags, list):
+            culture_slug = next(
+                (
+                    str(item).split(":", 1)[1].strip()
+                    for item in tags
+                    if str(item).startswith("culture:") and ":" in str(item)
+                ),
+                "",
+            )
+            if culture_slug:
+                label = culture_slug.replace("_", " ").strip().title()
+                return f"Culture {label}"
+        return ""
 
     def _travel_risk_hint(
         self,
@@ -1003,8 +1362,12 @@ class GameService:
         if self.location_repo:
             locations = self.location_repo.list_all()
             if destination_id is not None:
+                reachable_ids = {
+                    int(item.location_id)
+                    for item in self.get_travel_destinations_intent(character_id)
+                }
                 target_location = next((item for item in locations if int(item.id) == int(destination_id)), None)
-                if target_location is None:
+                if target_location is None or int(destination_id) not in reachable_ids:
                     return ActionResult(messages=["That destination is unavailable right now."], game_over=False)
             else:
                 location = self.location_repo.get(character.location_id) if character.location_id is not None else None
@@ -1062,11 +1425,51 @@ class GameService:
 
         if target_location is not None:
             character.location_id = target_location.id
+            discovered = self._discovered_locations(character, target_location)
+            discovered.add(int(getattr(target_location, "id", 0) or 0))
+            flags = getattr(character, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                character.flags = flags
+            flags["discovered_locations"] = sorted(discovered)
+            self._record_discovered_factions(character, target_location)
             self._set_location_context(character, target_context)
             self.character_repo.save(character)
         else:
             self._set_location_context(character, target_context)
             self.character_repo.save(character)
+
+        if target_location is not None and self.world_repo:
+            world_after = self._require_world()
+            quests = self._world_quests(world_after)
+            changed = False
+            world_turn = int(getattr(world_after, "current_turn", 0))
+            destination_location_id = int(getattr(target_location, "id", 0) or 0)
+            for quest in quests.values():
+                if not isinstance(quest, dict):
+                    continue
+                if quest.get("status") != "active":
+                    continue
+                owner = int(quest.get("owner_character_id", character_id) or character_id)
+                if owner != int(character_id):
+                    continue
+                if str(quest.get("objective_kind", "")).strip().lower() != "travel_to":
+                    continue
+                try:
+                    target_location_id = int(quest.get("objective_target_location_id", 0) or 0)
+                except (TypeError, ValueError):
+                    target_location_id = 0
+                if target_location_id != destination_location_id:
+                    continue
+
+                target = max(1, int(quest.get("target", 1) or 1))
+                quest["progress"] = target
+                quest["status"] = "ready_to_turn_in"
+                quest["completed_turn"] = world_turn
+                changed = True
+
+            if changed:
+                self.world_repo.save(world_after)
 
         consumed_label = self._consume_travel_prep(character)
         if consumed_label:
@@ -1091,6 +1494,8 @@ class GameService:
             message = f"{message} Prep applied: {prep_summary}."
         if consumed_label:
             log_messages.append(f"Travel prep consumed: {consumed_label}.")
+        self._recover_party_runtime_state(character, context="travel")
+        self.character_repo.save(character)
         return ActionResult(messages=[message, *log_messages], game_over=False)
 
     def _apply_travel_event(
@@ -1175,6 +1580,15 @@ class GameService:
             "seed": int(seed),
             "turn": int(getattr(world, "current_turn", 0)),
         }
+        lead_message = self._roll_companion_lead_discovery(
+            character,
+            world_turn=int(getattr(world, "current_turn", 0)),
+            context_key="travel",
+            location_name=str(destination_name or "unknown"),
+            world_threat=int(getattr(world, "threat_level", 0) or 0),
+        )
+        if lead_message:
+            message = f"{message} {lead_message}".strip()
         self.world_repo.save(world)
         return message
 
@@ -1200,11 +1614,19 @@ class GameService:
         prep_day_shift = int((prep_profile or {}).get("day_shift", 0))
         source_id = int(getattr(source, "id", 0) or 0)
         destination_id = int(getattr(destination, "id", 0) or 0)
+        src_x = float(getattr(source, "x", 0.0) or 0.0)
+        src_y = float(getattr(source, "y", 0.0) or 0.0)
+        dst_x = float(getattr(destination, "x", 0.0) or 0.0)
+        dst_y = float(getattr(destination, "y", 0.0) or 0.0)
+        coordinate_distance = math.sqrt((dst_x - src_x) ** 2 + (dst_y - src_y) ** 2)
         id_distance = abs(destination_id - source_id)
         recommended_level = max(1, int(getattr(destination, "recommended_level", 1) or 1))
         biome = str(getattr(destination, "biome", "") or "").lower()
 
-        base_days = 1 + min(3, id_distance)
+        if coordinate_distance > 0:
+            base_days = max(1, int(coordinate_distance / float(self._TRAVEL_SPEED_DIVISOR)))
+        else:
+            base_days = 1 + min(3, id_distance)
         challenge_days = 1 if recommended_level >= 3 else 0
         biome_days = 1 if any(token in biome for token in ("mountain", "marsh", "swamp", "wild", "forest")) else 0
         mode_days = {"road": 0, "stealth": 1, "caravan": 1}.get(mode, 0)
@@ -1384,6 +1806,8 @@ class GameService:
         if memory_hint:
             greeting = f"{greeting} {memory_hint}"
         approaches = ["Friendly", "Direct", "Intimidate"]
+        if npc["id"] in {"broker_silas", "innkeeper_mara"}:
+            approaches.append("Ask About Companions")
         if npc["id"] == "broker_silas" and self._has_interaction_unlock(character, "intel_leverage"):
             approaches.append("Leverage Intel")
         if npc["id"] == "captain_ren" and self._has_interaction_unlock(character, "captain_favor"):
@@ -1765,6 +2189,9 @@ class GameService:
         selection = templates[: max(2, min(4, base_count))]
 
         items: list[RumourItemView] = []
+        lead_rumour = self._companion_lead_rumour_item(character)
+        if lead_rumour is not None:
+            items.append(lead_rumour)
         seed_item = self._active_story_seed_rumour(world)
         if seed_item is not None:
             items.append(seed_item)
@@ -2135,6 +2562,7 @@ class GameService:
             "friendly",
             "direct",
             "intimidate",
+            "ask about companions",
             "leverage intel",
             "call in favor",
             "invoke faction",
@@ -2152,6 +2580,8 @@ class GameService:
         dominant_faction, dominant_score = self._dominant_faction_standing(character_id)
         if normalized_approach == "invoke faction" and (not dominant_faction or dominant_score < 10):
             normalized_approach = "direct"
+        if normalized_approach == "ask about companions" and npc["id"] not in {"broker_silas", "innkeeper_mara"}:
+            normalized_approach = "direct"
 
         bribe_cost = 8
         did_bribe = normalized_approach == "bribe"
@@ -2167,6 +2597,7 @@ class GameService:
             "friendly": "charisma",
             "direct": "wisdom",
             "intimidate": "strength",
+            "ask about companions": "wisdom",
             "leverage intel": "wisdom",
             "call in favor": "charisma",
             "invoke faction": "charisma",
@@ -2184,6 +2615,8 @@ class GameService:
             dc -= 3
         if normalized_approach == "invoke faction":
             dc -= 2 + max(0, (dominant_score - 10) // 10)
+        if normalized_approach == "ask about companions":
+            dc -= 1
         if normalized_approach == "bribe":
             dc -= 4
         dc = max(8, min(18, dc))
@@ -2279,6 +2712,19 @@ class GameService:
             )
         else:
             story_messages = []
+
+        if success and normalized_approach == "ask about companions":
+            current_location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+            lead_message = self._roll_companion_lead_discovery(
+                character,
+                world_turn=int(getattr(world, "current_turn", 0)),
+                context_key="social",
+                location_name=str(getattr(current_location, "name", "town") if current_location else "town"),
+                world_threat=int(getattr(world, "threat_level", 0) or 0),
+            )
+            if lead_message:
+                story_messages.append(lead_message)
+                self.character_repo.save(character)
 
         if self.world_repo:
             self.world_repo.save(world)
@@ -2554,6 +3000,782 @@ class GameService:
             scene=scene,
         )
 
+    def combat_resolve_party_intent(
+        self,
+        player: Character,
+        enemies: list[Entity],
+        choose_action: Callable[[list[str], Character, Entity, int, dict], tuple[str, Optional[str]] | str],
+        choose_target: Optional[Callable] = None,
+        evaluate_ai_action: Optional[Callable] = None,
+        scene: Optional[dict] = None,
+    ):
+        if not self.combat_service:
+            raise RuntimeError("Combat service is unavailable.")
+
+        world_turn = 0
+        if self.world_repo:
+            world = self.world_repo.load_default()
+            world_turn = getattr(world, "current_turn", 0) if world else 0
+
+        scene_ctx = scene or {}
+        party_allies = [player, *self._active_party_companions(player)]
+        seed = derive_seed(
+            namespace="combat.resolve.party",
+            context={
+                "player_id": player.id,
+                "enemy_ids": [int(getattr(row, "id", 0) or 0) for row in enemies],
+                "party_ids": [int(getattr(row, "id", 0) or 0) for row in party_allies],
+                "world_turn": world_turn,
+                "distance": scene_ctx.get("distance", "close"),
+                "terrain": scene_ctx.get("terrain", "open"),
+                "surprise": scene_ctx.get("surprise", "none"),
+            },
+        )
+        self.combat_service.set_seed(seed)
+        result = self.combat_service.fight_party_turn_based(
+            allies=party_allies,
+            enemies=enemies,
+            choose_action=choose_action,
+            choose_target=choose_target,
+            evaluate_ai_action=evaluate_ai_action,
+            scene=scene,
+        )
+        self._persist_party_runtime_state(player, result.allies)
+        lead = next(
+            (
+                ally
+                for ally in result.allies
+                if int(getattr(ally, "id", 0) or 0) == int(getattr(player, "id", 0) or 0)
+            ),
+            None,
+        )
+        if lead is not None and isinstance(getattr(lead, "flags", None), dict):
+            lead.flags["party_runtime_state"] = dict((getattr(player, "flags", {}) or {}).get("party_runtime_state", {}))
+        return result
+
+    def _unlocked_companion_ids(self, character: Character, *, persist_defaults: bool = False) -> set[str]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+
+        raw_unlocked = flags.get("unlocked_companions")
+        if isinstance(raw_unlocked, list):
+            return {
+                str(value or "").strip().lower()
+                for value in raw_unlocked
+                if str(value or "").strip().lower() in self._COMPANION_TEMPLATES
+            }
+
+        defaults = {
+            companion_id
+            for companion_id, template in self._COMPANION_TEMPLATES.items()
+            if bool(template.get("default_unlocked", False))
+        }
+        active_party = flags.get("active_party", [])
+        if isinstance(active_party, list):
+            defaults.update(
+                str(value or "").strip().lower()
+                for value in active_party
+                if str(value or "").strip().lower() in self._COMPANION_TEMPLATES
+            )
+
+        if persist_defaults:
+            ordered_defaults = [key for key in self._COMPANION_TEMPLATES if key in defaults]
+            flags["unlocked_companions"] = ordered_defaults
+        return defaults
+
+    def _save_unlocked_companion_ids(self, character: Character, unlocked_ids: set[str]) -> None:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        flags["unlocked_companions"] = [
+            companion_id
+            for companion_id in self._COMPANION_TEMPLATES
+            if companion_id in unlocked_ids
+        ]
+
+    def _companion_lead_ids(self, character: Character) -> set[str]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        raw = flags.get("companion_leads", [])
+        if not isinstance(raw, list):
+            return set()
+        return {
+            str(value or "").strip().lower()
+            for value in raw
+            if str(value or "").strip().lower() in self._COMPANION_TEMPLATES
+        }
+
+    def _save_companion_lead_ids(self, character: Character, lead_ids: set[str]) -> None:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        flags["companion_leads"] = [
+            companion_id
+            for companion_id in self._COMPANION_TEMPLATES
+            if companion_id in lead_ids
+        ]
+
+    def _record_companion_lead_history(
+        self,
+        character: Character,
+        *,
+        companion_id: str,
+        world_turn: int,
+        context_key: str,
+        location_name: str,
+    ) -> None:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        history = flags.setdefault("companion_lead_history", [])
+        if not isinstance(history, list):
+            history = []
+            flags["companion_lead_history"] = history
+        history.append(
+            {
+                "companion_id": str(companion_id),
+                "turn": int(world_turn),
+                "context": str(context_key),
+                "location": str(location_name),
+            }
+        )
+        if len(history) > 20:
+            del history[:-20]
+
+    def _companion_lead_discovery_chance(
+        self,
+        *,
+        world_turn: int,
+        context_key: str,
+        location_name: str,
+        world_threat: int,
+    ) -> int:
+        chance = int(self._COMPANION_LEAD_DISCOVERY_BASE_CHANCE)
+        chance += min(4, max(0, int(world_threat) - 2))
+        chance += min(2, max(0, int(world_turn) // 14))
+        lowered_location = str(location_name or "").strip().lower()
+        if any(token in lowered_location for token in ("village", "town", "hamlet", "crossing", "inn")):
+            chance += 1
+        normalized_context = str(context_key or "").strip().lower()
+        if normalized_context in {"social", "rumour"}:
+            chance += 3
+        return max(1, min(20, chance))
+
+    def _roll_companion_lead_discovery(
+        self,
+        character: Character,
+        *,
+        world_turn: int,
+        context_key: str,
+        location_name: str,
+        world_threat: int = 0,
+    ) -> str:
+        unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+        lead_ids = self._companion_lead_ids(character)
+        candidates = [
+            companion_id
+            for companion_id, template in self._COMPANION_TEMPLATES.items()
+            if not bool(template.get("default_unlocked", False))
+            and companion_id not in unlocked_ids
+            and companion_id not in lead_ids
+        ]
+        if not candidates:
+            return ""
+
+        seed = derive_seed(
+            namespace="companion.lead.discovery",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "world_turn": int(world_turn),
+                "context": str(context_key or "unknown"),
+                "location_name": str(location_name or "unknown"),
+                "candidate_count": len(candidates),
+            },
+        )
+        rng = random.Random(seed)
+        chance = self._companion_lead_discovery_chance(
+            world_turn=int(world_turn),
+            context_key=str(context_key),
+            location_name=str(location_name),
+            world_threat=int(world_threat),
+        )
+        if rng.randint(1, 100) > chance:
+            return ""
+
+        ordered = sorted(candidates)
+        discovered_id = ordered[rng.randrange(len(ordered))]
+        lead_ids.add(discovered_id)
+        self._save_companion_lead_ids(character, lead_ids)
+        self._record_companion_lead_history(
+            character,
+            companion_id=discovered_id,
+            world_turn=int(world_turn),
+            context_key=str(context_key),
+            location_name=str(location_name),
+        )
+
+        name = str(self._COMPANION_TEMPLATES.get(discovered_id, {}).get("name", discovered_id.replace("_", " ").title()))
+        return f"A rare lead surfaces: you hear {name} was seen nearby."
+
+    def get_companion_leads_intent(self, character_id: int) -> list[str]:
+        character = self._require_character(character_id)
+        unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+        lead_ids = self._companion_lead_ids(character)
+        flags = getattr(character, "flags", None)
+        history = []
+        if isinstance(flags, dict) and isinstance(flags.get("companion_lead_history"), list):
+            history = [row for row in flags.get("companion_lead_history", []) if isinstance(row, dict)]
+
+        rare_ids = [
+            companion_id
+            for companion_id, template in self._COMPANION_TEMPLATES.items()
+            if not bool(template.get("default_unlocked", False))
+        ]
+        recruited_rare = [companion_id for companion_id in rare_ids if companion_id in unlocked_ids]
+
+        lines = [
+            f"Rare companions recruited: {len(recruited_rare)}/{self._MAX_CAMPAIGN_RECRUITED_COMPANIONS}",
+            "",
+            "Registry:",
+        ]
+        for companion_id in rare_ids:
+            name = str(self._COMPANION_TEMPLATES.get(companion_id, {}).get("name", companion_id.replace("_", " ").title()))
+            if companion_id in unlocked_ids:
+                state = "Recruited"
+            elif companion_id in lead_ids:
+                state = "Lead Acquired"
+            else:
+                state = "Unknown"
+            lines.append(f"- {name}: {state}")
+
+        if history:
+            lines.append("")
+            lines.append("Recent Leads:")
+            for row in history[-5:]:
+                companion_id = str(row.get("companion_id", "") or "").strip().lower()
+                if not companion_id:
+                    continue
+                name = str(self._COMPANION_TEMPLATES.get(companion_id, {}).get("name", companion_id.replace("_", " ").title()))
+                turn = int(row.get("turn", 0) or 0)
+                location = str(row.get("location", "unknown") or "unknown")
+                context = str(row.get("context", "unknown") or "unknown")
+                lines.append(f"- Day {turn}: {name} lead via {context} near {location}")
+        return lines
+
+    @staticmethod
+    def _faction_display_name_from_repo(faction_repo: FactionRepository | None, faction_id: str) -> str:
+        if faction_repo:
+            row = faction_repo.get(str(faction_id))
+            if row is not None and str(getattr(row, "name", "")).strip():
+                return str(getattr(row, "name"))
+        return str(faction_id).replace("_", " ").title()
+
+    def _companion_lead_rumour_item(self, character: Character) -> RumourItemView | None:
+        unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+        lead_ids = [
+            companion_id
+            for companion_id in self._companion_lead_ids(character)
+            if companion_id not in unlocked_ids
+        ]
+        if not lead_ids:
+            return None
+        lead_ids.sort()
+        companion_id = lead_ids[0]
+        template = self._COMPANION_TEMPLATES.get(companion_id, {})
+        name = str(template.get("name", companion_id.replace("_", " ").title()))
+        faction_label = self._faction_display_name_from_repo(self.faction_repo, str(template.get("faction_id", "")))
+        return to_rumour_item_view(
+            rumour_id=f"lead_{companion_id}",
+            text=f"[Lead] Tavern whispers point to {name}, a rare ally tied to {faction_label} activity.",
+            confidence="credible",
+            source="Tavern whispers",
+        )
+
+    def _is_quest_completed_for_character(self, character_id: int, quest_id: str) -> bool:
+        if not self.world_repo:
+            return False
+        world = self.world_repo.load_default()
+        if world is None:
+            return False
+        quests = self._world_quests(world)
+        payload = quests.get(str(quest_id))
+        if not isinstance(payload, dict):
+            return False
+        status = str(payload.get("status", "")).strip().lower()
+        if status != "completed":
+            return False
+        owner_character_id = payload.get("owner_character_id")
+        if owner_character_id is None:
+            return True
+        try:
+            return int(owner_character_id) == int(character_id)
+        except Exception:
+            return False
+
+    def _companion_recruitment_blockers(
+        self,
+        *,
+        character_id: int,
+        companion_id: str,
+        character: Character,
+        unlocked_ids: set[str],
+        standings: dict[str, int],
+    ) -> list[str]:
+        template = self._COMPANION_TEMPLATES.get(companion_id)
+        if not isinstance(template, dict):
+            return ["Unknown companion."]
+
+        blockers: list[str] = []
+
+        lead_ids = self._companion_lead_ids(character)
+        if not bool(template.get("default_unlocked", False)) and companion_id not in lead_ids:
+            blockers.append("No lead yet. Keep exploring and traveling to uncover rare companions.")
+
+        req_reputation = template.get("req_reputation", {})
+        if isinstance(req_reputation, dict):
+            for faction_id, minimum in req_reputation.items():
+                try:
+                    required_value = int(minimum)
+                except Exception:
+                    continue
+                current_value = int(standings.get(str(faction_id), 0) or 0)
+                if current_value < required_value:
+                    blockers.append(f"Requires {faction_id} reputation {required_value} (current {current_value}).")
+
+        req_completed_quest = str(template.get("req_completed_quest", "") or "").strip()
+        if req_completed_quest and not self._is_quest_completed_for_character(character_id=character_id, quest_id=req_completed_quest):
+            blockers.append(f"Requires completed quest: {req_completed_quest}.")
+
+        raw_active = getattr(character, "flags", {}).get("active_party", [])
+        active_ids = {
+            str(value or "").strip().lower()
+            for value in raw_active
+            if isinstance(raw_active, list) and str(value or "").strip().lower() in self._COMPANION_TEMPLATES
+        }
+        rival_ids = set(unlocked_ids) | set(active_ids)
+        locked_by = template.get("locked_by_companions", [])
+        if isinstance(locked_by, list):
+            for rival_id in locked_by:
+                normalized = str(rival_id or "").strip().lower()
+                if normalized in rival_ids:
+                    rival_name = str(self._COMPANION_TEMPLATES.get(normalized, {}).get("name", normalized.replace("_", " ").title()))
+                    blockers.append(f"Refuses to join while {rival_name} travels with you.")
+
+        return blockers
+
+    def recruit_companion_intent(self, character_id: int, companion_id: str) -> ActionResult:
+        character = self._require_character(character_id)
+        normalized = str(companion_id or "").strip().lower()
+        template = self._COMPANION_TEMPLATES.get(normalized)
+        if not isinstance(template, dict):
+            return ActionResult(messages=["Unknown companion."], game_over=False)
+
+        unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+        if normalized in unlocked_ids:
+            name = str(template.get("name", normalized.replace("_", " ").title()))
+            return ActionResult(messages=[f"{name} is already in your roster."], game_over=False)
+
+        rare_recruited_count = sum(
+            1
+            for companion_id in unlocked_ids
+            if not bool(self._COMPANION_TEMPLATES.get(companion_id, {}).get("default_unlocked", False))
+        )
+        if not bool(template.get("default_unlocked", False)) and rare_recruited_count >= self._MAX_CAMPAIGN_RECRUITED_COMPANIONS:
+            return ActionResult(
+                messages=[
+                    f"Campaign recruit cap reached ({rare_recruited_count}/{self._MAX_CAMPAIGN_RECRUITED_COMPANIONS}).",
+                    "No additional rare companions can be recruited this run.",
+                ],
+                game_over=False,
+            )
+
+        standings = self.faction_standings_intent(character_id)
+        blockers = self._companion_recruitment_blockers(
+            character_id=character_id,
+            companion_id=normalized,
+            character=character,
+            unlocked_ids=unlocked_ids,
+            standings=standings,
+        )
+        if blockers:
+            name = str(template.get("name", normalized.replace("_", " ").title()))
+            return ActionResult(messages=[f"{name} is not ready to join.", *blockers], game_over=False)
+
+        unlocked_ids.add(normalized)
+        self._save_unlocked_companion_ids(character, unlocked_ids)
+        self.character_repo.save(character)
+        name = str(template.get("name", normalized.replace("_", " ").title()))
+        return ActionResult(messages=[f"{name} joins your roster."], game_over=False)
+
+    def _active_party_companions(self, player: Character) -> list[Character]:
+        flags = getattr(player, "flags", None)
+        if not isinstance(flags, dict):
+            return []
+        raw = flags.get("active_party", [])
+        if not isinstance(raw, list):
+            return []
+
+        companions: list[Character] = []
+        lane_overrides = self._party_lane_overrides(player)
+        for idx, value in enumerate(raw):
+            companion_id = str(value or "").strip().lower()
+            template = self._COMPANION_TEMPLATES.get(companion_id)
+            if not template:
+                continue
+            companion = Character(
+                id=900_000 + idx,
+                name=str(template.get("name", companion_id.title())),
+                class_name=str(template.get("class_name", "fighter")),
+                level=max(1, int(getattr(player, "level", 1) or 1)),
+                hp_max=max(1, int(template.get("hp_max", 12) or 12)),
+                hp_current=max(1, int(template.get("hp_max", 12) or 12)),
+                location_id=getattr(player, "location_id", None),
+            )
+            attrs = template.get("attributes", {})
+            if isinstance(attrs, dict):
+                for key, stat in attrs.items():
+                    companion.attributes[str(key)] = int(stat)
+            companion.known_spells = [str(row) for row in list(template.get("known_spells", []) or [])]
+            companion.spell_slots_max = max(0, int(template.get("spell_slots_max", 0) or 0))
+            companion.spell_slots_current = companion.spell_slots_max
+            self._rehydrate_companion_runtime_state(player, companion_key=companion_id, companion=companion)
+            lane = str(lane_overrides.get(companion_id, "") or "").strip().lower()
+            if lane in {"vanguard", "rearguard"}:
+                companion.flags["combat_lane"] = lane
+            companions.append(companion)
+        return companions
+
+    @staticmethod
+    def _party_lane_overrides(player: Character) -> dict[str, str]:
+        flags = getattr(player, "flags", None)
+        if not isinstance(flags, dict):
+            return {}
+        raw = flags.get("party_lane_overrides", {})
+        if not isinstance(raw, dict):
+            return {}
+        result: dict[str, str] = {}
+        for key, value in raw.items():
+            companion_id = str(key or "").strip().lower()
+            lane = str(value or "").strip().lower()
+            if companion_id and lane in {"vanguard", "rearguard"}:
+                result[companion_id] = lane
+        return result
+
+    @staticmethod
+    def _party_runtime_state(player: Character) -> dict[str, dict[str, int | bool]]:
+        flags = getattr(player, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            player.flags = flags
+        state = flags.setdefault("party_runtime_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            flags["party_runtime_state"] = state
+        return state
+
+    def _persist_party_runtime_state(self, player: Character, allies: list[Character]) -> None:
+        state = self._party_runtime_state(player)
+        raw_party = []
+        flags = getattr(player, "flags", None)
+        if isinstance(flags, dict):
+            candidate = flags.get("active_party", [])
+            if isinstance(candidate, list):
+                raw_party = [str(row or "").strip().lower() for row in candidate if str(row or "").strip()]
+
+        template_by_name = {
+            str(template.get("name", "")).strip().lower(): key
+            for key, template in self._COMPANION_TEMPLATES.items()
+        }
+        active_set = set(raw_party)
+        for ally in allies:
+            ally_name = str(getattr(ally, "name", "") or "").strip().lower()
+            companion_key = template_by_name.get(ally_name)
+            if not companion_key or companion_key not in active_set:
+                continue
+            state[companion_key] = {
+                "hp_current": int(getattr(ally, "hp_current", 1) or 1),
+                "hp_max": int(getattr(ally, "hp_max", 1) or 1),
+                "alive": bool(getattr(ally, "alive", int(getattr(ally, "hp_current", 0) or 0) > 0)),
+                "spell_slots_current": int(getattr(ally, "spell_slots_current", 0) or 0),
+                "spell_slots_max": int(getattr(ally, "spell_slots_max", 0) or 0),
+            }
+
+    def _rehydrate_companion_runtime_state(self, player: Character, *, companion_key: str, companion: Character) -> None:
+        state = self._party_runtime_state(player)
+        payload = state.get(str(companion_key).strip().lower())
+        if not isinstance(payload, dict):
+            return
+
+        raw_hp_max = payload.get("hp_max", getattr(companion, "hp_max", 1))
+        raw_hp_current = payload.get("hp_current", getattr(companion, "hp_current", getattr(companion, "hp_max", 1)))
+        try:
+            hp_max = max(1, int(raw_hp_max))
+        except Exception:
+            hp_max = max(1, int(getattr(companion, "hp_max", 1) or 1))
+        try:
+            hp_current = int(raw_hp_current)
+        except Exception:
+            hp_current = int(getattr(companion, "hp_current", hp_max) or hp_max)
+        companion.hp_max = hp_max
+        companion.hp_current = max(0, min(hp_max, hp_current))
+        companion.alive = bool(payload.get("alive", companion.hp_current > 0))
+
+        raw_slots_max = payload.get("spell_slots_max", getattr(companion, "spell_slots_max", 0))
+        raw_slots_current = payload.get("spell_slots_current", getattr(companion, "spell_slots_current", getattr(companion, "spell_slots_max", 0)))
+        try:
+            spell_slots_max = max(0, int(raw_slots_max))
+        except Exception:
+            spell_slots_max = max(0, int(getattr(companion, "spell_slots_max", 0) or 0))
+        try:
+            spell_slots_current = int(raw_slots_current)
+        except Exception:
+            spell_slots_current = int(getattr(companion, "spell_slots_current", spell_slots_max) or spell_slots_max)
+        companion.spell_slots_max = spell_slots_max
+        companion.spell_slots_current = max(0, min(spell_slots_max, spell_slots_current))
+
+    def _recover_party_runtime_state(self, player: Character, *, context: str) -> None:
+        state = self._party_runtime_state(player)
+        if not state:
+            return
+
+        normalized_context = str(context or "").strip().lower()
+        for companion_id, payload in state.items():
+            if not isinstance(payload, dict):
+                continue
+
+            raw_hp_max = payload.get("hp_max", 1)
+            raw_hp_current = payload.get("hp_current", raw_hp_max)
+            try:
+                hp_max = max(1, int(raw_hp_max))
+            except Exception:
+                hp_max = 1
+            try:
+                hp_current = int(raw_hp_current)
+            except Exception:
+                hp_current = hp_max
+            hp_current = max(0, min(hp_max, hp_current))
+            missing_hp = max(0, hp_max - hp_current)
+
+            if normalized_context == "rest":
+                hp_recover = max(1, int(math.ceil(missing_hp * 0.6))) if missing_hp > 0 else 0
+                slot_recover = 1
+            elif normalized_context == "travel":
+                hp_recover = max(0, int(math.ceil(missing_hp * 0.25)))
+                slot_recover = 0
+            else:
+                hp_recover = 0
+                slot_recover = 0
+
+            next_hp = min(hp_max, hp_current + hp_recover)
+            raw_slots_max = payload.get("spell_slots_max", 0)
+            raw_slots_current = payload.get("spell_slots_current", raw_slots_max)
+            try:
+                slots_max = max(0, int(raw_slots_max))
+            except Exception:
+                slots_max = 0
+            try:
+                slots_current = int(raw_slots_current)
+            except Exception:
+                slots_current = slots_max
+            slots_current = max(0, min(slots_max, slots_current))
+            next_slots = min(slots_max, slots_current + slot_recover)
+
+            payload["hp_current"] = int(next_hp)
+            payload["alive"] = bool(next_hp > 0)
+            payload["spell_slots_current"] = int(next_slots)
+            state[str(companion_id)] = payload
+
+    def get_party_status_intent(self, character_id: int) -> list[str]:
+        character = self._require_character(character_id)
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            return []
+
+        raw_party = flags.get("active_party", [])
+        if not isinstance(raw_party, list) or not raw_party:
+            return []
+
+        runtime_state = self._party_runtime_state(character)
+        lines: list[str] = []
+        for value in raw_party:
+            companion_id = str(value or "").strip().lower()
+            if not companion_id:
+                continue
+            template = self._COMPANION_TEMPLATES.get(companion_id, {})
+            display_name = str(template.get("name", companion_id.replace("_", " ").title()))
+
+            payload = runtime_state.get(companion_id, {}) if isinstance(runtime_state, dict) else {}
+            hp_max = max(1, int((payload.get("hp_max") if isinstance(payload, dict) else 0) or int(template.get("hp_max", 12) or 12)))
+            hp_current = int((payload.get("hp_current") if isinstance(payload, dict) else hp_max) or hp_max)
+            hp_current = max(0, min(hp_max, hp_current))
+
+            slots_max = max(0, int((payload.get("spell_slots_max") if isinstance(payload, dict) else 0) or int(template.get("spell_slots_max", 0) or 0)))
+            slots_current = int((payload.get("spell_slots_current") if isinstance(payload, dict) else slots_max) or slots_max)
+            slots_current = max(0, min(slots_max, slots_current))
+
+            if slots_max > 0:
+                lines.append(f"{display_name}: HP {hp_current}/{hp_max}, Slots {slots_current}/{slots_max}")
+            else:
+                lines.append(f"{display_name}: HP {hp_current}/{hp_max}")
+        return lines
+
+    def get_party_capacity_intent(self, character_id: int) -> tuple[int, int]:
+        character = self._require_character(character_id)
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            return 0, self._MAX_ACTIVE_COMPANIONS
+
+        raw_active = flags.get("active_party", [])
+        if not isinstance(raw_active, list):
+            return 0, self._MAX_ACTIVE_COMPANIONS
+
+        active_ids = {
+            str(value or "").strip().lower()
+            for value in raw_active
+            if str(value or "").strip() and str(value or "").strip().lower() in self._COMPANION_TEMPLATES
+        }
+        return len(active_ids), self._MAX_ACTIVE_COMPANIONS
+
+    def get_party_management_intent(self, character_id: int) -> list[dict[str, str | bool]]:
+        character = self._require_character(character_id)
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+
+        raw_active = flags.get("active_party", [])
+        active_ids = {
+            str(value or "").strip().lower()
+            for value in raw_active
+            if isinstance(raw_active, list)
+            and str(value or "").strip()
+            and str(value or "").strip().lower() in self._COMPANION_TEMPLATES
+        }
+        unlocked_ids = self._unlocked_companion_ids(character)
+        standings = self.faction_standings_intent(character_id)
+        lane_overrides = self._party_lane_overrides(character)
+        runtime_state = self._party_runtime_state(character)
+
+        rows: list[dict[str, str | bool]] = []
+        for companion_id, template in self._COMPANION_TEMPLATES.items():
+            display_name = str(template.get("name", companion_id.replace("_", " ").title()))
+            payload = runtime_state.get(companion_id, {}) if isinstance(runtime_state, dict) else {}
+            hp_max = max(1, int((payload.get("hp_max") if isinstance(payload, dict) else 0) or int(template.get("hp_max", 12) or 12)))
+            hp_current = int((payload.get("hp_current") if isinstance(payload, dict) else hp_max) or hp_max)
+            hp_current = max(0, min(hp_max, hp_current))
+            slots_max = max(0, int((payload.get("spell_slots_max") if isinstance(payload, dict) else 0) or int(template.get("spell_slots_max", 0) or 0)))
+            slots_current = int((payload.get("spell_slots_current") if isinstance(payload, dict) else slots_max) or slots_max)
+            slots_current = max(0, min(slots_max, slots_current))
+            lane = lane_overrides.get(companion_id, "auto")
+            unlocked = companion_id in unlocked_ids
+            blockers = []
+            if not unlocked:
+                blockers = self._companion_recruitment_blockers(
+                    character_id=character_id,
+                    companion_id=companion_id,
+                    character=character,
+                    unlocked_ids=unlocked_ids,
+                    standings=standings,
+                )
+            recruitable = unlocked or not blockers
+            gate_note = ""
+            if not unlocked:
+                gate_note = "Eligible for recruitment." if recruitable else " ".join(blockers)
+
+            status = f"HP {hp_current}/{hp_max}"
+            if slots_max > 0:
+                status = f"{status}, Slots {slots_current}/{slots_max}"
+            rows.append(
+                {
+                    "companion_id": companion_id,
+                    "name": display_name,
+                    "active": companion_id in active_ids and unlocked,
+                    "unlocked": unlocked,
+                    "recruitable": recruitable,
+                    "gate_note": gate_note,
+                    "lane": lane,
+                    "status": status,
+                }
+            )
+        return rows
+
+    def set_party_companion_active_intent(self, character_id: int, companion_id: str, active: bool) -> ActionResult:
+        character = self._require_character(character_id)
+        normalized = str(companion_id or "").strip().lower()
+        if normalized not in self._COMPANION_TEMPLATES:
+            return ActionResult(messages=["Unknown companion."], game_over=False)
+
+        unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+        if bool(active) and normalized not in unlocked_ids:
+            return ActionResult(messages=["Companion is not recruited yet."], game_over=False)
+
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+
+        raw_active = flags.get("active_party", [])
+        active_ids = [str(value or "").strip().lower() for value in raw_active] if isinstance(raw_active, list) else []
+        active_ids = [value for value in active_ids if value in self._COMPANION_TEMPLATES]
+        was_active = normalized in active_ids
+
+        if bool(active):
+            if not was_active and len(active_ids) >= self._MAX_ACTIVE_COMPANIONS:
+                return ActionResult(
+                    messages=[f"Party is full ({len(active_ids)}/{self._MAX_ACTIVE_COMPANIONS}). Deactivate a companion first."],
+                    game_over=False,
+                )
+            if not was_active:
+                active_ids.append(normalized)
+        else:
+            active_ids = [value for value in active_ids if value != normalized]
+
+        flags["active_party"] = active_ids
+        self.character_repo.save(character)
+        name = str(self._COMPANION_TEMPLATES[normalized].get("name", normalized.replace("_", " ").title()))
+        if active:
+            message = f"{name} is already in your active party." if was_active else f"{name} joined your active party."
+        else:
+            message = f"{name} is already in reserve." if not was_active else f"{name} left your active party."
+        return ActionResult(messages=[message], game_over=False)
+
+    def set_party_companion_lane_intent(self, character_id: int, companion_id: str, lane: str) -> ActionResult:
+        character = self._require_character(character_id)
+        normalized = str(companion_id or "").strip().lower()
+        if normalized not in self._COMPANION_TEMPLATES:
+            return ActionResult(messages=["Unknown companion."], game_over=False)
+
+        lane_key = str(lane or "auto").strip().lower()
+        if lane_key not in {"auto", "vanguard", "rearguard"}:
+            return ActionResult(messages=["Invalid lane selection."], game_over=False)
+
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        overrides = flags.setdefault("party_lane_overrides", {})
+        if not isinstance(overrides, dict):
+            overrides = {}
+            flags["party_lane_overrides"] = overrides
+
+        if lane_key == "auto":
+            overrides.pop(normalized, None)
+        else:
+            overrides[normalized] = lane_key
+
+        self.character_repo.save(character)
+        name = str(self._COMPANION_TEMPLATES[normalized].get("name", normalized.replace("_", " ").title()))
+        if lane_key == "auto":
+            return ActionResult(messages=[f"{name} lane reset to automatic behavior."], game_over=False)
+        return ActionResult(messages=[f"{name} assigned to {lane_key} lane."], game_over=False)
+
     def combat_round_view_intent(
         self,
         options: list[str],
@@ -2631,11 +3853,14 @@ class GameService:
 
         options: list[SpellOptionView] = []
         slots_available = getattr(player, "spell_slots_current", 0)
+        tower_allegiance = self._tower_allegiance(player)
         for name in known:
             slug = "".join(
                 ch if ch.isalnum() or ch == " " else "-" for ch in name.lower()
             ).replace(" ", "-")
             spell = self.spell_repo.get_by_slug(slug) if self.spell_repo else None
+            if tower_allegiance and not self._is_spell_allowed_for_tower(tower_allegiance=tower_allegiance, spell=spell, fallback_name=name):
+                continue
             level = spell.level_int if spell else 0
             range_text = spell.range_text if spell else ""
             needs_slot = level > 0
@@ -2645,6 +3870,33 @@ class GameService:
                 label += " [no slots]"
             options.append(SpellOptionView(slug=slug, label=label, playable=playable))
         return options
+
+    @staticmethod
+    def _tower_allegiance(player: Character) -> str | None:
+        flags = getattr(player, "flags", None)
+        if not isinstance(flags, dict):
+            return None
+        allegiance = str(flags.get("tower_allegiance", "") or "").strip().lower()
+        return allegiance or None
+
+    @classmethod
+    def _is_spell_allowed_for_tower(cls, *, tower_allegiance: str, spell, fallback_name: str) -> bool:
+        allowed_keywords = cls._TOWER_SPELL_KEYWORDS.get(str(tower_allegiance).strip().lower())
+        if not allowed_keywords:
+            return True
+
+        fields = [str(fallback_name or "")]
+        if spell is not None:
+            fields.extend(
+                [
+                    str(getattr(spell, "name", "") or ""),
+                    str(getattr(spell, "school", "") or ""),
+                    str(getattr(spell, "desc_text", "") or ""),
+                    str(getattr(spell, "higher_level", "") or ""),
+                ]
+            )
+        haystack = " ".join(fields).lower()
+        return any(keyword in haystack for keyword in allowed_keywords)
 
     def list_combat_item_options(self, player: Character) -> list[str]:
         if not self.combat_service:
@@ -2786,11 +4038,30 @@ class GameService:
         return standings
 
     def get_faction_standings_view_intent(self, character_id: int) -> FactionStandingsView:
-        standings = self.faction_standings_intent(character_id)
+        character = self._require_character(character_id)
+        current_location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        discovered_factions = self._discovered_factions(character, current_location=current_location)
+
+        standings = {
+            faction_id: score
+            for faction_id, score in self.faction_standings_intent(character_id).items()
+            if faction_id in discovered_factions
+        }
+        descriptions: dict[str, str] = {}
+        if self.faction_repo:
+            for faction in self.faction_repo.list_all():
+                faction_id = str(getattr(faction, "id", "") or "").strip()
+                if not faction_id:
+                    continue
+                if faction_id not in discovered_factions:
+                    continue
+                description = str(getattr(faction, "description", "") or "").strip()
+                if description:
+                    descriptions[faction_id] = description
         empty_state_hint = (
             "No standings tracked yet. Build reputation by resolving encounters and quests tied to local factions, then check back here."
         )
-        return FactionStandingsView(standings=standings, empty_state_hint=empty_state_hint)
+        return FactionStandingsView(standings=standings, descriptions=descriptions, empty_state_hint=empty_state_hint)
 
     def make_choice(self, player_id: int, choice: str) -> ActionResult:
         choice = choice.strip().lower()
@@ -2866,6 +4137,8 @@ class GameService:
         bounded_progress = max(0, min(int(progress), bounded_target))
         if kind == "travel_count":
             return f"Travel legs: {bounded_progress}/{bounded_target}"
+        if kind == "travel_to":
+            return f"Reach destination: {bounded_progress}/{bounded_target}"
         if kind == "kill_any":
             return f"Defeat hostiles: {bounded_progress}/{bounded_target}"
         return f"Objective progress: {bounded_progress}/{bounded_target}"

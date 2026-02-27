@@ -45,6 +45,8 @@ CREATE TABLE `character` (
     `level` smallint NOT NULL,
     `xp` bigint NOT NULL,
     `money` bigint NOT NULL,
+    `inventory_json` JSON NULL,
+    `flags_json` JSON NULL,
     PRIMARY KEY (`character_id`),
     CONSTRAINT `fk_character_character_type_id` FOREIGN KEY (`character_type_id`) REFERENCES `character_type`(`character_type_id`) ON DELETE CASCADE ON UPDATE CASCADE
 );
