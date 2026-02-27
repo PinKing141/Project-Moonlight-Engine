@@ -19,6 +19,14 @@ class StoryDirectorTests(unittest.TestCase):
         register_story_director_handlers(event_bus=event_bus, world_repo=world_repo, cadence_turns=3)
         return world_repo, progression
 
+    def _build_with_director(self, seed: int = 9):
+        event_bus = EventBus()
+        world_repo = InMemoryWorldRepository(seed=seed)
+        entity_repo = InMemoryEntityRepository([])
+        progression = WorldProgression(world_repo, entity_repo, event_bus)
+        director = register_story_director_handlers(event_bus=event_bus, world_repo=world_repo, cadence_turns=3)
+        return world_repo, progression, director
+
     def test_tick_updates_narrative_tension_bounds(self):
         world_repo, progression = self._build()
         world = world_repo.load_default()
@@ -206,6 +214,93 @@ class StoryDirectorTests(unittest.TestCase):
             right_turn, right_kind = right
             if right_turn - left_turn <= 6:
                 self.assertNotEqual(left_kind, right_kind)
+
+    def test_cataclysm_triggers_only_after_sustained_max_tension(self):
+        world_repo, progression = self._build(seed=101)
+        world = world_repo.load_default()
+        world.threat_level = 20
+        world_repo.save(world)
+
+        for _ in range(15):
+            progression.tick(world_repo.load_default(), ticks=1)
+
+        pre = world_repo.load_default()
+        pre_state = pre.flags.get("cataclysm_state", {}) if isinstance(pre.flags, dict) else {}
+        self.assertFalse(bool(pre_state.get("active", False)))
+
+        for _ in range(5):
+            progression.tick(world_repo.load_default(), ticks=1)
+
+        post = world_repo.load_default()
+        state = post.flags.get("cataclysm_state", {}) if isinstance(post.flags, dict) else {}
+        self.assertTrue(bool(state.get("active", False)))
+        self.assertIn(str(state.get("kind", "")), {"demon_king", "tyrant", "plague"})
+        self.assertEqual("whispers", str(state.get("phase", "")))
+        self.assertEqual(0, int(state.get("progress", 0) or 0))
+
+    def test_cataclysm_does_not_trigger_without_sustained_threshold(self):
+        world_repo, progression = self._build(seed=102)
+        world = world_repo.load_default()
+        world.threat_level = 2
+        world_repo.save(world)
+
+        for _ in range(40):
+            progression.tick(world_repo.load_default(), ticks=1)
+
+        state = world_repo.load_default().flags.get("cataclysm_state", {})
+        self.assertFalse(bool(state.get("active", False)))
+
+    def test_cataclysm_kind_is_deterministic_for_same_seed(self):
+        repo_a, progression_a = self._build(seed=111)
+        repo_b, progression_b = self._build(seed=111)
+        world_a = repo_a.load_default()
+        world_b = repo_b.load_default()
+        world_a.threat_level = 20
+        world_b.threat_level = 20
+        repo_a.save(world_a)
+        repo_b.save(world_b)
+
+        for _ in range(22):
+            progression_a.tick(repo_a.load_default(), ticks=1)
+            progression_b.tick(repo_b.load_default(), ticks=1)
+
+        state_a = repo_a.load_default().flags.get("cataclysm_state", {})
+        state_b = repo_b.load_default().flags.get("cataclysm_state", {})
+        self.assertEqual(state_a, state_b)
+
+    def test_explicit_cataclysm_pushback_applies_buffers(self):
+        world_repo, _progression, director = self._build_with_director(seed=131)
+        world = world_repo.load_default()
+        world.flags.setdefault("cataclysm_state", {})
+        world.flags["cataclysm_state"].update(
+            {
+                "active": True,
+                "kind": "plague",
+                "phase": "grip_tightens",
+                "progress": 45,
+                "seed": 8123,
+                "started_turn": 3,
+                "last_advance_turn": 3,
+            }
+        )
+        world_repo.save(world)
+
+        applied = director.submit_cataclysm_pushback(action_id="rally_alliance", strength=2)
+        self.assertTrue(applied)
+
+        state = world_repo.load_default().flags.get("cataclysm_state", {})
+        self.assertGreaterEqual(int(state.get("rollback_buffer", 0) or 0), 8)
+        self.assertGreaterEqual(int(state.get("slowdown_ticks", 0) or 0), 4)
+
+    def test_explicit_cataclysm_pushback_requires_active_state(self):
+        world_repo, _progression, director = self._build_with_director(seed=132)
+        world = world_repo.load_default()
+        world.flags.setdefault("cataclysm_state", {})
+        world.flags["cataclysm_state"]["active"] = False
+        world_repo.save(world)
+
+        applied = director.submit_cataclysm_pushback(action_id="cleanse_ritual", strength=1)
+        self.assertFalse(applied)
 
 
 if __name__ == "__main__":

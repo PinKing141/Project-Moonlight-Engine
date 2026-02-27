@@ -9,6 +9,7 @@ from rpg.application.contract import COMMAND_INTENTS, QUERY_INTENTS
 from rpg.application.dtos import (
     ActionResult,
     CombatRoundView,
+    DialogueSessionView,
     ExploreView,
     GameLoopView,
     RewardOutcomeView,
@@ -27,6 +28,7 @@ class ContractCompatibilityTests(unittest.TestCase):
                 "save_character_state",
                 "create_snapshot_intent",
                 "load_snapshot_intent",
+                "submit_dialogue_choice_intent",
             ),
             COMMAND_INTENTS,
         )
@@ -38,6 +40,7 @@ class ContractCompatibilityTests(unittest.TestCase):
                 "list_spell_options",
                 "faction_standings_intent",
                 "list_snapshots_intent",
+                "get_dialogue_session_intent",
             ),
             QUERY_INTENTS,
         )
@@ -48,6 +51,7 @@ class ContractCompatibilityTests(unittest.TestCase):
             ("has_encounter", "message", "enemies"),
             tuple(field.name for field in fields(ExploreView)),
         )
+        game_loop_fields = tuple(field.name for field in fields(GameLoopView))
         self.assertEqual(
             (
                 "character_id",
@@ -60,7 +64,7 @@ class ContractCompatibilityTests(unittest.TestCase):
                 "world_turn",
                 "threat_level",
             ),
-            tuple(field.name for field in fields(GameLoopView)),
+            game_loop_fields[:9],
         )
         self.assertEqual(
             ("round_number", "scene", "player", "enemy", "options"),
@@ -69,6 +73,10 @@ class ContractCompatibilityTests(unittest.TestCase):
         self.assertEqual(
             ("xp_gain", "money_gain", "loot_items"),
             tuple(field.name for field in fields(RewardOutcomeView)),
+        )
+        self.assertEqual(
+            ("npc_id", "npc_name", "stage_id", "greeting", "choices", "challenge_progress", "challenge_target"),
+            tuple(field.name for field in fields(DialogueSessionView)),
         )
 
 

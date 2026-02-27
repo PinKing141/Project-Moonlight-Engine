@@ -226,6 +226,287 @@ class TownSocialFlowTests(unittest.TestCase):
         self.assertEqual([], list(interaction.approaches or []))
         self.assertIn("off duty", interaction.greeting.lower())
 
+    def test_contextual_dialogue_options_expand_under_tension_and_flashpoint(self):
+        service, character_id = self._build_service()
+        world = service.world_repo.load_default()
+        world.flags.setdefault("narrative", {})
+        world.flags["narrative"]["tension_level"] = 72
+        world.flags["narrative"]["flashpoint_echoes"] = [
+            {
+                "turn": 5,
+                "seed_id": "seed_5_1111",
+                "resolution": "debt",
+                "channel": "social",
+                "severity_band": "high",
+            }
+        ]
+        service.world_repo.save(world)
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "RPG_DIALOGUE_TREE_ENABLED": "1",
+                "RPG_DIALOGUE_CONTEXTUAL_OPTIONS": "1",
+            },
+            clear=False,
+        ):
+            interaction = service.get_npc_interaction_intent(character_id, "broker_silas")
+
+        lowered = [item.lower() for item in interaction.approaches]
+        self.assertIn("urgent appeal", lowered)
+        self.assertIn("address flashpoint", lowered)
+        self.assertIn("critical", interaction.greeting.lower())
+
+    def test_shop_label_includes_cataclysm_strain_when_active(self):
+        service, character_id = self._build_service()
+        world = service.world_repo.load_default()
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "plague",
+            "phase": "grip_tightens",
+            "progress": 45,
+            "seed": 77,
+            "started_turn": 4,
+            "last_advance_turn": world.current_turn,
+        }
+        service.world_repo.save(world)
+
+        shop = service.get_shop_view_intent(character_id)
+
+        self.assertIn("cataclysm strain", str(shop.price_modifier_label).lower())
+
+    def test_social_outcome_persists_dialogue_state_v1(self):
+        service, character_id = self._build_service()
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            service.submit_social_approach_intent(character_id, "innkeeper_mara", "Friendly")
+
+        character = service.character_repo.get(character_id)
+        world = service.world_repo.load_default()
+        self.assertIsNotNone(character)
+        self.assertIsNotNone(world)
+
+        char_state = dict(character.flags.get("dialogue_state_v1", {}))
+        world_state = dict(world.flags.get("dialogue_state_v1", {}))
+        self.assertEqual(1, int(char_state.get("version", 0)))
+        self.assertEqual(1, int(world_state.get("version", 0)))
+        sessions = dict(char_state.get("npc_sessions", {}))
+        self.assertIn("innkeeper_mara", sessions)
+
+    def test_dialogue_session_reflects_stage_progression_on_success(self):
+        service, character_id = self._build_service()
+
+        with mock.patch.dict(
+            "os.environ",
+            {"RPG_DIALOGUE_TREE_ENABLED": "1", "RPG_DIALOGUE_CONTEXTUAL_OPTIONS": "1"},
+            clear=False,
+        ), mock.patch(
+            "random.Random.randint", return_value=20
+        ):
+            opening = service.get_dialogue_session_intent(character_id, "broker_silas")
+            self.assertEqual("opening", opening.stage_id)
+
+            service.submit_dialogue_choice_intent(character_id, "broker_silas", "friendly")
+            probe = service.get_dialogue_session_intent(character_id, "broker_silas")
+            self.assertEqual("probe", probe.stage_id)
+
+            service.submit_dialogue_choice_intent(character_id, "broker_silas", "direct")
+            resolved = service.get_dialogue_session_intent(character_id, "broker_silas")
+            self.assertEqual("resolve", resolved.stage_id)
+
+    def test_dialogue_locked_choice_falls_back_with_reason(self):
+        service, character_id = self._build_service()
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            outcome = service.submit_dialogue_choice_intent(character_id, "innkeeper_mara", "nonexistent_dialogue_choice")
+
+        self.assertTrue(outcome.messages)
+        self.assertTrue(
+            "unknown" in outcome.messages[0].lower() or "unavailable" in outcome.messages[0].lower()
+        )
+
+    def test_dialogue_session_uses_faction_conditioned_stage_variant(self):
+        service, character_id = self._build_service()
+        character = service.character_repo.get(character_id)
+        character.flags["faction_heat"] = {"wardens": 12}
+        service.character_repo.save(character)
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            session = service.get_dialogue_session_intent(character_id, "captain_ren")
+
+        self.assertIn("hard suspicion", session.greeting.lower())
+
+    def test_dialogue_choice_uses_faction_conditioned_response_variant(self):
+        service, character_id = self._build_service()
+        character = service.character_repo.get(character_id)
+        character.flags["faction_heat"] = {"wardens": 14}
+        service.character_repo.save(character)
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            outcome = service.submit_dialogue_choice_intent(character_id, "captain_ren", "direct")
+
+        self.assertTrue(outcome.messages)
+        self.assertIn("wardens are already on edge", outcome.messages[0].lower())
+
+    def test_mara_opening_uses_critical_tension_variant_line(self):
+        service, character_id = self._build_service()
+        world = service.world_repo.load_default()
+        world.flags.setdefault("narrative", {})
+        world.flags["narrative"]["tension_level"] = 88
+        service.world_repo.save(world)
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            session = service.get_dialogue_session_intent(character_id, "innkeeper_mara")
+
+        self.assertIn("distant shouting", session.greeting.lower())
+
+    def test_mara_direct_response_uses_wardens_heat_variant(self):
+        service, character_id = self._build_service()
+        character = service.character_repo.get(character_id)
+        character.flags["faction_heat"] = {"wardens": 13}
+        service.character_repo.save(character)
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            outcome = service.submit_dialogue_choice_intent(character_id, "innkeeper_mara", "direct")
+
+        self.assertTrue(outcome.messages)
+        self.assertIn("watch patrols are already hunting sparks", outcome.messages[0].lower())
+
+    def test_captain_resolve_direct_applies_success_effects(self):
+        service, character_id = self._build_service()
+        character = service.character_repo.get(character_id)
+        character.flags["faction_heat"] = {"wardens": 10}
+        service.character_repo.save(character)
+
+        world = service.world_repo.load_default()
+        world.flags.setdefault("narrative", {})
+        world.flags["narrative"]["tension_level"] = 40
+        service.world_repo.save(world)
+
+        with mock.patch.dict(
+            "os.environ",
+            {"RPG_DIALOGUE_TREE_ENABLED": "1", "RPG_DIALOGUE_CONTEXTUAL_OPTIONS": "1"},
+            clear=False,
+        ), mock.patch(
+            "random.Random.randint", return_value=20
+        ):
+            service.submit_dialogue_choice_intent(character_id, "captain_ren", "friendly")
+            service.submit_dialogue_choice_intent(character_id, "captain_ren", "friendly")
+            outcome = service.submit_dialogue_choice_intent(character_id, "captain_ren", "direct")
+
+        updated = service.character_repo.get(character_id)
+        self.assertEqual(11, int(updated.flags.get("faction_heat", {}).get("wardens", 0) or 0))
+        self.assertTrue(any("Pressure shift: wardens +1." in line for line in outcome.messages))
+        self.assertTrue(any("Tension shift: +2" in line for line in outcome.messages))
+
+        world = service.world_repo.load_default()
+        self.assertEqual(42, int(world.flags.get("narrative", {}).get("tension_level", 0) or 0))
+        consequences = list(world.flags.get("consequences", []) or [])
+        self.assertTrue(any("tighter checkpoint stance" in str(row.get("message", "")).lower() for row in consequences if isinstance(row, dict)))
+
+    def test_captain_resolve_direct_effects_do_not_apply_on_failure(self):
+        service, character_id = self._build_service()
+        character = service.character_repo.get(character_id)
+        character.flags["faction_heat"] = {"wardens": 10}
+        service.character_repo.save(character)
+
+        world = service.world_repo.load_default()
+        world.flags.setdefault("narrative", {})
+        world.flags["narrative"]["tension_level"] = 40
+        service.world_repo.save(world)
+
+        with mock.patch.dict(
+            "os.environ",
+            {"RPG_DIALOGUE_TREE_ENABLED": "1", "RPG_DIALOGUE_CONTEXTUAL_OPTIONS": "1"},
+            clear=False,
+        ), mock.patch(
+            "random.Random.randint", return_value=20
+        ):
+            service.submit_dialogue_choice_intent(character_id, "captain_ren", "friendly")
+            service.submit_dialogue_choice_intent(character_id, "captain_ren", "friendly")
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False), mock.patch(
+            "random.Random.randint", return_value=1
+        ):
+            outcome = service.submit_dialogue_choice_intent(character_id, "captain_ren", "direct")
+
+        updated = service.character_repo.get(character_id)
+        self.assertEqual(12, int(updated.flags.get("faction_heat", {}).get("wardens", 0) or 0))
+        self.assertTrue(any("Pressure shift: wardens +2." in line for line in outcome.messages))
+        self.assertTrue(any("Tension shift: +6" in line for line in outcome.messages))
+
+        world = service.world_repo.load_default()
+        self.assertEqual(46, int(world.flags.get("narrative", {}).get("tension_level", 0) or 0))
+        consequences = list(world.flags.get("consequences", []) or [])
+        self.assertTrue(any("watch crackdown" in str(row.get("message", "")).lower() for row in consequences if isinstance(row, dict)))
+
+    def test_captain_resolve_make_amends_deescalates_active_flashpoint_seed(self):
+        service, character_id = self._build_service()
+        character = service.character_repo.get(character_id)
+        world = service.world_repo.load_default()
+        world.flags.setdefault("narrative", {})
+        world.flags["narrative"]["story_seeds"] = [
+            {
+                "seed_id": "seed_ren_001",
+                "kind": "faction_flashpoint",
+                "status": "active",
+                "escalation_stage": "escalated",
+                "pressure": "Wardens and rivals posture at checkpoints.",
+            }
+        ]
+        notes = service._apply_dialogue_choice_effects(
+            character=character,
+            world=world,
+            npc_id="captain_ren",
+            success=True,
+            effects=[
+                {
+                    "kind": "story_seed_state",
+                    "on": "success",
+                    "seed_kind": "faction_flashpoint",
+                    "status": "active",
+                    "escalation_stage": "simmering",
+                }
+            ],
+        )
+
+        seed = world.flags.get("narrative", {}).get("story_seeds", [])[0]
+        self.assertEqual("active", str(seed.get("status", "")))
+        self.assertEqual("simmering", str(seed.get("escalation_stage", "")))
+        self.assertTrue(any("Story seed state shift" in line for line in notes))
+
+    def test_captain_resolve_direct_failure_escalates_active_flashpoint_seed(self):
+        service, character_id = self._build_service()
+        world = service.world_repo.load_default()
+        world.flags.setdefault("narrative", {})
+        world.flags["narrative"]["story_seeds"] = [
+            {
+                "seed_id": "seed_ren_002",
+                "kind": "faction_flashpoint",
+                "status": "active",
+                "escalation_stage": "simmering",
+                "pressure": "Checkpoint disputes are spreading.",
+            }
+        ]
+        service.world_repo.save(world)
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False), mock.patch(
+            "random.Random.randint", return_value=20
+        ):
+            service.submit_dialogue_choice_intent(character_id, "captain_ren", "friendly")
+            service.submit_dialogue_choice_intent(character_id, "captain_ren", "friendly")
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False), mock.patch(
+            "random.Random.randint", return_value=1
+        ):
+            outcome = service.submit_dialogue_choice_intent(character_id, "captain_ren", "direct")
+
+        world_after = service.world_repo.load_default()
+        seed = world_after.flags.get("narrative", {}).get("story_seeds", [])[0]
+        self.assertEqual("escalated", str(seed.get("status", "")))
+        self.assertEqual("escalated", str(seed.get("escalation_stage", "")))
+        self.assertTrue(any("Story seed state shift" in line for line in outcome.messages))
+
 
 if __name__ == "__main__":
     unittest.main()

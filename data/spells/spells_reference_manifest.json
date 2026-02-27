@@ -1,0 +1,239 @@
+{
+  "generated_at": "2026-02-27T18:49:35.014360Z",
+  "source_root": "data/spells_reference",
+  "file_count": 21,
+  "files": [
+    {
+      "path": "data/spells_reference/analysis/gravity-falls-wordcloud.png",
+      "size_bytes": 605080,
+      "sha256": "54b691c7492f0baf8866971ef19feacd942ceb93776edf91af619b2372f05985"
+    },
+    {
+      "path": "data/spells_reference/analysis/spell_descriptions.png",
+      "size_bytes": 153840,
+      "sha256": "a6722f00673dca80713ae92e0535b1910126914edaa560d7bd6464edc8d52fb6"
+    },
+    {
+      "path": "data/spells_reference/analysis/spells_analysis.ipynb",
+      "size_bytes": 2337574,
+      "sha256": "612dc6d1a78cf6116cb89bb7062be2e086206dbaec978deaf874fe7b62e88652"
+    },
+    {
+      "path": "data/spells_reference/datasets/Animated Object Statistics.xlsx",
+      "size_bytes": 10027,
+      "sha256": "06eebf2522c56498653d278f8e7e8c3209c0ba12de1b405c546dca5cad42486a",
+      "xlsx_rows": 5,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Chaos Bolt Table.xlsx",
+      "size_bytes": 4860,
+      "sha256": "f67c7e110bf7e01aad6c0cec6dd99fe37c9db4b6e2c14de9504e0f83bd43c69e",
+      "xlsx_rows": 8,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Confusion Behavior.xlsx",
+      "size_bytes": 4981,
+      "sha256": "95789029e78b5048f57f85f5150bec6f46b6d965f47fde472fe4fcc3b3f2c56e",
+      "xlsx_rows": 4,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Control Weather Table.xlsx",
+      "size_bytes": 5146,
+      "sha256": "4332e60433150e1c5ad7d1ac27fee7ac0968334cdab4d6ba56c97d18095fa6d7",
+      "xlsx_rows": 16,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Creation Table.xlsx",
+      "size_bytes": 4860,
+      "sha256": "06dbedb24c4d62e576f8142bf19e5970b17f254122282c9e9388de6676d06077",
+      "xlsx_rows": 5,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/D&D 5E Spells.xlsx",
+      "size_bytes": 156824,
+      "sha256": "8f6c683474aa88cbea963a706bf3e9d67f6e44eb80088693bc491861df7f4a04",
+      "xlsx_rows": 519,
+      "xlsx_name_like_rows": 519,
+      "xlsx_unique_name_like_slugs": 519
+    },
+    {
+      "path": "data/spells_reference/datasets/Mischievous Surge Table.xlsx",
+      "size_bytes": 5037,
+      "sha256": "c6224194bb9b4238bb591c28084d56c6451cb6301310bee28eb0ed5262c51a45",
+      "xlsx_rows": 4,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Reality Break Effects Table.xlsx",
+      "size_bytes": 10087,
+      "sha256": "3674c9863534f296d1e46a884510567517303e1b0662a6d49965010202881da9",
+      "xlsx_rows": 4,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Reincarnate Table.xlsx",
+      "size_bytes": 5065,
+      "sha256": "7ccbf8692a52082b7e1d8091c5db320d5cb294a6399903715bb7c1bcf22106a7",
+      "xlsx_rows": 14,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Summon Lesser Demons Table.xlsx",
+      "size_bytes": 9841,
+      "sha256": "59a9acab7b5a8405cddb84e6f7ef1758b32e046b04bb6407a0f1c3a48cd90bf6",
+      "xlsx_rows": 3,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Teleport Table.xlsx",
+      "size_bytes": 5045,
+      "sha256": "c9452764b9b8b84663b58d12de47fda73a76604bbd7251ca1e56c783f8c077c6",
+      "xlsx_rows": 7,
+      "xlsx_name_like_rows": 0,
+      "xlsx_unique_name_like_slugs": 0
+    },
+    {
+      "path": "data/spells_reference/dnd-spells.xls",
+      "size_bytes": 510008,
+      "sha256": "84ff0d4b87325de769d631edb87d9c103822d98361487191639fd41d4a4bd9e5"
+    },
+    {
+      "path": "data/spells_reference/other_scripts/__pycache__/classes_function.cpython-314.pyc",
+      "size_bytes": 5380,
+      "sha256": "8273d4443bc8cf8074ee007ed9ab5d5cddbd27b33c3acc1fbd7fd5c1d18d816d"
+    },
+    {
+      "path": "data/spells_reference/other_scripts/classes_function.py",
+      "size_bytes": 5332,
+      "sha256": "7665cdbd6c048386eb0a309865d17f8212189572220f2e53593d19bd9e586468"
+    },
+    {
+      "path": "data/spells_reference/other_scripts/levels_function.py",
+      "size_bytes": 1086,
+      "sha256": "96d8f33a281985a5709e1e28eca689a0f610949102af76f8ad265975a47d32cb"
+    },
+    {
+      "path": "data/spells_reference/other_scripts/materials_function.py",
+      "size_bytes": 1158,
+      "sha256": "61148606cce74d12dce9aa41fffed1775ee6c4fa7c9ddb34a58a338e0521c6e6"
+    },
+    {
+      "path": "data/spells_reference/other_scripts/schools_function.py",
+      "size_bytes": 1478,
+      "sha256": "4fec986bacd325b7cf629712667c7052452129b83d40e18315550b98ee374fae"
+    },
+    {
+      "path": "data/spells_reference/README.md",
+      "size_bytes": 8459,
+      "sha256": "b0dd4ed41a528dec7eb5026a37fbb5ed54868ba5bf9db895ff495d060f08fff5"
+    }
+  ],
+  "xlsx_dataset_summary": [
+    {
+      "path": "data/spells_reference/datasets/Animated Object Statistics.xlsx",
+      "row_count": 5,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Chaos Bolt Table.xlsx",
+      "row_count": 8,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Confusion Behavior.xlsx",
+      "row_count": 4,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Control Weather Table.xlsx",
+      "row_count": 16,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Creation Table.xlsx",
+      "row_count": 5,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/D&D 5E Spells.xlsx",
+      "row_count": 519,
+      "name_like_rows": 519,
+      "unique_name_like_slugs": 519,
+      "covered_by_unified": 519,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Mischievous Surge Table.xlsx",
+      "row_count": 4,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Reality Break Effects Table.xlsx",
+      "row_count": 4,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Reincarnate Table.xlsx",
+      "row_count": 14,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Summon Lesser Demons Table.xlsx",
+      "row_count": 3,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    },
+    {
+      "path": "data/spells_reference/datasets/Teleport Table.xlsx",
+      "row_count": 7,
+      "name_like_rows": 0,
+      "unique_name_like_slugs": 0,
+      "covered_by_unified": 0,
+      "not_in_unified": 0
+    }
+  ],
+  "aggregate_local_name_like_slugs": 519,
+  "aggregate_local_name_like_slugs_in_unified": 519,
+  "aggregate_local_name_like_slugs_missing_from_unified": 0,
+  "unified_total": 1652
+}

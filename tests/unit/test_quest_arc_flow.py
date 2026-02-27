@@ -87,6 +87,69 @@ class QuestArcFlowTests(unittest.TestCase):
         target = f"character:{character_id}"
         self.assertTrue(any(faction.reputation.get(target, 0) > 0 for faction in factions))
 
+    def test_cataclysm_board_replaces_available_normal_quests(self):
+        service, _event_bus, world_repo, _character_repo, _faction_repo, character_id = self._build_service()
+        world = world_repo.load_default()
+        world.flags.setdefault("cataclysm_state", {})
+        world.flags["cataclysm_state"].update(
+            {
+                "active": True,
+                "kind": "plague",
+                "phase": "grip_tightens",
+                "progress": 54,
+                "seed": 7001,
+                "started_turn": 2,
+                "last_advance_turn": world.current_turn,
+            }
+        )
+        world_repo.save(world)
+
+        service.advance_world(ticks=1)
+        board = service.get_quest_board_intent(character_id)
+        quest_ids = {item.quest_id for item in board.quests}
+
+        self.assertIn("cataclysm_scout_front", quest_ids)
+        self.assertIn("cataclysm_alliance_accord", quest_ids)
+        self.assertNotIn("first_hunt", quest_ids)
+
+    def test_cataclysm_alliance_quest_requires_standing_and_reduces_progress(self):
+        service, event_bus, world_repo, _character_repo, faction_repo, character_id = self._build_service()
+        world = world_repo.load_default()
+        world.flags.setdefault("cataclysm_state", {})
+        world.flags["cataclysm_state"].update(
+            {
+                "active": True,
+                "kind": "tyrant",
+                "phase": "map_shrinks",
+                "progress": 66,
+                "seed": 8080,
+                "started_turn": 2,
+                "last_advance_turn": world.current_turn,
+            }
+        )
+        world_repo.save(world)
+        service.advance_world(ticks=1)
+
+        blocked = service.accept_quest_intent(character_id, "cataclysm_alliance_accord")
+        self.assertTrue(any("alliance standing" in line.lower() for line in blocked.messages))
+
+        factions = faction_repo.list_all()[:2]
+        for faction in factions:
+            faction.reputation[f"character:{character_id}"] = 12
+
+        accepted = service.accept_quest_intent(character_id, "cataclysm_alliance_accord")
+        self.assertTrue(any("Accepted quest" in line for line in accepted.messages))
+
+        for _ in range(4):
+            event_bus.publish(MonsterSlain(monster_id=9, location_id=1, by_character_id=character_id, turn=2))
+
+        before = int(world_repo.load_default().flags.get("cataclysm_state", {}).get("progress", 0) or 0)
+        result = service.turn_in_quest_intent(character_id, "cataclysm_alliance_accord")
+        after = int(world_repo.load_default().flags.get("cataclysm_state", {}).get("progress", 0) or 0)
+
+        self.assertTrue(any("doomsday progress" in line.lower() for line in result.messages))
+        self.assertLess(after, before)
+
 
 if __name__ == "__main__":
     unittest.main()

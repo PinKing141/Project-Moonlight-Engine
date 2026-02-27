@@ -1,6 +1,6 @@
 # Application Contract v1
 
-**Version:** `1.1.0`
+**Version:** `1.2.0`
 
 This document defines the stable application-layer command/query surface for external adapters (CLI now, web/desktop later).
 
@@ -14,6 +14,7 @@ This document defines the stable application-layer command/query surface for ext
 - `save_character_state(character) -> None`
 - `create_snapshot_intent(label?) -> dict[str, object]`
 - `load_snapshot_intent(snapshot_id) -> ActionResult`
+- `submit_dialogue_choice_intent(character_id, npc_id, choice_id) -> SocialOutcomeView`
 
 ## Queries (read/presentation intents)
 
@@ -23,6 +24,7 @@ This document defines the stable application-layer command/query surface for ext
 - `list_spell_options(player) -> list[SpellOptionView]`
 - `faction_standings_intent(character_id) -> dict[str, int]`
 - `list_snapshots_intent() -> list[dict[str, object]]`
+- `get_dialogue_session_intent(character_id, npc_id) -> DialogueSessionView`
 
 ## Contract DTOs
 
@@ -31,6 +33,7 @@ This document defines the stable application-layer command/query surface for ext
 - `GameLoopView`
 - `CombatRoundView`
 - `RewardOutcomeView`
+- `DialogueSessionView`
 
 ## Compatibility Rule
 

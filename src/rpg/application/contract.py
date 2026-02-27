@@ -1,4 +1,4 @@
-CONTRACT_VERSION = "1.1.0"
+CONTRACT_VERSION = "1.2.0"
 
 COMMAND_INTENTS = (
     "rest_intent",
@@ -9,6 +9,7 @@ COMMAND_INTENTS = (
     "save_character_state",
     "create_snapshot_intent",
     "load_snapshot_intent",
+    "submit_dialogue_choice_intent",
 )
 
 QUERY_INTENTS = (
@@ -18,6 +19,7 @@ QUERY_INTENTS = (
     "list_spell_options",
     "faction_standings_intent",
     "list_snapshots_intent",
+    "get_dialogue_session_intent",
 )
 
 CONTRACT_DTO_TYPES = (
@@ -26,4 +28,5 @@ CONTRACT_DTO_TYPES = (
     "GameLoopView",
     "CombatRoundView",
     "RewardOutcomeView",
+    "DialogueSessionView",
 )

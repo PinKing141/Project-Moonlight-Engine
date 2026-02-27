@@ -50,6 +50,13 @@ Local SRD files are optional and expected as JSON in `RPG_LOCAL_SRD_DIR`:
 
 Each file may be either a raw array of objects or an object containing `results`.
 
+Spells data consolidation note:
+
+- Unified canonical spells dataset is at `data/spells/unified_spells.json`.
+- Source reference folder `data/spells_reference` has been retired; preservation artifacts are kept at:
+        - `data/spells/spells_reference_manifest.json`
+        - `data/spells/spells_reference_full_backup.zip`
+
 Optional flavour enrichment (bounded, non-mechanical):
 
 - `RPG_FLAVOUR_DATAMUSE_ENABLED` (default `0`)
@@ -164,6 +171,12 @@ python -m rpg.infrastructure.narrative_quality_report --compare-base artifacts/b
 ```
 
 Report artifacts include a versioned `schema` object and are validated for compatibility before write/load.
+
+Validate dialogue tree content file:
+
+```bash
+python -m rpg.infrastructure.dialogue_content_validator --path data/world/dialogue_trees.json
+```
 
 Optional session-end artifact hook (on main-menu quit):
 

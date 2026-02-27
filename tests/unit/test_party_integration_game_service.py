@@ -82,6 +82,164 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
         self.assertEqual(2, captured["allies"])  # player + npc_silas
         self.assertEqual(1, captured["enemies"])
 
+    def test_party_combat_can_inject_deterministic_reinforcements(self) -> None:
+        player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
+        service = self._build_service(player)
+        self.assertIsNotNone(service.world_repo)
+        if service.world_repo is None:
+            self.fail("Expected world repository")
+        world = service.world_repo.load_default()
+        self.assertIsNotNone(world)
+        if world is None:
+            self.fail("Expected world state")
+        world.threat_level = 8
+        service.world_repo.save(world)
+
+        enemies = [Entity(id=99, name="Warden Scout", level=1, hp=8, hp_current=8, hp_max=8, armour_class=10, faction_id="wardens")]
+        captured = {"enemies": 0}
+
+        def fake_seed(*, namespace, context):
+            _ = context
+            if namespace == "combat.mid.reinforcement":
+                return 0
+            return 1
+
+        def fake_party_fight(*, allies, enemies, choose_action, choose_target, evaluate_ai_action, scene):
+            _ = allies
+            _ = choose_action
+            _ = choose_target
+            _ = evaluate_ai_action
+            _ = scene
+            captured["enemies"] = len(enemies)
+            return PartyCombatResult(allies=[player], enemies=enemies, log=[], allies_won=True, fled=False)
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", side_effect=fake_seed), mock.patch.object(
+            service.combat_service,
+            "fight_party_turn_based",
+            side_effect=fake_party_fight,
+        ):
+            result = service.combat_resolve_party_intent(
+                player,
+                enemies,
+                choose_action=lambda options, p, e, round_no, ctx: "Attack",
+                choose_target=lambda *args, **kwargs: 0,
+                scene={"distance": "close", "terrain": "open", "surprise": "none"},
+            )
+
+        self.assertEqual(2, captured["enemies"])
+        self.assertTrue(any("Reinforcements arrive" in entry.text for entry in result.log))
+
+    def test_party_combat_retreat_bargain_success_applies_cost_and_threat_relief(self) -> None:
+        player = Character(id=1, name="Ari", class_name="fighter", location_id=1, money=20)
+        player.attributes["charisma"] = 16
+        service = self._build_service(player)
+        self.assertIsNotNone(service.world_repo)
+        if service.world_repo is None:
+            self.fail("Expected world repository")
+        world = service.world_repo.load_default()
+        self.assertIsNotNone(world)
+        if world is None:
+            self.fail("Expected world state")
+        world.threat_level = 5
+        service.world_repo.save(world)
+
+        enemies = [Entity(id=99, name="Warden Scout", level=1, hp=8, hp_current=8, hp_max=8, armour_class=10, faction_id="wardens")]
+
+        def fake_seed(*, namespace, context):
+            _ = context
+            if namespace == "combat.mid.reinforcement":
+                return 99
+            if namespace == "combat.mid.retreat_bargain":
+                return 19
+            return 1
+
+        def fake_party_fight(*, allies, enemies, choose_action, choose_target, evaluate_ai_action, scene):
+            _ = allies
+            _ = enemies
+            _ = choose_action
+            _ = choose_target
+            _ = evaluate_ai_action
+            _ = scene
+            return PartyCombatResult(allies=[player], enemies=[], log=[], allies_won=False, fled=True)
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", side_effect=fake_seed), mock.patch.object(
+            service.combat_service,
+            "fight_party_turn_based",
+            side_effect=fake_party_fight,
+        ):
+            result = service.combat_resolve_party_intent(
+                player,
+                enemies,
+                choose_action=lambda options, p, e, round_no, ctx: "Flee",
+                choose_target=lambda *args, **kwargs: 0,
+                scene={"distance": "close", "terrain": "open", "surprise": "none"},
+            )
+
+        self.assertIsNotNone(service.character_repo)
+        if service.character_repo is None:
+            self.fail("Expected character repository")
+        updated = service.character_repo.get(1)
+        self.assertIsNotNone(updated)
+        if updated is None:
+            self.fail("Expected persisted character")
+        self.assertEqual(15, int(updated.money))
+        world_after = service.world_repo.load_default()
+        self.assertIsNotNone(world_after)
+        if world_after is None:
+            self.fail("Expected world state after combat")
+        self.assertEqual(4, int(world_after.threat_level))
+        self.assertTrue(any("Retreat bargain succeeds" in entry.text for entry in result.log))
+        consequences = list(world_after.flags.get("consequences", []) or [])
+        self.assertTrue(any(str(row.get("kind", "")) == "combat_retreat_bargain" for row in consequences if isinstance(row, dict)))
+
+    def test_party_combat_retreat_bargain_skips_when_no_funds(self) -> None:
+        player = Character(id=1, name="Ari", class_name="fighter", location_id=1, money=3)
+        service = self._build_service(player)
+        self.assertIsNotNone(service.world_repo)
+        if service.world_repo is None:
+            self.fail("Expected world repository")
+        world = service.world_repo.load_default()
+        self.assertIsNotNone(world)
+        if world is None:
+            self.fail("Expected world state")
+        world.threat_level = 5
+        service.world_repo.save(world)
+
+        enemies = [Entity(id=99, name="Warden Scout", level=1, hp=8, hp_current=8, hp_max=8, armour_class=10, faction_id="wardens")]
+
+        def fake_party_fight(*, allies, enemies, choose_action, choose_target, evaluate_ai_action, scene):
+            _ = allies
+            _ = enemies
+            _ = choose_action
+            _ = choose_target
+            _ = evaluate_ai_action
+            _ = scene
+            return PartyCombatResult(allies=[player], enemies=[], log=[], allies_won=False, fled=True)
+
+        with mock.patch.object(service.combat_service, "fight_party_turn_based", side_effect=fake_party_fight):
+            result = service.combat_resolve_party_intent(
+                player,
+                enemies,
+                choose_action=lambda options, p, e, round_no, ctx: "Flee",
+                choose_target=lambda *args, **kwargs: 0,
+                scene={"distance": "close", "terrain": "open", "surprise": "none"},
+            )
+
+        self.assertIsNotNone(service.character_repo)
+        if service.character_repo is None:
+            self.fail("Expected character repository")
+        updated = service.character_repo.get(1)
+        self.assertIsNotNone(updated)
+        if updated is None:
+            self.fail("Expected persisted character")
+        self.assertEqual(3, int(updated.money))
+        world_after = service.world_repo.load_default()
+        self.assertIsNotNone(world_after)
+        if world_after is None:
+            self.fail("Expected world state after combat")
+        self.assertEqual(5, int(world_after.threat_level))
+        self.assertFalse(any("Retreat bargain" in entry.text for entry in result.log))
+
     def test_companion_runtime_state_persists_between_party_combats(self) -> None:
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
         player.flags = {"active_party": ["npc_elara"]}
@@ -373,7 +531,7 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
             self.fail("Expected saved player after social unlock")
         self.assertIn("npc_silas", set(saved.flags.get("unlocked_companions", [])))
 
-    def test_companion_leads_intent_returns_empty_when_disabled(self) -> None:
+    def test_companion_leads_intent_returns_registry_lines(self) -> None:
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
         player.flags = {
             "unlocked_companions": ["npc_silas", "npc_elara", "captain_ren", "npc_vael"],
@@ -391,7 +549,9 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
         player_id = self._character_id(player)
 
         lines = service.get_companion_leads_intent(player_id)
-        self.assertEqual([], lines)
+        self.assertTrue(lines)
+        self.assertTrue(any("Rare companions recruited" in line for line in lines))
+        self.assertTrue(any("Lead Acquired" in line for line in lines))
 
     def test_recruit_companion_initializes_arc_state(self) -> None:
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
@@ -407,6 +567,74 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
         arcs = dict(saved.flags.get("companion_arcs", {}))
         self.assertIn("npc_vael", arcs)
         self.assertGreaterEqual(int(dict(arcs["npc_vael"]).get("progress", 0)), 5)
+
+    def test_arc_choice_distance_blocks_active_assignment(self) -> None:
+        player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
+        player.flags = {
+            "unlocked_companions": ["npc_silas", "npc_vael"],
+            "companion_arcs": {
+                "npc_vael": {"progress": 80, "trust": 40, "stage": "bonded"},
+            },
+        }
+        service = self._build_service(player)
+        player_id = self._character_id(player)
+
+        choice_result = service.submit_companion_arc_choice_intent(player_id, "npc_vael", "distance")
+        self.assertIn("Distant", " ".join(choice_result.messages))
+
+        activate_result = service.set_party_companion_active_intent(player_id, "npc_vael", True)
+        self.assertIn("remains distant", " ".join(activate_result.messages).lower())
+
+    def test_social_arc_trigger_grants_next_check_bonus(self) -> None:
+        player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
+        player.flags = {"unlocked_companions": ["npc_silas"]}
+        player.attributes["charisma"] = 10
+        service = self._build_service(player)
+
+        note = service._advance_companion_arc(
+            player,
+            channel="social",
+            world_turn=3,
+            base_delta=2,
+        )
+        self.assertIn("social check gains +1", note.lower())
+
+        with mock.patch("random.Random.randint", return_value=10):
+            outcome = service.submit_social_approach_intent(1, "innkeeper_mara", "Friendly")
+
+        self.assertIn("+ 1", outcome.messages[1])
+
+    def test_explore_arc_trigger_sets_player_surprise(self) -> None:
+        player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
+        player.flags = {"unlocked_companions": ["npc_silas"]}
+        service = self._build_service(player)
+
+        note = service._advance_companion_arc(
+            player,
+            channel="explore",
+            world_turn=4,
+            base_delta=2,
+        )
+        self.assertIn("grants player surprise", note.lower())
+        self.assertEqual("player", str(player.flags.get("next_explore_surprise", "")))
+
+    def test_faction_arc_trigger_cools_dominant_heat(self) -> None:
+        player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
+        player.flags = {
+            "unlocked_companions": ["npc_silas"],
+            "faction_heat": {"wardens": 5, "wild": 2},
+        }
+        service = self._build_service(player)
+
+        note = service._advance_companion_arc(
+            player,
+            channel="faction",
+            world_turn=5,
+            base_delta=2,
+        )
+        self.assertIn("cools wardens pressure", note.lower())
+        heat = dict(player.flags.get("faction_heat", {}))
+        self.assertEqual(4, int(heat.get("wardens", 0) or 0))
 
 
 if __name__ == "__main__":

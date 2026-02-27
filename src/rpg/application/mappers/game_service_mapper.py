@@ -57,6 +57,11 @@ def to_town_view(
     pressure_lines: Sequence[str] = (),
     time_label: str = "",
     weather_label: str = "",
+    cataclysm_active: bool = False,
+    cataclysm_kind: str = "",
+    cataclysm_phase: str = "",
+    cataclysm_progress: int = 0,
+    cataclysm_summary: str = "",
 ) -> TownView:
     return TownView(
         day=day,
@@ -71,6 +76,11 @@ def to_town_view(
         pressure_lines=list(pressure_lines),
         time_label=time_label,
         weather_label=weather_label,
+        cataclysm_active=bool(cataclysm_active),
+        cataclysm_kind=str(cataclysm_kind or ""),
+        cataclysm_phase=str(cataclysm_phase or ""),
+        cataclysm_progress=max(0, min(100, int(cataclysm_progress or 0))),
+        cataclysm_summary=str(cataclysm_summary or ""),
     )
 
 

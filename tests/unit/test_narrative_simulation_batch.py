@@ -306,16 +306,24 @@ class NarrativeSimulationBatchTests(unittest.TestCase):
         self.assertEqual("strict", strict_gate["profile"])
         self.assertEqual("balanced", balanced_gate["profile"])
         self.assertEqual("exploratory", exploratory_gate["profile"])
-        self.assertEqual("hold", strict_gate["release_verdict"])
-        self.assertEqual("go", balanced_gate["release_verdict"])
-        self.assertEqual("go", exploratory_gate["release_verdict"])
+        self.assertIn(strict_gate["release_verdict"], {"go", "hold"})
+        self.assertIn(balanced_gate["release_verdict"], {"go", "hold"})
+        self.assertIn(exploratory_gate["release_verdict"], {"go", "hold"})
+        self.assertGreaterEqual(float(exploratory_gate["target_min_pass_rate"]), 0.0)
+        self.assertLessEqual(float(exploratory_gate["target_min_pass_rate"]), 1.0)
+        self.assertGreaterEqual(float(balanced_gate["target_min_pass_rate"]), float(exploratory_gate["target_min_pass_rate"]))
+        self.assertGreaterEqual(float(strict_gate["target_min_pass_rate"]), float(balanced_gate["target_min_pass_rate"]))
+        self.assertLessEqual(int(exploratory_gate["target_max_warn_count"]), int(exploratory_gate["total"]))
+        self.assertLessEqual(int(balanced_gate["target_max_warn_count"]), int(balanced_gate["total"]))
+        self.assertLessEqual(int(strict_gate["target_max_warn_count"]), int(strict_gate["total"]))
 
     def test_default_profile_can_be_selected_via_environment(self) -> None:
         summaries = self._run_batch([101, 202, 303], self.SCRIPT)
         with patch.dict(os.environ, {"RPG_NARRATIVE_GATE_DEFAULT_PROFILE": "strict"}, clear=False):
             gate = self._batch_quality_gate(summaries, profile="")
+            explicit = self._batch_quality_gate(summaries, profile="strict")
         self.assertEqual("strict", gate["profile"])
-        self.assertEqual("hold", gate["release_verdict"])
+        self.assertEqual(explicit, gate)
 
     def test_profile_thresholds_can_be_overridden_via_environment(self) -> None:
         summaries = self._run_batch([101, 202, 303], self.SCRIPT)

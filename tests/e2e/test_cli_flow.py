@@ -7,7 +7,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from rpg.presentation import cli
-from rpg.presentation.game_loop import _run_explore, _render_character_sheet, _run_town
+from rpg.presentation.game_loop import _run_explore, _render_character_sheet, _run_rumour_board, _run_town, run_game_loop
 from rpg.application.dtos import ExploreView
 
 
@@ -34,7 +34,9 @@ class CliFlowTests(unittest.TestCase):
             def explore_intent(_character_id):
                 return ExploreView(has_encounter=False, message="You mark hostile movement and avoid direct combat; local danger rises.", enemies=[]), None, []
 
-        with mock.patch("builtins.input", return_value=""), mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+        with mock.patch("rpg.presentation.game_loop._CONSOLE", None), mock.patch(
+            "rpg.presentation.game_loop.arrow_menu", return_value=0
+        ), mock.patch("builtins.input", return_value=""), mock.patch("sys.stdout", new_callable=io.StringIO) as output:
             _run_explore(StubService(), 1)
 
         transcript = output.getvalue()
@@ -55,7 +57,7 @@ class CliFlowTests(unittest.TestCase):
             hp_max = 18
             difficulty = "normal"
 
-        with mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+        with mock.patch("rpg.presentation.game_loop._CONSOLE", None), mock.patch("sys.stdout", new_callable=io.StringIO) as output:
             _render_character_sheet(StubSheet())
 
         transcript = output.getvalue()
@@ -71,18 +73,135 @@ class CliFlowTests(unittest.TestCase):
             character_id = cli.run_character_creator(creation_service)
 
         character = game.character_repo.get(character_id)
+        self.assertIsNotNone(character)
+        if character is None:
+            return
         character.money = 30
         game.character_repo.save(character)
 
-        with mock.patch(
+        state = {"town": 0, "prep": 0}
+
+        def _choose_menu(title, options):
+            if str(title).startswith("Town Options"):
+                if state["town"] == 0:
+                    state["town"] += 1
+                    return 5
+                return 8
+            if str(title).startswith("Travel Prep"):
+                if state["prep"] == 0:
+                    state["prep"] += 1
+                    return 0
+                return len(options) - 1
+            return -1
+
+        with mock.patch("rpg.presentation.game_loop._CONSOLE", None), mock.patch(
             "rpg.presentation.game_loop.arrow_menu",
-            side_effect=[5, 0, 3, 7],
+            side_effect=_choose_menu,
         ), mock.patch("builtins.input", return_value=""), mock.patch("sys.stdout", new_callable=io.StringIO) as output:
             _run_town(game, character_id)
 
         transcript = output.getvalue()
         self.assertIn("TRAVEL PREP RESULT", transcript)
         self.assertIn("Travel prep secured", transcript)
+
+    def test_town_talk_flow_uses_dialogue_session_loop(self) -> None:
+        game, creation_service = cli._bootstrap_inmemory()
+
+        with mock.patch("builtins.input", side_effect=["Asha", "2"]), mock.patch("sys.stdout", new_callable=io.StringIO):
+            character_id = cli.run_character_creator(creation_service)
+
+        state = {"town": 0, "dialogue": 0}
+
+        def _choose_menu(title, options):
+            if str(title).startswith("Town Options"):
+                if state["town"] == 0:
+                    state["town"] += 1
+                    return 0
+                return 8
+            if str(title) == "Talk To Who?":
+                return 0
+            if str(title) == "Choose Dialogue":
+                if state["dialogue"] == 0:
+                    state["dialogue"] += 1
+                    return 0
+                return len(options) - 1
+            return -1
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False), mock.patch(
+            "rpg.presentation.game_loop._CONSOLE", None
+        ), mock.patch(
+            "rpg.presentation.game_loop.arrow_menu",
+            side_effect=_choose_menu,
+        ), mock.patch("builtins.input", return_value=""), mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            _run_town(game, character_id)
+
+        transcript = output.getvalue()
+        self.assertIn("Social Outcome", transcript)
+        self.assertIn("Relationship", transcript)
+
+    def test_loop_header_shows_persistent_doomsday_warning_when_cataclysm_active(self) -> None:
+        game, creation_service = cli._bootstrap_inmemory()
+        with mock.patch("builtins.input", side_effect=["Asha", "2"]), mock.patch("sys.stdout", new_callable=io.StringIO):
+            character_id = cli.run_character_creator(creation_service)
+
+        self.assertIsNotNone(game.world_repo)
+        if game.world_repo is None:
+            return
+        world = game.world_repo.load_default()
+        self.assertIsNotNone(world)
+        if world is None:
+            return
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "plague",
+            "phase": "grip_tightens",
+            "progress": 42,
+            "seed": 101,
+            "started_turn": 3,
+            "last_advance_turn": world.current_turn,
+        }
+        game.world_repo.save(world)
+
+        with mock.patch("rpg.presentation.game_loop._CONSOLE", None), mock.patch(
+            "rpg.presentation.game_loop.arrow_menu", return_value=4
+        ), mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            run_game_loop(game, character_id)
+
+        transcript = output.getvalue()
+        self.assertIn("DOOMSDAY", transcript)
+        self.assertIn("Grip Tightens", transcript)
+
+    def test_rumour_board_surfaces_cataclysm_phase_bulletin(self) -> None:
+        game, creation_service = cli._bootstrap_inmemory()
+        with mock.patch("builtins.input", side_effect=["Asha", "2"]), mock.patch("sys.stdout", new_callable=io.StringIO):
+            character_id = cli.run_character_creator(creation_service)
+
+        self.assertIsNotNone(game.world_repo)
+        if game.world_repo is None:
+            return
+        world = game.world_repo.load_default()
+        self.assertIsNotNone(world)
+        if world is None:
+            return
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "demon_king",
+            "phase": "map_shrinks",
+            "progress": 67,
+            "seed": 202,
+            "started_turn": 2,
+            "last_advance_turn": world.current_turn,
+        }
+        game.world_repo.save(world)
+
+        with mock.patch("rpg.presentation.game_loop._CONSOLE", None), mock.patch("builtins.input", return_value=""), mock.patch(
+            "sys.stdout", new_callable=io.StringIO
+        ) as output:
+            _run_rumour_board(game, character_id)
+
+        transcript = output.getvalue()
+        self.assertIn("Doomsday Bulletin", transcript)
+        self.assertIn("Map Shrinks", transcript)
 
 
 if __name__ == "__main__":
