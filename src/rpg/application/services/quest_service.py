@@ -79,6 +79,43 @@ class QuestService:
             "reward_money": 9,
         },
     )
+    CATACLYSM_QUEST_TEMPLATES = (
+        {
+            "quest_id": "cataclysm_scout_front",
+            "status": "available",
+            "objective_kind": "kill_any",
+            "progress": 0,
+            "target": 3,
+            "reward_xp": 26,
+            "reward_money": 12,
+            "cataclysm_pushback": True,
+            "pushback_tier": 1,
+        },
+        {
+            "quest_id": "cataclysm_supply_lines",
+            "status": "available",
+            "objective_kind": "travel_count",
+            "progress": 0,
+            "target": 2,
+            "reward_xp": 24,
+            "reward_money": 14,
+            "cataclysm_pushback": True,
+            "pushback_tier": 1,
+        },
+        {
+            "quest_id": "cataclysm_alliance_accord",
+            "status": "available",
+            "objective_kind": "kill_any",
+            "progress": 0,
+            "target": 4,
+            "reward_xp": 34,
+            "reward_money": 18,
+            "cataclysm_pushback": True,
+            "pushback_tier": 2,
+            "requires_alliance_reputation": 10,
+            "requires_alliance_count": 2,
+        },
+    )
 
     def __init__(
         self,
@@ -123,27 +160,10 @@ class QuestService:
             self.world_repo.save(world)
             return
 
-        for template in self.QUEST_TEMPLATES:
-            quest_id = str(template.get("quest_id", ""))
-            if not quest_id or quest_id in quests:
-                continue
-            seed_value = derive_seed(
-                namespace="quest.template",
-                context={
-                    "world_turn": int(event.turn_after),
-                    "quest_id": quest_id,
-                    "objective_kind": str(template.get("objective_kind", "kill_any")),
-                },
-            )
-            quests[quest_id] = {
-                "status": str(template.get("status", "available")),
-                "objective_kind": str(template.get("objective_kind", "kill_any")),
-                "progress": int(template.get("progress", 0)),
-                "target": int(template.get("target", 1)),
-                "reward_xp": int(template.get("reward_xp", 0)),
-                "reward_money": int(template.get("reward_money", 0)),
-                "seed_key": f"quest:{quest_id}:{int(seed_value)}",
-            }
+        if self._is_cataclysm_active(world):
+            self._sync_cataclysm_templates(world=world, quests=quests, world_turn=int(event.turn_after))
+        else:
+            self._sync_standard_templates(quests=quests, world_turn=int(event.turn_after))
 
         for quest in quests.values():
             if not isinstance(quest, dict):
@@ -161,6 +181,92 @@ class QuestService:
                 quest["completed_turn"] = event.turn_after
 
         self.world_repo.save(world)
+
+    @staticmethod
+    def _is_cataclysm_active(world) -> bool:
+        if not isinstance(getattr(world, "flags", None), dict):
+            return False
+        state = world.flags.get("cataclysm_state", {})
+        if not isinstance(state, dict):
+            return False
+        return bool(state.get("active", False))
+
+    def _sync_standard_templates(self, *, quests: dict, world_turn: int) -> None:
+        removable = [
+            quest_id
+            for quest_id, payload in quests.items()
+            if isinstance(payload, dict)
+            and bool(payload.get("cataclysm_pushback", False))
+            and str(payload.get("status", "")) == "available"
+        ]
+        for quest_id in removable:
+            quests.pop(quest_id, None)
+
+        for template in self.QUEST_TEMPLATES:
+            quest_id = str(template.get("quest_id", ""))
+            if not quest_id or quest_id in quests:
+                continue
+            seed_value = derive_seed(
+                namespace="quest.template",
+                context={
+                    "world_turn": int(world_turn),
+                    "quest_id": quest_id,
+                    "objective_kind": str(template.get("objective_kind", "kill_any")),
+                },
+            )
+            quests[quest_id] = {
+                "status": str(template.get("status", "available")),
+                "objective_kind": str(template.get("objective_kind", "kill_any")),
+                "progress": int(template.get("progress", 0)),
+                "target": int(template.get("target", 1)),
+                "reward_xp": int(template.get("reward_xp", 0)),
+                "reward_money": int(template.get("reward_money", 0)),
+                "seed_key": f"quest:{quest_id}:{int(seed_value)}",
+            }
+
+    def _sync_cataclysm_templates(self, *, world, quests: dict, world_turn: int) -> None:
+        state = world.flags.get("cataclysm_state", {}) if isinstance(world.flags, dict) else {}
+        cat_seed = int(state.get("seed", 0) or 0) if isinstance(state, dict) else 0
+        kind = str(state.get("kind", "") or "") if isinstance(state, dict) else ""
+        phase = str(state.get("phase", "") or "") if isinstance(state, dict) else ""
+
+        removable = [
+            quest_id
+            for quest_id, payload in quests.items()
+            if isinstance(payload, dict)
+            and not bool(payload.get("cataclysm_pushback", False))
+            and str(payload.get("status", "")) == "available"
+        ]
+        for quest_id in removable:
+            quests.pop(quest_id, None)
+
+        for template in self.CATACLYSM_QUEST_TEMPLATES:
+            quest_id = str(template.get("quest_id", ""))
+            if not quest_id:
+                continue
+            existing = quests.get(quest_id)
+            if isinstance(existing, dict) and str(existing.get("status", "")) in {
+                "active",
+                "ready_to_turn_in",
+                "completed",
+                "failed",
+            }:
+                continue
+            seed_value = derive_seed(
+                namespace="quest.cataclysm.template",
+                context={
+                    "cataclysm_seed": int(cat_seed),
+                    "quest_id": quest_id,
+                    "kind": kind,
+                    "phase": phase,
+                },
+            )
+            payload = dict(template)
+            payload["seed_key"] = f"quest:{quest_id}:{int(seed_value)}"
+            payload["spawned_turn"] = int(world_turn)
+            payload["pushback_focus"] = kind
+            payload["phase"] = phase
+            quests[quest_id] = payload
 
     def on_monster_slain(self, event: MonsterSlain) -> None:
         world = self.world_repo.load_default()

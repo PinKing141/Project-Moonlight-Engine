@@ -1,0 +1,458 @@
+{
+  "version": 1,
+  "npcs": {
+    "broker_silas": {
+      "opening": {
+        "line": "Silas watches the square with a trader's caution.",
+        "variants": [
+          {
+            "line": "Silas greets you with unusual ease, sensing calmer streets and easier margins.",
+            "requires": ["tension_low"]
+          },
+          {
+            "line": "Silas keeps one hand near his ledger knife; panic is moving faster than coin tonight.",
+            "requires": ["tension_critical"]
+          }
+        ],
+        "choices": [
+          {
+            "id": "friendly",
+            "label": "Friendly",
+            "requires": [],
+            "response": "Silas leans in and offers a quieter route through local trouble.",
+            "response_variants": [
+              {
+                "line": "Silas smiles. 'Good night for honest talk. Markets are finally breathing again.'",
+                "requires": ["tension_low"]
+              }
+            ]
+          },
+          {
+            "id": "direct",
+            "label": "Direct",
+            "requires": [],
+            "response": "Silas answers in clipped, transactional terms.",
+            "response_variants": [
+              {
+                "line": "Silas glances at your crest and lowers his voice. 'With the guild heat rising, keep this exact.'",
+                "requires": ["faction_heat_thieves_guild_high"]
+              }
+            ]
+          },
+          {
+            "id": "intimidate",
+            "label": "Intimidate",
+            "requires": [],
+            "response": "Silas stiffens, but still gives you the minimum you asked for."
+          }
+        ]
+      },
+      "probe": {
+        "line": "Silas taps a ledger edge, weighing your tone against risk.",
+        "variants": [
+          {
+            "line": "Silas measures every word against the guild's shadow over the district.",
+            "requires": ["dominant_faction_thieves_guild"]
+          },
+          {
+            "line": "Silas keeps checking the square windows; warden pressure has everyone counting exits.",
+            "requires": ["faction_heat_wardens_high"]
+          }
+        ],
+        "choices": [
+          {
+            "id": "leverage intel",
+            "label": "Leverage Intel",
+            "requires": ["intel_unlock"],
+            "response": "Silas nods, recognizing that you've done your homework.",
+            "response_variants": [
+              {
+                "line": "Silas exhales. 'If your guild pressure really is that high, this intel buys you one clean window.'",
+                "requires": ["dominant_faction_thieves_guild"]
+              }
+            ]
+          },
+          {
+            "id": "leverage rumour",
+            "label": "Leverage Rumour",
+            "requires": ["recent_rumour"],
+            "response": "Silas confirms the rumour and points out what it leaves unsaid."
+          },
+          {
+            "id": "address flashpoint",
+            "label": "Address Flashpoint",
+            "requires": ["flashpoint_present"],
+            "response": "Silas weighs your flashpoint read and adjusts his risk line.",
+            "response_variants": [
+              {
+                "line": "Silas cuts in: 'No speeches. The city is at breaking point; act now or lose the lane.'",
+                "requires": ["tension_critical"]
+              }
+            ]
+          },
+          {
+            "id": "direct",
+            "label": "Direct",
+            "requires": [],
+            "response": "Silas gives you a straight answer and nothing extra."
+          }
+        ]
+      },
+      "resolve": {
+        "line": "Silas nods once, waiting for your final angle.",
+        "variants": [
+          {
+            "line": "Silas decides quickly; in a critical night, hesitation is a debt he can't afford.",
+            "requires": ["tension_critical"]
+          }
+        ],
+        "choices": [
+          {
+            "id": "make amends",
+            "label": "Make Amends",
+            "requires": ["recent_rebuff"],
+            "response": "Silas accepts the apology, but warns that trust now has a price."
+          },
+          {
+            "id": "bribe",
+            "label": "Bribe",
+            "requires": ["has_gold_8"],
+            "response": "Silas pockets the coin and opens one closed door.",
+            "response_variants": [
+              {
+                "line": "Silas takes the coin with a grim nod. 'Crown heat is peaking; spend carefully from here.'",
+                "requires": ["faction_heat_the_crown_high"]
+              }
+            ]
+          },
+          {
+            "id": "friendly",
+            "label": "Friendly",
+            "requires": [],
+            "response": "Silas agrees to cooperate while terms stay fair.",
+            "response_variants": [
+              {
+                "line": "Silas relaxes. 'Calmer roads make for better deals. You've earned a clean lead.'",
+                "requires": ["tension_low"]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "captain_ren": {
+      "opening": {
+        "line": "Captain Ren keeps one eye on the gate and one on you.",
+        "variants": [
+          {
+            "line": "Captain Ren watches your movements with hard suspicion, hands near the watch-horn.",
+            "requires": ["faction_heat_wardens_high"]
+          }
+        ],
+        "choices": [
+          {
+            "id": "direct",
+            "label": "Direct",
+            "requires": [],
+            "response": "Ren listens, but keeps the exchange formal.",
+            "response_variants": [
+              {
+                "line": "Ren narrows her eyes. 'Keep it short. The wardens are already on edge.'",
+                "requires": ["faction_heat_wardens_high"]
+              }
+            ]
+          },
+          { "id": "friendly", "label": "Friendly", "requires": [] },
+          { "id": "intimidate", "label": "Intimidate", "requires": [] }
+        ]
+      },
+      "probe": {
+        "line": "Ren folds her arms, asking for proof over promises.",
+        "variants": [
+          {
+            "line": "Ren's tone hardens. 'We've had enough rumors. Bring facts.'",
+            "requires": ["tension_high"]
+          }
+        ],
+        "choices": [
+          { "id": "invoke faction", "label": "Invoke Faction", "requires": [] },
+          { "id": "address flashpoint", "label": "Address Flashpoint", "requires": ["flashpoint_present"] },
+          { "id": "direct", "label": "Direct", "requires": [] }
+        ]
+      },
+      "resolve": {
+        "line": "Ren's decision will set the mood of the watch for the day.",
+        "variants": [
+          {
+            "line": "Ren's jaw tightens; with critical unrest, any wrong move could spark a district lockdown.",
+            "requires": ["tension_critical"]
+          }
+        ],
+        "choices": [
+          {
+            "id": "make amends",
+            "label": "Make Amends",
+            "requires": ["recent_rebuff"],
+            "response": "Ren accepts the apology and grants a narrow path back to trust.",
+            "effects": [
+              {
+                "kind": "faction_heat_delta",
+                "on": "success",
+                "faction_id": "wardens",
+                "delta": -2
+              },
+              {
+                "kind": "narrative_tension_delta",
+                "on": "success",
+                "delta": -5
+              },
+              {
+                "kind": "story_seed_state",
+                "on": "success",
+                "seed_kind": "faction_flashpoint",
+                "status": "active",
+                "escalation_stage": "simmering"
+              },
+              {
+                "kind": "consequence",
+                "on": "success",
+                "consequence_kind": "dialogue_deescalation",
+                "severity": "low",
+                "message": "Captain Ren signals the watch to stand down from immediate escalation."
+              }
+            ]
+          },
+          {
+            "id": "friendly",
+            "label": "Friendly",
+            "requires": [],
+            "response": "Ren eases the exchange and gives you conditional cooperation.",
+            "effects": [
+              {
+                "kind": "faction_heat_delta",
+                "on": "success",
+                "faction_id": "the_crown",
+                "delta": -1
+              },
+              {
+                "kind": "narrative_tension_delta",
+                "on": "success",
+                "delta": -2
+              },
+              {
+                "kind": "faction_heat_delta",
+                "on": "failure",
+                "faction_id": "the_crown",
+                "delta": 1
+              },
+              {
+                "kind": "narrative_tension_delta",
+                "on": "failure",
+                "delta": 3
+              },
+              {
+                "kind": "story_seed_state",
+                "on": "failure",
+                "seed_kind": "faction_flashpoint",
+                "status": "escalated",
+                "escalation_stage": "escalated"
+              },
+              {
+                "kind": "consequence",
+                "on": "failure",
+                "consequence_kind": "dialogue_misread",
+                "severity": "normal",
+                "message": "Ren reads the softened approach as hesitation and reinforces crown scrutiny in the district."
+              }
+            ]
+          },
+          {
+            "id": "direct",
+            "label": "Direct",
+            "requires": [],
+            "response": "Ren accepts your terms, but the watch posture remains rigid.",
+            "effects": [
+              {
+                "kind": "faction_heat_delta",
+                "on": "success",
+                "faction_id": "wardens",
+                "delta": 1
+              },
+              {
+                "kind": "narrative_tension_delta",
+                "on": "success",
+                "delta": 2
+              },
+              {
+                "kind": "story_seed_state",
+                "on": "success",
+                "seed_kind": "faction_flashpoint",
+                "status": "escalated",
+                "escalation_stage": "escalated"
+              },
+              {
+                "kind": "consequence",
+                "on": "success",
+                "consequence_kind": "dialogue_pressure",
+                "severity": "normal",
+                "message": "The watch adopts a tighter checkpoint stance after your hardline exchange with Ren."
+              },
+              {
+                "kind": "faction_heat_delta",
+                "on": "failure",
+                "faction_id": "wardens",
+                "delta": 2
+              },
+              {
+                "kind": "narrative_tension_delta",
+                "on": "failure",
+                "delta": 6
+              },
+              {
+                "kind": "story_seed_state",
+                "on": "failure",
+                "seed_kind": "faction_flashpoint",
+                "status": "escalated",
+                "escalation_stage": "escalated"
+              },
+              {
+                "kind": "consequence",
+                "on": "failure",
+                "consequence_kind": "dialogue_crackdown",
+                "severity": "high",
+                "message": "Your failed hardline exchange with Ren triggers an immediate watch crackdown across nearby lanes."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "innkeeper_mara": {
+      "opening": {
+        "line": "Mara wipes a mug and studies your posture before speaking.",
+        "variants": [
+          {
+            "line": "Mara's smile fades as distant shouting rolls through the square; she keeps the exits in view.",
+            "requires": ["tension_critical"]
+          },
+          {
+            "line": "Mara gives you a warmer nod than usual; the room feels safer than it has in days.",
+            "requires": ["tension_low"]
+          }
+        ],
+        "choices": [
+          {
+            "id": "friendly",
+            "label": "Friendly",
+            "requires": [],
+            "response": "Mara softens and points you toward the least volatile table in the house.",
+            "response_variants": [
+              {
+                "line": "Mara nods at your measured tone. 'With crown pressure leading the night, calm words matter more than steel.'",
+                "requires": ["dominant_faction_the_crown"]
+              }
+            ]
+          },
+          {
+            "id": "direct",
+            "label": "Direct",
+            "requires": [],
+            "response": "Mara answers plainly and keeps moving.",
+            "response_variants": [
+              {
+                "line": "Mara keeps it brief. 'Watch patrols are already hunting sparks tonight.'",
+                "requires": ["faction_heat_wardens_high"]
+              }
+            ]
+          },
+          {
+            "id": "bribe",
+            "label": "Bribe",
+            "requires": ["has_gold_8"],
+            "response": "Mara takes the coin and shares what she trusts you to carry."
+          }
+        ]
+      },
+      "probe": {
+        "line": "Mara lowers her voice when the room grows tense.",
+        "variants": [
+          {
+            "line": "Mara glances toward the shuttered windows. 'Say it quickly. The flashpoint has everyone jumpy.'",
+            "requires": ["flashpoint_present"]
+          },
+          {
+            "line": "Mara takes a steady breath. 'Pressure is rising. If you're making a plea, make it count.'",
+            "requires": ["tension_high"]
+          }
+        ],
+        "choices": [
+          {
+            "id": "urgent appeal",
+            "label": "Urgent Appeal",
+            "requires": ["tension_high"],
+            "response": "Mara drops pretense and focuses on immediate risk control."
+          },
+          {
+            "id": "address flashpoint",
+            "label": "Address Flashpoint",
+            "requires": ["flashpoint_present"],
+            "response": "Mara weighs your flashpoint read against what patrons have reported upstairs."
+          },
+          {
+            "id": "friendly",
+            "label": "Friendly",
+            "requires": [],
+            "response": "Mara keeps the tone grounded and practical.",
+            "response_variants": [
+              {
+                "line": "Mara allows herself a small laugh. 'Quiet nights make kinder bargains.'",
+                "requires": ["tension_low"]
+              }
+            ]
+          }
+        ]
+      },
+      "resolve": {
+        "line": "Mara decides whether you're helping calm the town or stirring it.",
+        "variants": [
+          {
+            "line": "Mara settles on discipline first; crown pressure has left no room for ambiguity.",
+            "requires": ["dominant_faction_the_crown"]
+          }
+        ],
+        "choices": [
+          {
+            "id": "make amends",
+            "label": "Make Amends",
+            "requires": ["recent_rebuff"],
+            "response": "Mara accepts the apology and marks the incident closed for now."
+          },
+          {
+            "id": "direct",
+            "label": "Direct",
+            "requires": [],
+            "response": "Mara sets clear terms and expects you to stick to them.",
+            "response_variants": [
+              {
+                "line": "Mara's gaze sharpens. 'With warden heat this high, no one gets a second warning tonight.'",
+                "requires": ["faction_heat_wardens_high"]
+              }
+            ]
+          },
+          {
+            "id": "friendly",
+            "label": "Friendly",
+            "requires": [],
+            "response": "Mara gives you one chance to keep the room settled.",
+            "response_variants": [
+              {
+                "line": "Mara smiles softly. 'Low tension suits this place. Keep it that way.'",
+                "requires": ["tension_low"]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

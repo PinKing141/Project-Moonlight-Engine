@@ -56,6 +56,13 @@ Current approaches include:
 - Leverage Intel (unlock)
 - Call In Favor (unlock)
 
+Talk interactions now support staged dialogue sessions (`opening` → `probe` → `resolve`) with:
+
+- choice availability/locks,
+- content-driven stage lines and choice responses,
+- deterministic progression state persisted per NPC,
+- and data-driven dialogue effects (faction heat shifts, narrative tension deltas, story-seed state transitions, consequence records).
+
 Failure and consequence paths include:
 
 - social rebuff consequence,
@@ -223,6 +230,7 @@ Public orchestration and intent methods used by gameplay:
 - `explore_view(character_id)`
 - `get_town_view_intent(character_id)`
 - `get_npc_interaction_intent(character_id, npc_id)`
+- `get_dialogue_session_intent(character_id, npc_id)`
 - `get_shop_view_intent(character_id)`
 - `buy_shop_item_intent(character_id, item_id)`
 - `get_training_view_intent(character_id)`
@@ -232,6 +240,7 @@ Public orchestration and intent methods used by gameplay:
 - `accept_quest_intent(character_id, quest_id)`
 - `turn_in_quest_intent(character_id, quest_id)`
 - `submit_social_approach_intent(character_id, npc_id, approach)`
+- `submit_dialogue_choice_intent(character_id, npc_id, choice_id)`
 - `apply_retreat_consequence_intent(character_id)`
 - `build_explore_view(plan)`
 - `save_character_state(character)`

@@ -14,6 +14,14 @@ class StoryDirector:
     _STORY_SEED_MAX = 12
     _INJECTION_REPEAT_WINDOW = 6
     _INJECTION_KINDS = ("story_seed", "faction_flashpoint")
+    _CATACLYSM_KINDS = ("demon_king", "tyrant", "plague")
+    _CATACLYSM_TENSION_THRESHOLD = 100
+    _CATACLYSM_SUSTAIN_TURNS = 3
+    _CATACLYSM_PUSHBACK_ACTIONS = {
+        "cleanse_ritual": {"rollback": 10, "slowdown": 0},
+        "ward_network": {"rollback": 0, "slowdown": 3},
+        "rally_alliance": {"rollback": 4, "slowdown": 2},
+    }
 
     def __init__(
         self,
@@ -57,7 +65,86 @@ class StoryDirector:
             else:
                 self._inject_story_seed(world, narrative=narrative, turn_after=int(event.turn_after), seed=int(cadence_seed), tension=tension_after)
 
+        self._check_cataclysm_threshold(world, narrative=narrative, turn_after=int(event.turn_after), tension=tension_after)
+
         self.world_repo.save(world)
+
+    def _check_cataclysm_threshold(self, world, *, narrative: dict, turn_after: int, tension: int) -> None:
+        if not isinstance(getattr(world, "flags", None), dict):
+            world.flags = {}
+        state = world.flags.setdefault("cataclysm_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            world.flags["cataclysm_state"] = state
+
+        if bool(state.get("active", False)):
+            narrative["cataclysm_threshold_streak"] = 0
+            narrative["cataclysm_last_checked_turn"] = int(turn_after)
+            return
+
+        threshold = int(self._CATACLYSM_TENSION_THRESHOLD)
+        sustain_turns = max(1, int(self._CATACLYSM_SUSTAIN_TURNS))
+        streak = int(narrative.get("cataclysm_threshold_streak", 0) or 0)
+        if int(tension) >= threshold:
+            streak += 1
+        else:
+            streak = 0
+        narrative["cataclysm_threshold_streak"] = int(streak)
+        narrative["cataclysm_last_checked_turn"] = int(turn_after)
+
+        if int(streak) < int(sustain_turns):
+            return
+
+        seed = derive_seed(
+            namespace="world.cataclysm",
+            context={
+                "world_turn": int(turn_after),
+                "world_seed": int(getattr(world, "rng_seed", 0) or 0),
+                "threat": int(getattr(world, "threat_level", 0) or 0),
+                "tension": int(tension),
+                "streak": int(streak),
+            },
+        )
+        kind = self._CATACLYSM_KINDS[int(seed) % len(self._CATACLYSM_KINDS)]
+        state["active"] = True
+        state["kind"] = str(kind)
+        state["phase"] = "whispers"
+        state["progress"] = 0
+        state["seed"] = int(seed)
+        state["started_turn"] = int(turn_after)
+        state["last_advance_turn"] = int(turn_after)
+        narrative["cataclysm_threshold_streak"] = 0
+
+    def submit_cataclysm_pushback(self, *, action_id: str, strength: int = 1) -> bool:
+        world = self.world_repo.load_default()
+        if world is None:
+            return False
+        if not isinstance(getattr(world, "flags", None), dict):
+            world.flags = {}
+        state = world.flags.setdefault("cataclysm_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            world.flags["cataclysm_state"] = state
+        if not bool(state.get("active", False)):
+            return False
+
+        action_key = str(action_id or "").strip().lower()
+        payload = self._CATACLYSM_PUSHBACK_ACTIONS.get(action_key)
+        if not isinstance(payload, dict):
+            return False
+
+        scalar = max(1, int(strength or 1))
+        rollback = max(0, int(payload.get("rollback", 0) or 0) * scalar)
+        slowdown = max(0, int(payload.get("slowdown", 0) or 0) * scalar)
+
+        state["rollback_buffer"] = max(0, int(state.get("rollback_buffer", 0) or 0) + int(rollback))
+        state["slowdown_ticks"] = max(0, int(state.get("slowdown_ticks", 0) or 0) + int(slowdown))
+        state["last_pushback_action"] = action_key
+        state["last_pushback_strength"] = int(scalar)
+        state["last_pushback_turn"] = int(getattr(world, "current_turn", 0) or 0)
+
+        self.world_repo.save(world)
+        return True
 
     @staticmethod
     def _world_narrative_state(world) -> dict:

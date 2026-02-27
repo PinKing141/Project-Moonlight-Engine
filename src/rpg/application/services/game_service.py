@@ -12,6 +12,8 @@ from rpg.application.dtos import (
     ActionResult,
     CharacterSheetView,
     CombatRoundView,
+    DialogueChoiceView,
+    DialogueSessionView,
     CharacterCreationSummaryView,
     CharacterSummaryView,
     EncounterPlan,
@@ -72,6 +74,7 @@ from rpg.application.services.balance_tables import (
     rest_heal_amount,
     xp_required_for_level,
 )
+from rpg.application.services.dialogue_service import DialogueService
 from rpg.application.services.world_progression import WorldProgression
 from rpg.application.services.encounter_flavour import random_intro
 from rpg.application.services.progression_service import ProgressionService
@@ -161,6 +164,50 @@ class GameService:
         (97, "Storm"),
         (100, "Blizzard"),
     )
+    _CATACLYSM_PHASES = ("whispers", "grip_tightens", "map_shrinks", "ruin")
+    _CATACLYSM_KINDS = ("demon_king", "tyrant", "plague")
+    _CATACLYSM_PHASE_ENCOUNTER_LEVEL_DELTA = {
+        "whispers": 0,
+        "grip_tightens": 1,
+        "map_shrinks": 1,
+        "ruin": 2,
+    }
+    _CATACLYSM_PHASE_ENCOUNTER_MAX_DELTA = {
+        "whispers": 0,
+        "grip_tightens": 0,
+        "map_shrinks": 1,
+        "ruin": 1,
+    }
+    _CATACLYSM_KIND_ENCOUNTER_BIAS = {
+        "demon_king": "tower_obsidian",
+        "tyrant": "the_crown",
+        "plague": "wild",
+    }
+    _CATACLYSM_PHASE_REST_CORRUPTION = {
+        "whispers": 0,
+        "grip_tightens": 1,
+        "map_shrinks": 2,
+        "ruin": 3,
+    }
+    _CATACLYSM_PHASE_CAMP_RISK_SHIFT = {
+        "whispers": 2,
+        "grip_tightens": 5,
+        "map_shrinks": 8,
+        "ruin": 12,
+    }
+    _CATACLYSM_PHASE_TOWN_PRICE_SURCHARGE = {
+        "whispers": 1,
+        "grip_tightens": 2,
+        "map_shrinks": 3,
+        "ruin": 4,
+    }
+    _CATACLYSM_PHASE_TRAVEL_DAY_SHIFT = {
+        "whispers": 0,
+        "grip_tightens": 0,
+        "map_shrinks": 1,
+        "ruin": 1,
+    }
+    _CATACLYSM_APEX_PROGRESS_THRESHOLD = 20
     _CAMP_ACTIVITY_DEFS = {
         "forage": {
             "label": "Forage",
@@ -392,6 +439,10 @@ class GameService:
         "syndicate_route_run": "Syndicate Route Run",
         "forest_path_clearance": "Forest Path Clearance",
         "ruins_wayfinding": "Ruins Wayfinding",
+        "cataclysm_scout_front": "Frontline Scout Sweep",
+        "cataclysm_supply_lines": "Seal Fractured Supply Lines",
+        "cataclysm_alliance_accord": "Alliance Accord Muster",
+        "cataclysm_apex_clash": "Apex Clash",
     }
     _TOWN_NPCS = (
         {
@@ -671,6 +722,7 @@ class GameService:
         verbose_level: str = "compact",
         open5e_client_factory: Callable[[], object] | None = None,
         name_generator=None,
+        dialogue_service: DialogueService | None = None,
         encounter_intro_builder: Callable[[Entity], str] | None = None,
         mechanical_flavour_builder: Callable[..., str] | None = None,
     ) -> None:
@@ -696,6 +748,7 @@ class GameService:
         self.verbose_level = verbose_level
         self.encounter_intro_builder = encounter_intro_builder or random_intro
         self.mechanical_flavour_builder = mechanical_flavour_builder
+        self.dialogue_service = dialogue_service or DialogueService()
         self._snapshot_limit = 24
         self._snapshots: list[dict[str, object]] = []
         event_publisher = None
@@ -931,12 +984,14 @@ class GameService:
 
     def rest(self, character_id: int) -> tuple[Character, Optional[World]]:
         character = self._require_character(character_id)
+        world_before = self.world_repo.load_default() if self.world_repo else None
         heal_amount = rest_heal_amount(character.hp_max)
         character.hp_current = min(character.hp_current + heal_amount, character.hp_max)
         character.alive = True
         if hasattr(character, "spell_slots_max"):
             character.spell_slots_current = getattr(character, "spell_slots_max", 0)
         self._recover_party_runtime_state(character, context="rest")
+        self._apply_cataclysm_rest_corruption(character, world_before=world_before, context="long_rest")
 
         if self.atomic_state_persistor and self.world_repo:
             world = self.advance_world(ticks=1, persist=False)
@@ -968,6 +1023,7 @@ class GameService:
 
     def short_rest_intent(self, character_id: int) -> ActionResult:
         character = self._require_character(character_id)
+        world_before = self.world_repo.load_default() if self.world_repo else None
         heal_cap = int(rest_heal_amount(int(getattr(character, "hp_max", 1) or 1)))
         heal_amount = max(1, int(round(float(heal_cap) * float(self._SHORT_REST_HEAL_RATIO))))
         character.hp_current = min(int(getattr(character, "hp_max", 1) or 1), int(getattr(character, "hp_current", 1) or 1) + heal_amount)
@@ -976,6 +1032,7 @@ class GameService:
             current_slots = int(getattr(character, "spell_slots_current", 0) or 0)
             character.spell_slots_current = min(max_slots, current_slots + int(self._SHORT_REST_MAX_SPELL_RECOVERY))
         self._recover_party_runtime_state(character, context="travel")
+        corruption_loss = self._apply_cataclysm_rest_corruption(character, world_before=world_before, context="short_rest")
 
         world_after = self.advance_world(ticks=1) if self.world_repo else None
         if world_after is not None:
@@ -992,21 +1049,29 @@ class GameService:
         if world_after is None:
             self.character_repo.save(character)
 
-        return ActionResult(
-            messages=[
-                f"Short rest: +{heal_amount} HP recovered.",
-                "You catch your breath and regain limited focus.",
-            ],
-            game_over=False,
-        )
+        messages = [
+            f"Short rest: +{heal_amount} HP recovered.",
+            "You catch your breath and regain limited focus.",
+        ]
+        if corruption_loss > 0:
+            messages.append(f"Cataclysm corruption seeps into camp: -{corruption_loss} HP.")
+        return ActionResult(messages=messages, game_over=False)
 
     def long_rest_intent(self, character_id: int) -> ActionResult:
         self.rest(character_id)
-        return ActionResult(messages=["Long rest complete. You rest and feel restored."], game_over=False)
+        messages = ["Long rest complete. You rest and feel restored."]
+        corruption_note = self._last_rest_corruption_message(self._require_character(character_id))
+        if corruption_note:
+            messages.append(corruption_note)
+        return ActionResult(messages=messages, game_over=False)
 
     def rest_intent(self, character_id: int) -> ActionResult:
         self.rest(character_id)
-        return ActionResult(messages=["You rest and feel restored."], game_over=False)
+        messages = ["You rest and feel restored."]
+        corruption_note = self._last_rest_corruption_message(self._require_character(character_id))
+        if corruption_note:
+            messages.append(corruption_note)
+        return ActionResult(messages=messages, game_over=False)
 
     def get_camp_activity_options_intent(self, character_id: int) -> list[tuple[str, str]]:
         character = self._require_character(character_id)
@@ -1071,6 +1136,7 @@ class GameService:
         )
         ambush_rng = random.Random(ambush_seed)
         risk = 20 + int(activity.get("risk_shift", 0) or 0) + self._weather_risk_shift(weather_label)
+        risk += self._cataclysm_camp_risk_shift(world_before)
         risk = max(4, min(85, int(risk)))
         ambush_roll = int(ambush_rng.randint(1, 100))
         threat_delta = 0
@@ -1106,6 +1172,10 @@ class GameService:
             threat_delta = 1
         else:
             activity_messages.append("The night passes without incident.")
+
+        corruption_loss = self._apply_cataclysm_rest_corruption(character, world_before=world_before, context="camp")
+        if corruption_loss > 0:
+            activity_messages.append(f"Cataclysm corruption gnaws through the camp: -{corruption_loss} HP.")
 
         world_after = None
         if self.world_repo:
@@ -1487,7 +1557,7 @@ class GameService:
     @classmethod
     def _load_reference_world_dataset_cached(cls):
         project_root = Path(__file__).resolve().parents[4]
-        reference_dir = project_root / "reference_"
+        reference_dir = project_root / "data" / "reference_world"
         cache_key = str(reference_dir)
         cached = cls._REFERENCE_WORLD_DATASET_CACHE.get(cache_key)
         if cached is not None:
@@ -1848,7 +1918,19 @@ class GameService:
     def get_game_loop_view(self, character_id: int) -> GameLoopView:
         character = self._require_character(character_id)
         world_state = self.world_repo.load_default() if self.world_repo else None
+        if world_state is not None:
+            self._resolve_cataclysm_terminal_state(world_state)
         immersion = self._world_immersion_state(world_state)
+        cataclysm = self._world_cataclysm_state(world_state)
+        end_state = self._world_cataclysm_end_state(world_state)
+        try:
+            raw_progress = cataclysm.get("progress", 0)
+            cataclysm_progress = max(0, min(100, int(raw_progress if isinstance(raw_progress, (int, float, str)) else 0)))
+        except Exception:
+            cataclysm_progress = 0
+        summary = str(cataclysm.get("summary", "") or "")
+        if bool(end_state.get("game_over", False)):
+            summary = str(end_state.get("message", "") or "Game Over — The World Fell")
         return GameLoopView(
             character_id=character.id or 0,
             name=character.name,
@@ -1861,7 +1943,23 @@ class GameService:
             threat_level=getattr(world_state, "threat_level", None),
             time_label=str(immersion.get("time_label", "")),
             weather_label=str(immersion.get("weather", "Unknown")),
+            cataclysm_active=bool(cataclysm.get("active", False)),
+            cataclysm_kind=str(cataclysm.get("kind", "") or ""),
+            cataclysm_phase=str(cataclysm.get("phase", "") or ""),
+            cataclysm_progress=cataclysm_progress,
+            cataclysm_summary=summary,
         )
+
+    def get_cataclysm_terminal_state_intent(self, character_id: int) -> tuple[bool, str] | None:
+        self._require_character(character_id)
+        if not self.world_repo:
+            return None
+        world = self._require_world()
+        end_state = self._resolve_cataclysm_terminal_state(world)
+        message = str(end_state.get("message", "") or "") if isinstance(end_state, dict) else ""
+        if not message:
+            return None
+        return bool(end_state.get("game_over", False)), message
 
     def get_character_sheet_intent(self, character_id: int) -> CharacterSheetView:
         character = self._require_character(character_id)
@@ -2002,6 +2100,7 @@ class GameService:
         prep_profile = self._active_travel_prep_profile(character)
         prep_summary = self._travel_prep_summary(prep_profile)
         world = self.world_repo.load_default() if self.world_repo else None
+        cataclysm = self._world_cataclysm_state(world)
         world_turn = int(getattr(world, "current_turn", 0)) if world is not None else 0
         threat_level = int(getattr(world, "threat_level", 0)) if world is not None else 0
 
@@ -2035,6 +2134,7 @@ class GameService:
                 travel_mode="road",
                 prep_profile=prep_profile,
             )
+            risk_hint = self._apply_cataclysm_travel_risk_hint(risk_hint, cataclysm)
             road_days = self._estimate_travel_days(
                 character=character,
                 source=current_location,
@@ -2042,6 +2142,7 @@ class GameService:
                 travel_mode="road",
                 prep_profile=prep_profile,
             )
+            road_days = max(1, min(9, int(road_days) + self._cataclysm_travel_day_shift(cataclysm)))
             risk_descriptor = self._travel_risk_descriptor(location=location, risk_hint=risk_hint)
             risk_width = int(self._TRAVEL_PREVIEW_RISK_WIDTH)
             risk_label = str(risk_descriptor or "")[:risk_width]
@@ -2056,7 +2157,7 @@ class GameService:
                     biome=biome,
                     preview=preview,
                     estimated_days=road_days,
-                    route_note=f"Route estimate: {road_days} day(s) by road.",
+                    route_note=self._cataclysm_route_note(road_days=road_days, cataclysm=cataclysm),
                     mode_hint="Modes: Road balanced • Stealth safer/slower • Caravan safer/slower",
                     prep_summary=prep_summary,
                 )
@@ -2769,6 +2870,12 @@ class GameService:
         if int(getattr(world, "threat_level", 0) or 0) >= 4:
             recent_consequences = ["Tension response: shopkeepers board windows and whisper about flashpoints."] + list(recent_consequences)
         pressure_summary, pressure_lines = self._faction_pressure_display(character)
+        cataclysm = self._world_cataclysm_state(world)
+        try:
+            raw_progress = cataclysm.get("progress", 0)
+            cataclysm_progress = max(0, min(100, int(raw_progress if isinstance(raw_progress, (int, float, str)) else 0)))
+        except Exception:
+            cataclysm_progress = 0
         return to_town_view(
             day=getattr(world, "current_turn", None),
             threat_level=getattr(world, "threat_level", None),
@@ -2782,6 +2889,11 @@ class GameService:
             pressure_lines=pressure_lines,
             time_label=str(immersion.get("time_label", "")),
             weather_label=str(immersion.get("weather", "Unknown")),
+            cataclysm_active=bool(cataclysm.get("active", False)),
+            cataclysm_kind=str(cataclysm.get("kind", "") or ""),
+            cataclysm_phase=str(cataclysm.get("phase", "") or ""),
+            cataclysm_progress=cataclysm_progress,
+            cataclysm_summary=str(cataclysm.get("summary", "") or ""),
         )
 
     def get_pressure_relief_targets_intent(self, character_id: int) -> list[tuple[str, int]]:
@@ -2893,6 +3005,14 @@ class GameService:
             approaches.append("Invoke Faction")
         if int(getattr(character, "money", 0) or 0) >= 8:
             approaches.append("Bribe")
+        greeting, approaches = self.dialogue_service.contextualize_interaction(
+            world=world,
+            character=character,
+            character_id=int(character_id),
+            npc_id=str(npc["id"]),
+            greeting=greeting,
+            approaches=approaches,
+        )
         return NpcInteractionView(
             npc_id=npc["id"],
             npc_name=npc["name"],
@@ -2903,10 +3023,44 @@ class GameService:
             approaches=approaches,
         )
 
+    def get_dialogue_session_intent(self, character_id: int, npc_id: str) -> DialogueSessionView:
+        interaction = self.get_npc_interaction_intent(character_id, npc_id)
+        character = self._require_character(character_id)
+        world = self._require_world()
+        session = self.dialogue_service.build_dialogue_session(
+            world=world,
+            character=character,
+            character_id=int(character_id),
+            npc_id=str(interaction.npc_id),
+            npc_name=str(interaction.npc_name),
+            greeting=str(interaction.greeting),
+            approaches=list(interaction.approaches or []),
+        )
+        choices = [
+            DialogueChoiceView(
+                choice_id=str(row.get("choice_id", "")),
+                label=str(row.get("label", "")),
+                available=bool(row.get("available", False)),
+                locked_reason=str(row.get("locked_reason", "")),
+            )
+            for row in list(session.get("choices", []) or [])
+            if isinstance(row, dict)
+        ]
+        return DialogueSessionView(
+            npc_id=str(interaction.npc_id),
+            npc_name=str(interaction.npc_name),
+            stage_id=str(session.get("stage_id", "opening")),
+            greeting=str(session.get("greeting", interaction.greeting)),
+            choices=choices,
+            challenge_progress=max(0, int(session.get("challenge_progress", 0) or 0)),
+            challenge_target=max(1, int(session.get("challenge_target", 3) or 3)),
+        )
+
     def get_shop_view_intent(self, character_id: int) -> ShopView:
         character = self._require_character(character_id)
         price_modifier = self._town_price_modifier(character_id)
         world = self.world_repo.load_default() if self.world_repo else None
+        cataclysm = self._world_cataclysm_state(world)
         immersion = self._world_immersion_state(world)
         phase = str(immersion.get("phase", ""))
         weather = str(immersion.get("weather", "Unknown"))
@@ -2926,6 +3080,9 @@ class GameService:
             standing_label = f"{standing_label}; after-hours premium ({phase.lower()})"
         if weather in {"Storm", "Blizzard"}:
             standing_label = f"{standing_label}; weather scarcity"
+        if bool(cataclysm.get("active", False)):
+            cataclysm_phase = str(cataclysm.get("phase", "") or "").replace("_", " ")
+            standing_label = f"{standing_label}; cataclysm strain ({cataclysm_phase})"
 
         dynamic_rows: list[dict] = []
         loader = getattr(self.character_repo, "list_shop_items", None)
@@ -2940,6 +3097,7 @@ class GameService:
         items = []
         merged_rows = list(self._SHOP_ITEMS) + dynamic_rows
         after_hours_essentials = {"sturdy_rations", "torch", "rope", "healing_herbs", "antitoxin"}
+        cataclysm_essentials = {"sturdy_rations", "torch", "rope", "healing_herbs", "antitoxin", "whetstone"}
         emitted: set[str] = set()
         for row in merged_rows:
             item_id = str(row.get("id", "")).strip()
@@ -2947,11 +3105,15 @@ class GameService:
                 continue
             if after_hours and item_id not in after_hours_essentials:
                 continue
+            if bool(cataclysm.get("active", False)) and str(cataclysm.get("phase", "")) in {"map_shrinks", "ruin"}:
+                if item_id not in cataclysm_essentials:
+                    continue
             emitted.add(item_id)
             base_price = int(row.get("base_price", 1))
             row_modifier = int(price_modifier)
             if weather in {"Storm", "Blizzard"} and str(item_id) in {"sturdy_rations", "torch", "antitoxin"}:
                 row_modifier += 1
+            row_modifier += self._cataclysm_item_price_shift(cataclysm=cataclysm, item_id=item_id)
             price = self._bounded_price(base_price, row_modifier)
             availability_note = ""
             can_buy = character.money >= price
@@ -3374,6 +3536,9 @@ class GameService:
         self._require_character(character_id)
         world = self._require_world()
         world_turn = int(getattr(world, "current_turn", 0))
+        changed = self._sync_cataclysm_quest_pressure(world, world_turn=world_turn)
+        if changed and self.world_repo:
+            self.world_repo.save(world)
         quests = self._world_quests(world)
         views: list[QuestStateView] = []
         for quest_id, payload in quests.items():
@@ -3441,12 +3606,26 @@ class GameService:
     def accept_quest_intent(self, character_id: int, quest_id: str) -> ActionResult:
         character = self._require_character(character_id)
         world = self._require_world()
+        self._sync_cataclysm_quest_pressure(world, world_turn=int(getattr(world, "current_turn", 0) or 0))
         quests = self._world_quests(world)
         quest = quests.get(quest_id)
         if not isinstance(quest, dict):
             return ActionResult(messages=["That quest is not available."], game_over=False)
         if quest.get("status") != "available":
             return ActionResult(messages=[f"Quest cannot be accepted right now ({quest.get('status', 'unknown')})."], game_over=False)
+
+        required_rep = max(0, int(quest.get("requires_alliance_reputation", 0) or 0))
+        required_count = max(0, int(quest.get("requires_alliance_count", 0) or 0))
+        if required_rep > 0 and required_count > 0:
+            standings = self.faction_standings_intent(character_id)
+            qualified = sum(1 for score in standings.values() if int(score) >= required_rep)
+            if qualified < required_count:
+                return ActionResult(
+                    messages=[
+                        f"This bounty requires alliance standing {required_rep}+ with at least {required_count} factions."
+                    ],
+                    game_over=False,
+                )
 
         quest["status"] = "active"
         quest["owner_character_id"] = int(character_id)
@@ -3505,6 +3684,7 @@ class GameService:
     def turn_in_quest_intent(self, character_id: int, quest_id: str) -> ActionResult:
         character = self._require_character(character_id)
         world = self._require_world()
+        self._sync_cataclysm_quest_pressure(world, world_turn=int(getattr(world, "current_turn", 0) or 0))
         quests = self._world_quests(world)
         quest = quests.get(quest_id)
         if not isinstance(quest, dict):
@@ -3612,6 +3792,18 @@ class GameService:
                 pass
 
         self._apply_quest_completion_faction_effect(character_id, operations=operations)
+        cataclysm_reduction = self._apply_cataclysm_pushback_from_quest(
+            world,
+            quest_id=str(quest_id),
+            quest=quest,
+            character_id=int(character_id),
+        )
+        apex_resolved = self._apply_cataclysm_apex_resolution_from_quest(
+            world,
+            quest_id=str(quest_id),
+            quest=quest,
+            character_id=int(character_id),
+        )
         persisted = self._persist_character_world_atomic(character, world, operations=operations)
         if not persisted:
             self.character_repo.save(character)
@@ -3640,6 +3832,10 @@ class GameService:
             f"Turned in quest: {title}.",
             f"Rewards: +{reward_xp} XP, +{reward_money} gold.",
         ]
+        if cataclysm_reduction > 0:
+            messages.append(f"Cataclysm pushback succeeds: doomsday progress -{cataclysm_reduction}%.")
+        if apex_resolved:
+            messages.append("Apex objective completed: the cataclysm is broken and the world endures.")
         messages.extend(level_messages)
         return ActionResult(messages=messages, game_over=False)
 
@@ -3668,7 +3864,7 @@ class GameService:
                 messages=[f"{npc['name']} is off duty right now. Try again near {location_name} during daytime."],
             )
 
-        normalized_approach = (approach or "").strip().lower()
+        normalized_approach = self.dialogue_service.normalize_approach(approach)
         if normalized_approach not in {
             "friendly",
             "direct",
@@ -3677,6 +3873,10 @@ class GameService:
             "call in favor",
             "invoke faction",
             "bribe",
+            "urgent appeal",
+            "address flashpoint",
+            "make amends",
+            "leverage rumour",
         }:
             normalized_approach = "direct"
         if normalized_approach == "leverage intel" and not (
@@ -3689,6 +3889,8 @@ class GameService:
             normalized_approach = "direct"
         dominant_faction, dominant_score = self._dominant_faction_standing(character_id)
         if normalized_approach == "invoke faction" and (not dominant_faction or dominant_score < 10):
+            normalized_approach = "direct"
+        if normalized_approach == "leverage rumour" and not self.dialogue_service._has_recent_rumour(world, int(character_id)):
             normalized_approach = "direct"
 
         bribe_cost = 8
@@ -3710,6 +3912,10 @@ class GameService:
             "call in favor": "charisma",
             "invoke faction": "charisma",
             "bribe": "charisma",
+            "urgent appeal": "charisma",
+            "address flashpoint": "wisdom",
+            "make amends": "charisma",
+            "leverage rumour": "wisdom",
         }[normalized_approach]
         score = int(getattr(character, "attributes", {}).get(skill_attr, 10))
         modifier = (score - 10) // 2
@@ -3730,6 +3936,17 @@ class GameService:
             dc -= 2 + max(0, (dominant_score - 10) // 10)
         if normalized_approach == "bribe":
             dc -= 4
+        if normalized_approach == "urgent appeal":
+            dc -= 1
+        if normalized_approach == "address flashpoint":
+            if self.dialogue_service._latest_flashpoint(world) is not None:
+                dc -= 2
+            else:
+                dc += 1
+        if normalized_approach == "make amends":
+            dc += 1
+        if normalized_approach == "leverage rumour":
+            dc -= 1
         dc = max(8, min(18, dc))
 
         world_turn = getattr(world, "current_turn", 0)
@@ -3750,7 +3967,8 @@ class GameService:
             },
         )
         roll = random.Random(seed).randint(1, 20)
-        roll_total = roll + modifier
+        arc_bonus = self._consume_social_momentum_bonus(character)
+        roll_total = roll + modifier + int(arc_bonus)
         success = roll_total >= dc
 
         delta = 8 if success else -6
@@ -3764,6 +3982,14 @@ class GameService:
             delta = 9 if success else -3
         if normalized_approach == "bribe":
             delta = 10 if success else -2
+        if normalized_approach == "urgent appeal":
+            delta = 6 if success else -5
+        if normalized_approach == "address flashpoint":
+            delta = 7 if success else -4
+        if normalized_approach == "make amends":
+            delta = 9 if success else -3
+        if normalized_approach == "leverage rumour":
+            delta = 6 if success else -4
         disposition_after = max(-100, min(100, disposition_before + delta))
         self._set_npc_disposition(world, npc["id"], disposition_after)
         if npc_affinity:
@@ -3796,6 +4022,16 @@ class GameService:
                 severity="minor",
                 turn=world_turn,
             )
+
+        dialogue_notes = self.dialogue_service.record_outcome(
+            world=world,
+            character=character,
+            character_id=int(character_id),
+            npc_id=str(npc["id"]),
+            approach=normalized_approach,
+            success=bool(success),
+            world_turn=int(world_turn),
+        )
 
         if success and npc["id"] == "broker_silas":
             quests = self._world_quests(world)
@@ -3884,7 +4120,7 @@ class GameService:
             relationship_after=disposition_after,
             messages=[
                 outcome_message,
-                f"Check: d20 + {modifier} = {roll_total} vs DC {dc}",
+                f"Check: d20 + {modifier} + {int(arc_bonus)} = {roll_total} vs DC {dc}",
                 f"Relationship: {disposition_before} → {disposition_after}",
             ]
             + (
@@ -3893,8 +4129,164 @@ class GameService:
                 else []
             )
             + ([approach_note] if approach_note else [])
+            + dialogue_notes
             + story_messages,
         )
+
+    def submit_dialogue_choice_intent(self, character_id: int, npc_id: str, choice_id: str) -> SocialOutcomeView:
+        interaction = self.get_npc_interaction_intent(character_id, npc_id)
+        character = self._require_character(character_id)
+        world = self._require_world()
+        resolved = self.dialogue_service.resolve_dialogue_choice(
+            world=world,
+            character=character,
+            character_id=int(character_id),
+            npc_id=str(interaction.npc_id),
+            npc_name=str(interaction.npc_name),
+            greeting=str(interaction.greeting),
+            approaches=list(interaction.approaches or []),
+            choice_id=str(choice_id),
+        )
+        outcome = self.submit_social_approach_intent(
+            character_id=character_id,
+            npc_id=npc_id,
+            approach=str(resolved.get("approach", "direct")),
+        )
+        if not bool(resolved.get("accepted", False)):
+            outcome.messages = [str(resolved.get("reason", "Choice unavailable.")), *list(outcome.messages or [])]
+        else:
+            response = str(resolved.get("response", "")).strip()
+            if response:
+                outcome.messages = [response, *list(outcome.messages or [])]
+            effects = resolved.get("effects", [])
+            if isinstance(effects, list) and effects:
+                world_after = self._require_world()
+                character_after = self._require_character(character_id)
+                effect_notes = self._apply_dialogue_choice_effects(
+                    character=character_after,
+                    world=world_after,
+                    npc_id=str(npc_id),
+                    success=bool(outcome.success),
+                    effects=[row for row in effects if isinstance(row, dict)],
+                )
+                if effect_notes:
+                    outcome.messages = [*list(outcome.messages or []), *effect_notes]
+                self.character_repo.save(character_after)
+                if self.world_repo:
+                    self.world_repo.save(world_after)
+        return outcome
+
+    def _apply_dialogue_choice_effects(
+        self,
+        *,
+        character: Character,
+        world,
+        npc_id: str,
+        success: bool,
+        effects: list[dict],
+    ) -> list[str]:
+        notes: list[str] = []
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+        total_delta: dict[str, int] = {}
+
+        for row in effects:
+            kind = str(row.get("kind", "")).strip().lower()
+            trigger = str(row.get("on", "success")).strip().lower() or "success"
+            should_apply = trigger == "always" or (trigger == "success" and bool(success)) or (trigger == "failure" and not bool(success))
+            if not should_apply:
+                continue
+
+            if kind == "faction_heat_delta":
+                faction_id = str(row.get("faction_id", "")).strip().lower()
+                if not faction_id:
+                    continue
+                try:
+                    delta = int(row.get("delta", 0) or 0)
+                except Exception:
+                    continue
+                if delta == 0:
+                    continue
+                self._adjust_faction_heat(character, faction_id=faction_id, delta=delta)
+                total_delta[faction_id] = int(total_delta.get(faction_id, 0) or 0) + int(delta)
+                sign = "+" if delta > 0 else ""
+                notes.append(f"Pressure shift: {faction_id.replace('_', ' ')} {sign}{delta}.")
+                continue
+
+            if kind == "narrative_tension_delta":
+                try:
+                    delta = int(row.get("delta", 0) or 0)
+                except Exception:
+                    continue
+                if delta == 0:
+                    continue
+                narrative = self._world_narrative_flags(world)
+                current_tension = int(narrative.get("tension_level", 0) or 0)
+                next_tension = max(0, min(100, current_tension + delta))
+                narrative["tension_level"] = int(next_tension)
+                shift = int(next_tension) - int(current_tension)
+                if shift != 0:
+                    sign = "+" if shift > 0 else ""
+                    notes.append(f"Tension shift: {sign}{shift} (now {next_tension}).")
+                continue
+
+            if kind == "story_seed_state":
+                active_seed = self._active_story_seed(world)
+                if not isinstance(active_seed, dict):
+                    continue
+                target_kind = str(row.get("seed_kind", "")).strip().lower()
+                if target_kind and str(active_seed.get("kind", "")).strip().lower() != target_kind:
+                    continue
+
+                changed = False
+                status = str(row.get("status", "")).strip().lower()
+                if status in {"active", "simmering", "escalated", "resolved"}:
+                    if str(active_seed.get("status", "")).strip().lower() != status:
+                        active_seed["status"] = status
+                        changed = True
+                    if status == "resolved":
+                        active_seed["resolved_by"] = "dialogue_effect"
+                        active_seed["resolved_turn"] = world_turn
+
+                escalation_stage = str(row.get("escalation_stage", "")).strip().lower()
+                if escalation_stage:
+                    if str(active_seed.get("escalation_stage", "")).strip().lower() != escalation_stage:
+                        active_seed["escalation_stage"] = escalation_stage
+                        changed = True
+
+                if changed:
+                    active_seed["last_update_turn"] = world_turn
+                    status_label = str(active_seed.get("status", "active")).replace("_", " ")
+                    stage_label = str(active_seed.get("escalation_stage", "")).replace("_", " ")
+                    summary = f"Story seed state shift: {status_label}"
+                    if stage_label:
+                        summary = f"{summary} ({stage_label})"
+                    notes.append(summary)
+                continue
+
+            if kind == "consequence":
+                message = str(row.get("message", "")).strip()
+                if not message:
+                    continue
+                severity = str(row.get("severity", "normal") or "normal")
+                consequence_kind = str(row.get("consequence_kind", "dialogue_choice") or "dialogue_choice")
+                self._append_consequence(
+                    world,
+                    kind=consequence_kind,
+                    message=message,
+                    severity=severity,
+                    turn=world_turn,
+                )
+                notes.append(message)
+
+        if total_delta:
+            self._record_faction_heat_event(
+                character,
+                world_turn=world_turn,
+                reason=f"dialogue:{str(npc_id or '').strip().lower() or 'npc'}",
+                delta_by_faction=total_delta,
+            )
+
+        return notes
 
     def apply_retreat_consequence_intent(self, character_id: int) -> ActionResult:
         character = self._require_character(character_id)
@@ -4236,11 +4628,21 @@ class GameService:
 
         scene_ctx = scene or {}
         party_allies = [player, *self._active_party_companions(player)]
+        reinforcement_note = ""
+        working_enemies = list(enemies or [])
+        if world is not None:
+            reinforcement_note, working_enemies = self._apply_mid_combat_reinforcement_hook(
+                player=player,
+                enemies=working_enemies,
+                world=world,
+                world_turn=int(world_turn),
+                scene_ctx=scene_ctx,
+            )
         seed = derive_seed(
             namespace="combat.resolve.party",
             context={
                 "player_id": player.id,
-                "enemy_ids": [int(getattr(row, "id", 0) or 0) for row in enemies],
+                "enemy_ids": [int(getattr(row, "id", 0) or 0) for row in working_enemies],
                 "party_ids": [int(getattr(row, "id", 0) or 0) for row in party_allies],
                 "world_turn": world_turn,
                 "distance": scene_ctx.get("distance", "close"),
@@ -4251,12 +4653,14 @@ class GameService:
         self.combat_service.set_seed(seed)
         result = self.combat_service.fight_party_turn_based(
             allies=party_allies,
-            enemies=enemies,
+            enemies=working_enemies,
             choose_action=choose_action,
             choose_target=choose_target,
             evaluate_ai_action=evaluate_ai_action,
             scene=scene,
         )
+        if reinforcement_note:
+            self._append_party_combat_log(result, reinforcement_note)
         self._persist_party_runtime_state(player, result.allies)
         lead = next(
             (
@@ -4269,7 +4673,11 @@ class GameService:
         if lead is not None and isinstance(getattr(lead, "flags", None), dict):
             lead.flags["party_runtime_state"] = dict((getattr(player, "flags", {}) or {}).get("party_runtime_state", {}))
         if world is not None:
-            enemy_factions = [str(getattr(row, "faction_id", "") or "").strip().lower() for row in list(enemies or []) if str(getattr(row, "faction_id", "") or "").strip()]
+            enemy_factions = [
+                str(getattr(row, "faction_id", "") or "").strip().lower()
+                for row in list(working_enemies or [])
+                if str(getattr(row, "faction_id", "") or "").strip()
+            ]
             if self._apply_post_combat_morale_consequence(
                 world=world,
                 character_id=int(getattr(player, "id", 0) or 0),
@@ -4280,7 +4688,174 @@ class GameService:
                 context_key="party",
             ) and self.world_repo:
                 self.world_repo.save(world)
+            retreat_bargain_note = self._apply_mid_combat_retreat_bargaining_hook(
+                character=player,
+                world=world,
+                world_turn=int(world_turn),
+                enemy_factions=enemy_factions,
+                fled=bool(getattr(result, "fled", False)),
+                context_key="party",
+            )
+            if retreat_bargain_note:
+                self._append_party_combat_log(result, retreat_bargain_note)
+                self.character_repo.save(player)
+                if self.world_repo:
+                    self.world_repo.save(world)
         return result
+
+    @staticmethod
+    def _append_party_combat_log(result, message: str) -> None:
+        text = str(message or "").strip()
+        if not text:
+            return
+        try:
+            from rpg.application.services.combat_service import CombatLogEntry
+
+            entry = CombatLogEntry(text=text)
+        except Exception:
+            return
+        log_rows = getattr(result, "log", None)
+        if isinstance(log_rows, list):
+            log_rows.append(entry)
+
+    def _apply_mid_combat_reinforcement_hook(
+        self,
+        *,
+        player: Character,
+        enemies: list[Entity],
+        world,
+        world_turn: int,
+        scene_ctx: dict,
+    ) -> tuple[str, list[Entity]]:
+        if not enemies:
+            return "", list(enemies)
+        if len(enemies) >= 4:
+            return "", list(enemies)
+
+        lead_faction = ""
+        for enemy in enemies:
+            faction_id = str(getattr(enemy, "faction_id", "") or "").strip().lower()
+            if faction_id:
+                lead_faction = faction_id
+                break
+        if not lead_faction:
+            return "", list(enemies)
+
+        package = self._FACTION_ENCOUNTER_PACKAGES.get(lead_faction)
+        if not isinstance(package, dict):
+            return "", list(enemies)
+
+        threat = int(getattr(world, "threat_level", 0) or 0)
+        tension = int(self.dialogue_service.tension_level(world))
+        if threat < 3 and tension < 60:
+            return "", list(enemies)
+
+        seed = derive_seed(
+            namespace="combat.mid.reinforcement",
+            context={
+                "player_id": int(getattr(player, "id", 0) or 0),
+                "enemy_ids": [int(getattr(row, "id", 0) or 0) for row in enemies],
+                "enemy_faction": lead_faction,
+                "world_turn": int(world_turn),
+                "threat": int(threat),
+                "tension": int(tension),
+                "distance": str(scene_ctx.get("distance", "close")),
+                "terrain": str(scene_ctx.get("terrain", "open")),
+            },
+        )
+        chance = min(45, 8 + (threat * 3) + max(0, (tension - 50) // 5))
+        if int(seed) % 100 >= chance:
+            return "", list(enemies)
+
+        anchor = enemies[-1]
+        reinforcement_id = -int((int(world_turn) + 1) * 1000 + len(enemies) * 17 + abs(int(getattr(anchor, "id", 0) or 0)))
+        reinforcement_attack_min = max(1, int(getattr(anchor, "attack_min", 1) or 1))
+        reinforcement_attack_max = max(reinforcement_attack_min, int(getattr(anchor, "attack_max", 2) or 2) - 1)
+        reinforcement = Entity(
+            id=reinforcement_id,
+            name=f"{str(getattr(anchor, 'name', 'Enemy') or 'Enemy')} Reinforcement",
+            level=max(1, int(getattr(anchor, "level", 1) or 1)),
+            hp=max(4, int(int(getattr(anchor, "hp_max", 6) or 6) * 0.7)),
+            hp_current=max(4, int(int(getattr(anchor, "hp_max", 6) or 6) * 0.7)),
+            hp_max=max(4, int(int(getattr(anchor, "hp_max", 6) or 6) * 0.7)),
+            armour_class=max(8, int(getattr(anchor, "armour_class", 10) or 10) - 1),
+            attack_bonus=max(1, int(getattr(anchor, "attack_bonus", 2) or 2) - 1),
+            damage_die=str(getattr(anchor, "damage_die", "d4") or "d4"),
+            attack_min=reinforcement_attack_min,
+            attack_max=reinforcement_attack_max,
+            faction_id=lead_faction,
+            kind=str(getattr(anchor, "kind", "beast") or "beast"),
+            tags=list(getattr(anchor, "tags", []) or []),
+        )
+        return (
+            f"Reinforcements arrive for {lead_faction.replace('_', ' ')} forces.",
+            [*list(enemies), reinforcement],
+        )
+
+    def _apply_mid_combat_retreat_bargaining_hook(
+        self,
+        *,
+        character: Character,
+        world,
+        world_turn: int,
+        enemy_factions: list[str],
+        fled: bool,
+        context_key: str,
+    ) -> str:
+        if not bool(fled):
+            return ""
+        if int(getattr(character, "money", 0) or 0) < 5:
+            return ""
+
+        normalized_factions = sorted({str(item).strip().lower() for item in enemy_factions if str(item).strip()})
+        if not normalized_factions:
+            return ""
+
+        attributes = getattr(character, "attributes", {}) if isinstance(getattr(character, "attributes", None), dict) else {}
+        charisma = int(attributes.get("charisma", 10) or 10)
+        charisma_mod = (charisma - 10) // 2
+        seed = derive_seed(
+            namespace="combat.mid.retreat_bargain",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "world_turn": int(world_turn),
+                "enemy_factions": tuple(normalized_factions),
+                "charisma": int(charisma),
+                "context": str(context_key or "party"),
+            },
+        )
+        roll_total = (int(seed) % 20) + 1 + int(charisma_mod)
+        dc = 12 + max(0, min(3, len(normalized_factions) - 1))
+        dominant_faction = normalized_factions[0]
+
+        if int(roll_total) >= int(dc):
+            character.money = max(0, int(getattr(character, "money", 0) or 0) - 5)
+            world.threat_level = max(0, int(getattr(world, "threat_level", 0) or 0) - 1)
+            self._adjust_faction_heat(character, faction_id=dominant_faction, delta=-1)
+            self._record_faction_heat_event(
+                character,
+                world_turn=int(world_turn),
+                reason="combat_retreat_bargain",
+                delta_by_faction={dominant_faction: -1},
+            )
+            self._append_consequence(
+                world,
+                kind="combat_retreat_bargain",
+                message=f"You bribe local runners and escape cleanly from {dominant_faction.replace('_', ' ')} pursuit.",
+                severity="low",
+                turn=int(world_turn),
+            )
+            return f"Retreat bargain succeeds ({roll_total} vs DC {dc}); -5 gold, threat -1."
+
+        world.threat_level = min(20, int(getattr(world, "threat_level", 0) or 0) + 1)
+        self._append_consequence(
+            world,
+            kind="combat_retreat_bargain_failed",
+            message="Retreat bargaining fails; your route leaks and local pressure increases.",
+            severity="normal",
+            turn=int(world_turn),
+        )
+        return f"Retreat bargain fails ({roll_total} vs DC {dc}); threat +1."
 
     def _unlocked_companion_ids(self, character: Character, *, persist_defaults: bool = False) -> set[str]:
         flags = getattr(character, "flags", None)
@@ -4453,6 +5028,7 @@ class GameService:
         row = arcs.get(target_id, {})
         current_progress = int(row.get("progress", 0) or 0)
         current_trust = int(row.get("trust", 0) or 0)
+        prior_stage = str(row.get("stage", self._companion_arc_stage(current_progress)) or self._companion_arc_stage(current_progress)).strip().lower()
         next_progress = max(0, min(self._COMPANION_ARC_MAX, current_progress + delta_value))
         trust_shift = 1 if delta_value > 0 else -1
         next_trust = max(0, min(self._COMPANION_ARC_MAX, current_trust + trust_shift))
@@ -4474,7 +5050,91 @@ class GameService:
         if next_progress == current_progress:
             return ""
         direction = "deepens" if next_progress > current_progress else "frays"
-        return f"{name} bond {direction} ({current_progress} -> {next_progress})."
+        bonus_notes = self._apply_companion_arc_trigger_effects(
+            character,
+            companion_id=target_id,
+            channel=str(channel),
+            prior_stage=prior_stage,
+            next_stage=stage,
+            delta_value=int(next_progress - current_progress),
+        )
+        return " ".join(
+            [
+                f"{name} bond {direction} ({current_progress} -> {next_progress}).",
+                *[note for note in bonus_notes if str(note).strip()],
+            ]
+        ).strip()
+
+    def _apply_companion_arc_trigger_effects(
+        self,
+        character: Character,
+        *,
+        companion_id: str,
+        channel: str,
+        prior_stage: str,
+        next_stage: str,
+        delta_value: int,
+    ) -> list[str]:
+        notes: list[str] = []
+        unlocks = self._interaction_unlocks(character)
+        normalized_companion = str(companion_id or "").strip().lower()
+        normalized_channel = str(channel or "").strip().lower()
+        previous = str(prior_stage or "intro").strip().lower()
+        current = str(next_stage or "intro").strip().lower()
+
+        if previous != current and current in {"warming", "tested", "bonded"}:
+            unlock_key = f"companion_arc_stage:{normalized_companion}:{current}"
+            if not bool(unlocks.get(unlock_key)):
+                unlocks[unlock_key] = True
+                notes.append(f"Arc unlock gained: {current.title()} insights.")
+
+        if int(delta_value) <= 0:
+            return notes
+
+        if normalized_channel == "explore":
+            flags = getattr(character, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                character.flags = flags
+            current_surprise = str(flags.get("next_explore_surprise", "") or "").strip().lower()
+            if current_surprise != "player":
+                flags["next_explore_surprise"] = "player"
+                notes.append("Companion scouting grants player surprise for the next explore encounter.")
+        elif normalized_channel == "social":
+            flags = getattr(character, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                character.flags = flags
+            effects = flags.setdefault("companion_arc_effects", {})
+            if not isinstance(effects, dict):
+                effects = {}
+                flags["companion_arc_effects"] = effects
+            charges = max(0, int(effects.get("social_momentum", 0) or 0))
+            next_charges = min(3, charges + 1)
+            effects["social_momentum"] = next_charges
+            if next_charges > charges:
+                notes.append("Companion momentum: your next social check gains +1.")
+        elif normalized_channel == "faction":
+            faction_id, faction_score = self._dominant_faction_heat(character)
+            if faction_id and int(faction_score) > 0:
+                self._adjust_faction_heat(character, faction_id=faction_id, delta=-1)
+                notes.append(f"Companion mediation cools {faction_id.replace('_', ' ')} pressure by 1.")
+
+        return notes
+
+    @staticmethod
+    def _consume_social_momentum_bonus(character: Character) -> int:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            return 0
+        effects = flags.get("companion_arc_effects", {})
+        if not isinstance(effects, dict):
+            return 0
+        charges = max(0, int(effects.get("social_momentum", 0) or 0))
+        if charges <= 0:
+            return 0
+        effects["social_momentum"] = max(0, charges - 1)
+        return 1
 
     def _companion_arc_lines(self, character: Character) -> list[str]:
         unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
@@ -4677,12 +5337,13 @@ class GameService:
         location_name: str,
         world_threat: int = 0,
     ) -> str:
-        _ = character
-        _ = world_turn
-        _ = context_key
-        _ = location_name
-        _ = world_threat
-        return ""
+        return self._roll_companion_lead_discovery_legacy(
+            character,
+            world_turn=int(world_turn),
+            context_key=str(context_key),
+            location_name=str(location_name),
+            world_threat=int(world_threat),
+        )
 
     def _roll_companion_lead_discovery_legacy(
         self,
@@ -4741,8 +5402,7 @@ class GameService:
         return f"A rare lead surfaces: you hear {name} was seen nearby."
 
     def get_companion_leads_intent(self, character_id: int) -> list[str]:
-        _ = self._require_character(character_id)
-        return []
+        return self.get_companion_leads_intent_legacy(character_id)
 
     def get_companion_leads_intent_legacy(self, character_id: int) -> list[str]:
         character = self._require_character(character_id)
@@ -5190,6 +5850,7 @@ class GameService:
         unlocked_ids = self._unlocked_companion_ids(character)
         lane_overrides = self._party_lane_overrides(character)
         runtime_state = self._party_runtime_state(character)
+        outcomes = self._companion_arc_outcomes(character)
 
         rows: list[dict[str, str | bool]] = []
         for companion_id in sorted(unlocked_ids):
@@ -5203,6 +5864,7 @@ class GameService:
             slots_current = int((payload.get("spell_slots_current") if isinstance(payload, dict) else slots_max) or slots_max)
             slots_current = max(0, min(slots_max, slots_current))
             lane = lane_overrides.get(companion_id, "auto")
+            locked_distance = str(outcomes.get(companion_id, "") or "").strip().lower() == "distance"
 
             status = f"HP {hp_current}/{hp_max}"
             if slots_max > 0:
@@ -5213,8 +5875,8 @@ class GameService:
                     "name": display_name,
                     "active": companion_id in active_ids,
                     "unlocked": True,
-                    "recruitable": True,
-                    "gate_note": "",
+                    "recruitable": not locked_distance,
+                    "gate_note": "Arc outcome: Distant (cannot assign active party)." if locked_distance else "",
                     "lane": lane,
                     "status": status,
                 }
@@ -5230,6 +5892,14 @@ class GameService:
         unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
         if bool(active) and normalized not in unlocked_ids:
             return ActionResult(messages=["Companion is not recruited yet."], game_over=False)
+
+        outcomes = self._companion_arc_outcomes(character)
+        if bool(active) and str(outcomes.get(normalized, "") or "").strip().lower() == "distance":
+            name = str(self._COMPANION_TEMPLATES[normalized].get("name", normalized.replace("_", " ").title()))
+            return ActionResult(
+                messages=[f"{name} remains distant and refuses active deployment."],
+                game_over=False,
+            )
 
         flags = getattr(character, "flags", None)
         if not isinstance(flags, dict):
@@ -5991,6 +6661,446 @@ class GameService:
             world.flags["rumour_history"] = rows
         return rows
 
+    @classmethod
+    def _world_cataclysm_state(cls, world) -> dict[str, object]:
+        if world is None:
+            return {
+                "active": False,
+                "kind": "",
+                "phase": "",
+                "progress": 0,
+                "seed": 0,
+                "started_turn": 0,
+                "last_advance_turn": 0,
+                "summary": "",
+            }
+
+        if not isinstance(getattr(world, "flags", None), dict):
+            world.flags = {}
+        raw = world.flags.setdefault("cataclysm_state", {})
+        if not isinstance(raw, dict):
+            raw = {}
+            world.flags["cataclysm_state"] = raw
+
+        active = bool(raw.get("active", False))
+        kind = str(raw.get("kind", "") or "").strip().lower()
+        if kind not in cls._CATACLYSM_KINDS:
+            kind = ""
+        phase = str(raw.get("phase", "") or "").strip().lower()
+        if phase not in cls._CATACLYSM_PHASES:
+            phase = ""
+        progress = max(0, min(100, int(raw.get("progress", 0) or 0)))
+        seed = max(0, int(raw.get("seed", 0) or 0))
+        started_turn = max(0, int(raw.get("started_turn", 0) or 0))
+        last_advance_turn = max(0, int(raw.get("last_advance_turn", 0) or 0))
+
+        if not active:
+            kind = ""
+            phase = ""
+            progress = 0
+
+        phase_label = phase.replace("_", " ").title() if phase else ""
+        kind_label = kind.replace("_", " ").title() if kind else ""
+        summary = f"{kind_label} — {phase_label} ({progress}%)" if active and kind and phase else ""
+
+        normalized = {
+            "active": active,
+            "kind": kind,
+            "phase": phase,
+            "progress": progress,
+            "seed": seed,
+            "started_turn": started_turn,
+            "last_advance_turn": last_advance_turn,
+            "summary": summary,
+        }
+        world.flags["cataclysm_state"] = {
+            "active": bool(normalized["active"]),
+            "kind": str(normalized["kind"]),
+            "phase": str(normalized["phase"]),
+            "progress": int(normalized["progress"]),
+            "seed": int(normalized["seed"]),
+            "started_turn": int(normalized["started_turn"]),
+            "last_advance_turn": int(normalized["last_advance_turn"]),
+        }
+        return normalized
+
+    @staticmethod
+    def _world_cataclysm_end_state(world) -> dict[str, object]:
+        if world is None:
+            return {
+                "status": "",
+                "game_over": False,
+                "message": "",
+                "resolved_turn": 0,
+            }
+        if not isinstance(getattr(world, "flags", None), dict):
+            world.flags = {}
+        raw = world.flags.setdefault("cataclysm_end_state", {})
+        if not isinstance(raw, dict):
+            raw = {}
+            world.flags["cataclysm_end_state"] = raw
+        status = str(raw.get("status", "") or "").strip().lower()
+        if status not in {"", "resolved_victory", "world_fell"}:
+            status = ""
+        message = str(raw.get("message", "") or "")
+        resolved_turn = max(0, int(raw.get("resolved_turn", 0) or 0))
+        game_over = bool(raw.get("game_over", False)) or status == "world_fell"
+        normalized = {
+            "status": status,
+            "game_over": bool(game_over),
+            "message": message,
+            "resolved_turn": int(resolved_turn),
+        }
+        world.flags["cataclysm_end_state"] = {
+            "status": str(normalized["status"]),
+            "game_over": bool(normalized["game_over"]),
+            "message": str(normalized["message"]),
+            "resolved_turn": int(normalized["resolved_turn"]),
+        }
+        return normalized
+
+    def _resolve_cataclysm_terminal_state(self, world) -> dict[str, object]:
+        end_state = self._world_cataclysm_end_state(world)
+        if str(end_state.get("status", "") or ""):
+            return end_state
+
+        state = self._world_cataclysm_state(world)
+        if bool(state.get("active", False)) and str(state.get("phase", "") or "") == "ruin":
+            raw_progress = state.get("progress", 0)
+            progress = int(raw_progress if isinstance(raw_progress, (int, float, str)) else 0)
+            if progress >= 100:
+                world_turn = int(getattr(world, "current_turn", 0) or 0)
+                raw = world.flags.setdefault("cataclysm_end_state", {}) if isinstance(getattr(world, "flags", None), dict) else {}
+                if isinstance(raw, dict):
+                    raw["status"] = "world_fell"
+                    raw["game_over"] = True
+                    raw["message"] = "Game Over — The World Fell"
+                    raw["resolved_turn"] = int(world_turn)
+                self._append_consequence(
+                    world,
+                    kind="cataclysm_world_fell",
+                    message="Ruin reaches its apex. Game Over — The World Fell.",
+                    severity="critical",
+                    turn=world_turn,
+                )
+        return self._world_cataclysm_end_state(world)
+
+    @classmethod
+    def _cataclysm_quest_templates(cls, cataclysm: dict[str, object]) -> tuple[dict[str, object], ...]:
+        kind = str(cataclysm.get("kind", "") or "")
+        phase = str(cataclysm.get("phase", "") or "")
+        return (
+            {
+                "quest_id": "cataclysm_scout_front",
+                "status": "available",
+                "objective_kind": "kill_any",
+                "progress": 0,
+                "target": 3,
+                "reward_xp": 26,
+                "reward_money": 12,
+                "cataclysm_pushback": True,
+                "pushback_tier": 1,
+                "pushback_focus": kind,
+                "phase": phase,
+            },
+            {
+                "quest_id": "cataclysm_supply_lines",
+                "status": "available",
+                "objective_kind": "travel_count",
+                "progress": 0,
+                "target": 2,
+                "reward_xp": 24,
+                "reward_money": 14,
+                "cataclysm_pushback": True,
+                "pushback_tier": 1,
+                "pushback_focus": kind,
+                "phase": phase,
+            },
+            {
+                "quest_id": "cataclysm_alliance_accord",
+                "status": "available",
+                "objective_kind": "kill_any",
+                "progress": 0,
+                "target": 4,
+                "reward_xp": 34,
+                "reward_money": 18,
+                "cataclysm_pushback": True,
+                "pushback_tier": 2,
+                "pushback_focus": kind,
+                "phase": phase,
+                "requires_alliance_reputation": 10,
+                "requires_alliance_count": 2,
+            },
+            {
+                "quest_id": "cataclysm_apex_clash",
+                "status": "available",
+                "objective_kind": "kill_any",
+                "progress": 0,
+                "target": 1,
+                "reward_xp": 50,
+                "reward_money": 25,
+                "cataclysm_pushback": True,
+                "pushback_tier": 3,
+                "pushback_focus": kind,
+                "phase": phase,
+                "is_apex_objective": True,
+            },
+        )
+
+    def _sync_cataclysm_quest_pressure(self, world, *, world_turn: int) -> bool:
+        quests = self._world_quests(world)
+        cataclysm = self._world_cataclysm_state(world)
+        changed = False
+
+        if not bool(cataclysm.get("active", False)):
+            removable = [
+                quest_id
+                for quest_id, payload in quests.items()
+                if isinstance(payload, dict)
+                and bool(payload.get("cataclysm_pushback", False))
+                and str(payload.get("status", "")) == "available"
+            ]
+            for quest_id in removable:
+                quests.pop(quest_id, None)
+                changed = True
+            return changed
+
+        for quest_id in list(quests.keys()):
+            payload = quests.get(quest_id)
+            if not isinstance(payload, dict):
+                continue
+            if bool(payload.get("cataclysm_pushback", False)):
+                continue
+            if str(payload.get("status", "")) == "available":
+                quests.pop(quest_id, None)
+                changed = True
+
+        raw_seed = cataclysm.get("seed", 1)
+        seed_base = max(1, int(raw_seed if isinstance(raw_seed, (int, float, str)) else 1))
+        for row in self._cataclysm_quest_templates(cataclysm):
+            quest_id = str(row.get("quest_id", "") or "")
+            if not quest_id:
+                continue
+            if quest_id == "cataclysm_apex_clash":
+                raw_progress = cataclysm.get("progress", 0)
+                progress = int(raw_progress if isinstance(raw_progress, (int, float, str)) else 0)
+                alliance = quests.get("cataclysm_alliance_accord")
+                alliance_complete = isinstance(alliance, dict) and str(alliance.get("status", "")) in {
+                    "ready_to_turn_in",
+                    "completed",
+                }
+                if progress > int(self._CATACLYSM_APEX_PROGRESS_THRESHOLD) and not alliance_complete:
+                    continue
+            existing = quests.get(quest_id)
+            if isinstance(existing, dict) and str(existing.get("status", "")) in {
+                "active",
+                "ready_to_turn_in",
+                "completed",
+                "failed",
+            }:
+                continue
+            seed_value = derive_seed(
+                namespace="quest.cataclysm.template",
+                context={
+                    "cataclysm_seed": int(seed_base),
+                    "quest_id": quest_id,
+                    "kind": str(cataclysm.get("kind", "") or ""),
+                    "phase": str(cataclysm.get("phase", "") or ""),
+                },
+            )
+            payload = dict(row)
+            payload["seed_key"] = f"quest:{quest_id}:{int(seed_value)}"
+            payload["spawned_turn"] = int(world_turn)
+            quests[quest_id] = payload
+            changed = True
+        return changed
+
+    def _apply_cataclysm_pushback_from_quest(self, world, *, quest_id: str, quest: dict, character_id: int) -> int:
+        if not isinstance(quest, dict) or not bool(quest.get("cataclysm_pushback", False)):
+            return 0
+        state = self._world_cataclysm_state(world)
+        if not bool(state.get("active", False)):
+            return 0
+        tier = max(1, int(quest.get("pushback_tier", 1) or 1))
+        raw_state_seed = state.get("seed", 0)
+        state_seed = int(raw_state_seed if isinstance(raw_state_seed, (int, float, str)) else 0)
+        seed = derive_seed(
+            namespace="quest.cataclysm.pushback",
+            context={
+                "quest_id": str(quest_id or "unknown"),
+                "character_id": int(character_id),
+                "cataclysm_seed": state_seed,
+                "kind": str(state.get("kind", "") or ""),
+                "phase": str(state.get("phase", "") or ""),
+                "world_turn": int(getattr(world, "current_turn", 0) or 0),
+                "tier": int(tier),
+            },
+        )
+        rng = random.Random(seed)
+        base = 4 if tier <= 1 else 7
+        reduction = max(1, int(base + rng.randint(0, 2)))
+        raw_progress = state.get("progress", 0)
+        current = max(0, min(100, int(raw_progress if isinstance(raw_progress, (int, float, str)) else 0)))
+        updated = max(0, current - reduction)
+        state["progress"] = int(updated)
+        raw_state = world.flags.setdefault("cataclysm_state", {}) if isinstance(getattr(world, "flags", None), dict) else {}
+        if isinstance(raw_state, dict):
+            raw_state["progress"] = int(updated)
+            raw_state["last_pushback_turn"] = int(getattr(world, "current_turn", 0) or 0)
+            raw_state["last_pushback_quest"] = str(quest_id)
+        if updated <= 0:
+            state["active"] = False
+            state["phase"] = ""
+            state["kind"] = ""
+            if isinstance(raw_state, dict):
+                raw_state["active"] = False
+                raw_state["phase"] = ""
+                raw_state["kind"] = ""
+        self._append_consequence(
+            world,
+            kind="cataclysm_pushback_quest",
+            message=f"Quest pressure relief slows the cataclysm by {int(reduction)}%.",
+            severity="normal",
+            turn=int(getattr(world, "current_turn", 0) or 0),
+        )
+        return int(reduction)
+
+    def _apply_cataclysm_apex_resolution_from_quest(self, world, *, quest_id: str, quest: dict, character_id: int) -> bool:
+        if str(quest_id or "") != "cataclysm_apex_clash":
+            return False
+        if not isinstance(quest, dict) or not bool(quest.get("is_apex_objective", False)):
+            return False
+        state = self._world_cataclysm_state(world)
+        if not bool(state.get("active", False)):
+            return False
+
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+        raw_state = world.flags.setdefault("cataclysm_state", {}) if isinstance(getattr(world, "flags", None), dict) else {}
+        if isinstance(raw_state, dict):
+            raw_state["active"] = False
+            raw_state["kind"] = ""
+            raw_state["phase"] = ""
+            raw_state["progress"] = 0
+            raw_state["last_pushback_quest"] = str(quest_id)
+            raw_state["last_pushback_turn"] = int(world_turn)
+
+        raw_end = world.flags.setdefault("cataclysm_end_state", {}) if isinstance(getattr(world, "flags", None), dict) else {}
+        if isinstance(raw_end, dict):
+            raw_end["status"] = "resolved_victory"
+            raw_end["game_over"] = False
+            raw_end["message"] = "Cataclysm resolved — The world endures."
+            raw_end["resolved_turn"] = int(world_turn)
+            raw_end["resolved_by_character_id"] = int(character_id)
+
+        self._append_consequence(
+            world,
+            kind="cataclysm_apex_resolved",
+            message="The apex threat is broken before ruin claims the world.",
+            severity="critical",
+            turn=world_turn,
+        )
+        return True
+
+    @classmethod
+    def _cataclysm_encounter_modifiers(cls, world) -> tuple[int, int, str | None]:
+        state = cls._world_cataclysm_state(world)
+        if not bool(state.get("active", False)):
+            return 0, 0, None
+        phase = str(state.get("phase", "") or "")
+        kind = str(state.get("kind", "") or "")
+        level_delta = int(cls._CATACLYSM_PHASE_ENCOUNTER_LEVEL_DELTA.get(phase, 0) or 0)
+        max_delta = int(cls._CATACLYSM_PHASE_ENCOUNTER_MAX_DELTA.get(phase, 0) or 0)
+        bias = cls._CATACLYSM_KIND_ENCOUNTER_BIAS.get(kind)
+        return level_delta, max_delta, bias
+
+    @classmethod
+    def _cataclysm_rest_corruption_loss(cls, world_before, *, context: str) -> int:
+        state = cls._world_cataclysm_state(world_before)
+        if not bool(state.get("active", False)):
+            return 0
+        phase = str(state.get("phase", "") or "")
+        base_loss = int(cls._CATACLYSM_PHASE_REST_CORRUPTION.get(phase, 0) or 0)
+        if str(context or "").lower() == "short_rest":
+            return max(0, base_loss - 1)
+        return base_loss
+
+    def _apply_cataclysm_rest_corruption(self, character: Character, *, world_before, context: str) -> int:
+        corruption_loss = self._cataclysm_rest_corruption_loss(world_before, context=context)
+        applied_loss = min(max(0, int(corruption_loss)), max(0, int(getattr(character, "hp_current", 1) or 1) - 1))
+        if applied_loss > 0:
+            character.hp_current = max(1, int(getattr(character, "hp_current", 1) or 1) - applied_loss)
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        flags["last_rest_penalty"] = {
+            "context": str(context or "rest"),
+            "hp_loss": int(applied_loss),
+        }
+        return int(applied_loss)
+
+    @staticmethod
+    def _last_rest_corruption_message(character: Character) -> str:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            return ""
+        row = flags.get("last_rest_penalty", {})
+        if not isinstance(row, dict):
+            return ""
+        hp_loss = max(0, int(row.get("hp_loss", 0) or 0))
+        if hp_loss <= 0:
+            return ""
+        return f"Cataclysm corruption lingers after rest: -{hp_loss} HP."
+
+    @classmethod
+    def _cataclysm_camp_risk_shift(cls, world_before) -> int:
+        state = cls._world_cataclysm_state(world_before)
+        if not bool(state.get("active", False)):
+            return 0
+        phase = str(state.get("phase", "") or "")
+        return int(cls._CATACLYSM_PHASE_CAMP_RISK_SHIFT.get(phase, 0) or 0)
+
+    @classmethod
+    def _cataclysm_travel_day_shift(cls, cataclysm: dict[str, object]) -> int:
+        if not bool(cataclysm.get("active", False)):
+            return 0
+        phase = str(cataclysm.get("phase", "") or "")
+        return int(cls._CATACLYSM_PHASE_TRAVEL_DAY_SHIFT.get(phase, 0) or 0)
+
+    @staticmethod
+    def _apply_cataclysm_travel_risk_hint(risk_hint: str, cataclysm: dict[str, object]) -> str:
+        if not bool(cataclysm.get("active", False)):
+            return str(risk_hint or "")
+        order = ["Low", "Moderate", "High"]
+        current = str(risk_hint or "Low").title()
+        if current not in order:
+            current = "Moderate"
+        index = min(len(order) - 1, order.index(current) + 1)
+        return order[index]
+
+    @staticmethod
+    def _cataclysm_route_note(*, road_days: int, cataclysm: dict[str, object]) -> str:
+        note = f"Route estimate: {int(road_days)} day(s) by road."
+        if not bool(cataclysm.get("active", False)):
+            return note
+        phase = str(cataclysm.get("phase", "") or "").replace("_", " ")
+        kind = str(cataclysm.get("kind", "") or "").replace("_", " ")
+        return f"{note} Cataclysm pressure ({kind}, {phase}) destabilizes routes."
+
+    @staticmethod
+    def _cataclysm_item_price_shift(*, cataclysm: dict[str, object], item_id: str) -> int:
+        if not bool(cataclysm.get("active", False)):
+            return 0
+        kind = str(cataclysm.get("kind", "") or "")
+        normalized_item = str(item_id or "").strip().lower()
+        if kind == "plague" and normalized_item in {"antitoxin", "healing_herbs", "sturdy_rations"}:
+            return 1
+        if kind == "tyrant" and normalized_item in {"whetstone", "rope", "torch"}:
+            return 1
+        if kind == "demon_king" and normalized_item in {"torch", "antitoxin"}:
+            return 1
+        return 0
+
     def _append_consequence(self, world, *, kind: str, message: str, severity: str, turn: int) -> None:
         rows = self._world_consequences(world)
         rows.append(
@@ -6331,9 +7441,13 @@ class GameService:
         effective_max = max(1, int(base_max_enemies))
         if pressure >= 60:
             effective_max += 1
-        effective_max = min(3, effective_max)
+        cat_level_delta, cat_max_delta, cat_bias = self._cataclysm_encounter_modifiers(world)
+        effective_level = max(1, int(effective_level) + int(cat_level_delta))
+        effective_max = min(3, int(effective_max) + int(cat_max_delta))
 
         effective_bias = flashpoint_bias if pressure >= 45 and flashpoint_bias else base_faction_bias
+        if cat_bias:
+            effective_bias = cat_bias
         return effective_level, effective_max, effective_bias
 
     def _latest_flashpoint_bias_faction(self, world) -> str | None:
@@ -6797,11 +7911,15 @@ class GameService:
         standings = self.faction_standings_intent(character_id)
         best = max(int(score) for score in standings.values()) if standings else 0
         heat_penalty = max(0, self._faction_heat_pressure(character))
+        world = self.world_repo.load_default() if self.world_repo else None
+        cataclysm = self._world_cataclysm_state(world)
+        phase = str(cataclysm.get("phase", "") or "")
+        cat_surcharge = int(self._CATACLYSM_PHASE_TOWN_PRICE_SURCHARGE.get(phase, 0) or 0) if bool(cataclysm.get("active", False)) else 0
         if 5 <= best < 10:
-            return max(-1, -1 + heat_penalty)
+            return max(-1, -1 + heat_penalty) + cat_surcharge
         if -10 < best <= -5:
-            return 1 + heat_penalty
-        return calculate_price_modifier(best) + heat_penalty
+            return 1 + heat_penalty + cat_surcharge
+        return calculate_price_modifier(best) + heat_penalty + cat_surcharge
 
     @staticmethod
     def _interaction_unlocks(character: Character) -> dict:
@@ -7293,6 +8411,19 @@ class GameService:
             character.xp = xp_before
 
             if combat_result.fled:
+                retreat_note = self._apply_mid_combat_retreat_bargaining_hook(
+                    character=character,
+                    world=world,
+                    world_turn=int(world_turn),
+                    enemy_factions=[str(getattr(monster, "faction_id", "") or "").strip().lower()],
+                    fled=True,
+                    context_key="explore",
+                )
+                if retreat_note:
+                    self.character_repo.save(character)
+                    if self.world_repo:
+                        self.world_repo.save(world)
+                    return f"You disengage and escape the encounter. {retreat_note}".strip()
                 return "You disengage and escape the encounter."
 
             if combat_result.player_won or int(getattr(combat_result.enemy, "hp_current", 0) or 0) <= 0:

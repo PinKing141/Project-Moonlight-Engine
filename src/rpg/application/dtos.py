@@ -40,6 +40,11 @@ class GameLoopView:
     threat_level: int | None
     time_label: str = ""
     weather_label: str = ""
+    cataclysm_active: bool = False
+    cataclysm_kind: str = ""
+    cataclysm_phase: str = ""
+    cataclysm_progress: int = 0
+    cataclysm_summary: str = ""
 
 
 @dataclass
@@ -198,6 +203,11 @@ class TownView:
     pressure_lines: List[str] = field(default_factory=list)
     time_label: str = ""
     weather_label: str = ""
+    cataclysm_active: bool = False
+    cataclysm_kind: str = ""
+    cataclysm_phase: str = ""
+    cataclysm_progress: int = 0
+    cataclysm_summary: str = ""
 
 
 @dataclass
@@ -217,6 +227,25 @@ class NpcInteractionView:
     @disposition.setter
     def disposition(self, value: int) -> None:
         self.relationship = int(value)
+
+
+@dataclass
+class DialogueChoiceView:
+    choice_id: str
+    label: str
+    available: bool
+    locked_reason: str = ""
+
+
+@dataclass
+class DialogueSessionView:
+    npc_id: str
+    npc_name: str
+    stage_id: str
+    greeting: str
+    choices: List[DialogueChoiceView] = field(default_factory=list)
+    challenge_progress: int = 0
+    challenge_target: int = 3
 
 
 @dataclass

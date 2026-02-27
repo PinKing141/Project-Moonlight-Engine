@@ -143,6 +143,11 @@ def _render_town_header(town_view) -> None:
     time_label = str(getattr(town_view, "time_label", "") or "")
     weather_label = str(getattr(town_view, "weather_label", "") or "Unknown")
     consequences = list(town_view.consequences or [])
+    if bool(getattr(town_view, "cataclysm_active", False)):
+        cat_kind = str(getattr(town_view, "cataclysm_kind", "") or "").replace("_", " ").title()
+        cat_phase = str(getattr(town_view, "cataclysm_phase", "") or "").replace("_", " ").title()
+        cat_progress = int(getattr(town_view, "cataclysm_progress", 0) or 0)
+        consequences = [f"Cataclysm Watch: {cat_kind} in {cat_phase} ({cat_progress}%)."] + consequences
 
     if _CONSOLE is not None and Panel is not None and Table is not None:
         header = Table.grid(padding=(0, 1))
@@ -758,6 +763,25 @@ def run_game_loop(game_service, character_id: int):
             _prompt_continue()
             break
 
+        terminal = None
+        try:
+            terminal = game_service.get_cataclysm_terminal_state_intent(character_id)
+        except Exception:
+            terminal = None
+        if terminal is not None:
+            game_over, message = terminal
+            if message:
+                clear_screen()
+                _render_message_panel(
+                    "Cataclysm",
+                    [str(message)],
+                    border_style=_BORDER_LOOP,
+                    panel_key="loop",
+                )
+                _prompt_continue()
+            if game_over:
+                break
+
         pending_level_up = None
         try:
             pending_level_up = game_service.get_level_up_pending_intent(character_id)
@@ -805,6 +829,8 @@ def run_game_loop(game_service, character_id: int):
             if view.world_turn is not None
             else "Day ? – Threat: Unknown | Time Unknown | Weather: Unknown"
         )
+        if bool(getattr(view, "cataclysm_active", False)) and str(getattr(view, "cataclysm_summary", "") or "").strip():
+            world_line = f"{world_line} | DOOMSDAY: {str(view.cataclysm_summary)}"
         _render_loop_header(
             context=context,
             view=view,
@@ -1010,29 +1036,57 @@ def _run_town(game_service, character_id: int):
             continue
 
         selected_npc = town_view.npcs[npc_choice]
-        interaction = game_service.get_npc_interaction_intent(character_id, selected_npc.id)
+        while True:
+            interaction = game_service.get_npc_interaction_intent(character_id, selected_npc.id)
+            session = game_service.get_dialogue_session_intent(character_id, selected_npc.id)
 
-        clear_screen()
-        _render_npc_interaction_header(interaction)
-        _render_message_panel(
-            "NPC Greeting",
-            [interaction.greeting],
-            border_style=_BORDER_SOCIAL,
-            panel_key="npc",
-        )
-        approach_choice = arrow_menu(
-            "Choose Approach",
-            interaction.approaches + ["Back"],
-        )
-        if approach_choice in {-1, len(interaction.approaches)}:
-            continue
+            clear_screen()
+            _render_npc_interaction_header(interaction)
+            stage_name = str(getattr(session, "stage_id", "opening") or "opening").strip().title()
+            challenge_line = ""
+            progress = int(getattr(session, "challenge_progress", 0) or 0)
+            target = int(getattr(session, "challenge_target", 3) or 3)
+            if target > 0 and progress >= 0:
+                challenge_line = f"Challenge Progress: {progress}/{target}"
+            _render_message_panel(
+                f"Dialogue — {stage_name}",
+                [session.greeting] + ([challenge_line] if challenge_line else []),
+                border_style=_BORDER_SOCIAL,
+                panel_key="npc",
+            )
 
-        approach = interaction.approaches[approach_choice]
-        outcome = game_service.submit_social_approach_intent(character_id, selected_npc.id, approach)
-        clear_screen()
-        _render_social_result_header(outcome)
-        _render_message_panel("Social Outcome", list(outcome.messages or []), border_style=_BORDER_SOCIAL, panel_key="social")
-        _prompt_continue()
+            options = []
+            choice_rows = list(getattr(session, "choices", []) or [])
+            for row in choice_rows:
+                label = str(getattr(row, "label", "Direct") or "Direct")
+                if not bool(getattr(row, "available", False)):
+                    lock_hint = str(getattr(row, "locked_reason", "Locked") or "Locked")
+                    options.append(f"{label} [Locked: {lock_hint}]")
+                else:
+                    options.append(label)
+            options.append("Back")
+
+            dialogue_choice = arrow_menu("Choose Dialogue", options)
+            if dialogue_choice in {-1, len(options) - 1}:
+                break
+
+            selected_choice = choice_rows[dialogue_choice]
+            if not bool(getattr(selected_choice, "available", False)):
+                reason = str(getattr(selected_choice, "locked_reason", "Choice is unavailable.") or "Choice is unavailable.")
+                clear_screen()
+                _render_message_panel("Dialogue Locked", [reason], border_style=_BORDER_SOCIAL, panel_key="social")
+                _prompt_continue()
+                continue
+
+            outcome = game_service.submit_dialogue_choice_intent(
+                character_id,
+                selected_npc.id,
+                str(getattr(selected_choice, "choice_id", "direct") or "direct"),
+            )
+            clear_screen()
+            _render_social_result_header(outcome)
+            _render_message_panel("Social Outcome", list(outcome.messages or []), border_style=_BORDER_SOCIAL, panel_key="social")
+            _prompt_continue()
 
 
 def _run_pressure_relief(game_service, character_id: int) -> None:
@@ -1109,10 +1163,16 @@ def _run_codex(game_service, character_id: int) -> None:
 def _run_rumour_board(game_service, character_id: int):
     board = game_service.get_rumour_board_intent(character_id)
     context = game_service.get_location_context_intent(character_id)
+    loop_view = game_service.get_game_loop_view(character_id)
     town_name = context.current_location_name or "Town"
     clear_screen()
     _render_rumour_board_header(board, town_name)
     lines: list[str] = []
+    if bool(getattr(loop_view, "cataclysm_active", False)):
+        kind = str(getattr(loop_view, "cataclysm_kind", "") or "").replace("_", " ").title()
+        phase = str(getattr(loop_view, "cataclysm_phase", "") or "").replace("_", " ").title()
+        progress = int(getattr(loop_view, "cataclysm_progress", 0) or 0)
+        lines.append(f"Doomsday Bulletin: {kind} — {phase} ({progress}%).")
     if not board.items:
         lines.append(board.empty_state_hint or "No useful rumours today.")
     else:

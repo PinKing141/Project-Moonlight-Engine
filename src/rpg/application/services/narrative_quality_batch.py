@@ -414,6 +414,7 @@ def simulate_arc(seed: int, script: Sequence[str] = DEFAULT_SCRIPT) -> dict:
 
     world = service._require_world()
     narrative = world.flags.get("narrative", {}) if isinstance(world.flags, dict) else {}
+    cataclysm_end = world.flags.get("cataclysm_end_state", {}) if isinstance(world.flags, dict) else {}
     injections = narrative.get("injections", []) if isinstance(narrative, dict) else []
     story_seeds = narrative.get("story_seeds", []) if isinstance(narrative, dict) else []
     major_events = narrative.get("major_events", []) if isinstance(narrative, dict) else []
@@ -444,6 +445,9 @@ def simulate_arc(seed: int, script: Sequence[str] = DEFAULT_SCRIPT) -> dict:
         "story_seed_active": int(active),
         "major_event_count": len([row for row in major_events if isinstance(row, dict)]),
         "rumour_signature": tuple(rumour_ids),
+        "cataclysm_end_status": str(cataclysm_end.get("status", "") if isinstance(cataclysm_end, dict) else ""),
+        "cataclysm_world_fell": bool(cataclysm_end.get("game_over", False)) if isinstance(cataclysm_end, dict) else False,
+        "cataclysm_end_message": str(cataclysm_end.get("message", "") if isinstance(cataclysm_end, dict) else ""),
     }
     semantic_score, semantic_band = semantic_arc_score(summary=summary)
     summary["semantic_arc_score"] = int(semantic_score)

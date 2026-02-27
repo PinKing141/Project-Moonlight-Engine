@@ -42,8 +42,18 @@ def main_menu(game_service: GameService) -> None:
     session_character_id: int | None = None
 
     while True:
+        menu_title = "Realm of Broken Stars"
+        if session_character_id is not None:
+            try:
+                loop_view = game_service.get_game_loop_view(session_character_id)
+                if bool(getattr(loop_view, "cataclysm_active", False)):
+                    summary = str(getattr(loop_view, "cataclysm_summary", "") or "").strip()
+                    if summary:
+                        menu_title = f"Realm of Broken Stars — DOOMSDAY: {summary}"
+            except Exception:
+                pass
         choice_idx = arrow_menu(
-            "Realm of Broken Stars",
+            menu_title,
             options,
             initial_enter_guard_seconds=0.35,
         )

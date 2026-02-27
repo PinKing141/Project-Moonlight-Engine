@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,11 @@ class ReferenceWorldDataset:
     relations_matrix: dict[str, dict[str, str]]
     biome_rows: list[dict[str, object]]
     biome_severity_index: dict[str, int]
+    burg_rows: list[dict[str, object]]
+    marker_rows: list[dict[str, object]]
+    religion_rows: list[dict[str, object]]
+    river_rows: list[dict[str, object]]
+    route_rows: list[dict[str, object]]
 
 
 def _slugify(value: str) -> str:
@@ -89,7 +95,7 @@ def _load_states(state_rows: list[dict[str, str]]) -> dict[str, dict[str, object
             "full_name": str(row.get("Full Name", "") or "").strip(),
             "capital": str(row.get("Capital", "") or "").strip(),
             "culture": str(row.get("Culture", "") or "").strip(),
-            "population": _parse_int(row.get("Population"), default=0),
+            "population": _parse_int(row.get("Population") or row.get("Total Population"), default=0),
         }
     return mapped
 
@@ -105,8 +111,8 @@ def _load_provinces(province_rows: list[dict[str, str]]) -> dict[str, list[dict[
             {
                 "id": _parse_int(row.get("Id"), default=0),
                 "province": str(row.get("Province", "") or "").strip(),
-                "province_full_name": str(row.get("Province Full Name", "") or "").strip(),
-                "population": _parse_int(row.get("Population"), default=0),
+                "province_full_name": str(row.get("Province Full Name") or row.get("Full Name") or "").strip(),
+                "population": _parse_int(row.get("Population") or row.get("Total Population"), default=0),
             }
         )
     for rows in grouped.values():
@@ -186,6 +192,141 @@ def _load_biomes(biome_rows: list[dict[str, str]]) -> list[dict[str, object]]:
     return rows
 
 
+def _load_burgs(burg_rows: list[dict[str, str]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in burg_rows:
+        name = str(row.get("Burg", "") or "").strip()
+        if not name:
+            continue
+        rows.append(
+            {
+                "id": _parse_int(row.get("Id"), default=0),
+                "burg": name,
+                "state": str(row.get("State", "") or "").strip(),
+                "state_slug": _slugify(str(row.get("State", "") or "")),
+                "province": str(row.get("Province", "") or "").strip(),
+                "population": _parse_int(row.get("Population"), default=0),
+                "group": str(row.get("Group", "") or "").strip(),
+                "capital": str(row.get("Capital", "") or "").strip(),
+                "port": str(row.get("Port", "") or "").strip(),
+                "culture": str(row.get("Culture", "") or "").strip(),
+                "religion": str(row.get("Religion", "") or "").strip(),
+                "x": _parse_float(row.get("X"), default=0.0),
+                "y": _parse_float(row.get("Y"), default=0.0),
+            }
+        )
+    rows.sort(key=lambda item: int(item.get("id", 0) or 0))
+    return rows
+
+
+def _load_markers(marker_rows: list[dict[str, str]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in marker_rows:
+        marker_type = str(row.get("Type", "") or "").strip()
+        name = str(row.get("Name", "") or "").strip()
+        if not marker_type and not name:
+            continue
+        rows.append(
+            {
+                "id": _parse_int(row.get("Id"), default=0),
+                "type": marker_type,
+                "icon": str(row.get("Icon", "") or "").strip(),
+                "name": name,
+                "note": str(row.get("Note", "") or "").strip(),
+                "x": _parse_float(row.get("X"), default=0.0),
+                "y": _parse_float(row.get("Y"), default=0.0),
+                "latitude": _parse_float(row.get("Latitude"), default=0.0),
+                "longitude": _parse_float(row.get("Longitude"), default=0.0),
+            }
+        )
+    rows.sort(key=lambda item: int(item.get("id", 0) or 0))
+    return rows
+
+
+def _load_religions(religion_rows: list[dict[str, str]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in religion_rows:
+        name = str(row.get("Name", "") or "").strip()
+        if not name:
+            continue
+        rows.append(
+            {
+                "id": _parse_int(row.get("Id"), default=0),
+                "name": name,
+                "type": str(row.get("Type", "") or "").strip(),
+                "form": str(row.get("Form", "") or "").strip(),
+                "supreme_deity": str(row.get("Supreme Deity", "") or "").strip(),
+                "believers": _parse_int(row.get("Believers"), default=0),
+                "expansionism": _parse_float(row.get("Expansionism"), default=0.0),
+            }
+        )
+    rows.sort(key=lambda item: int(item.get("id", 0) or 0))
+    return rows
+
+
+def _load_rivers(river_rows: list[dict[str, str]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in river_rows:
+        name = str(row.get("River", "") or "").strip()
+        if not name:
+            continue
+        rows.append(
+            {
+                "id": _parse_int(row.get("Id"), default=0),
+                "river": name,
+                "type": str(row.get("Type", "") or "").strip(),
+                "discharge": str(row.get("Discharge", "") or "").strip(),
+                "length": str(row.get("Length", "") or "").strip(),
+                "width": str(row.get("Width", "") or "").strip(),
+                "basin": str(row.get("Basin", "") or "").strip(),
+            }
+        )
+    rows.sort(key=lambda item: int(item.get("id", 0) or 0))
+    return rows
+
+
+def _load_routes(route_rows: list[dict[str, str]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in route_rows:
+        name = str(row.get("Route", "") or "").strip()
+        if not name:
+            continue
+        rows.append(
+            {
+                "id": _parse_int(row.get("Id"), default=0),
+                "route": name,
+                "group": str(row.get("Group", "") or "").strip(),
+                "length": str(row.get("Length", "") or "").strip(),
+            }
+        )
+    rows.sort(key=lambda item: int(item.get("id", 0) or 0))
+    return rows
+
+
+def _load_from_unified_json(unified_json_path: Path) -> ReferenceWorldDataset | None:
+    try:
+        payload = json.loads(unified_json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    dataset = payload.get("dataset") if isinstance(payload, dict) else None
+    if not isinstance(dataset, dict):
+        return None
+    return ReferenceWorldDataset(
+        source_files=dict(dataset.get("source_files", {}) or {}),
+        states_by_slug=dict(dataset.get("states_by_slug", {}) or {}),
+        provinces_by_state_slug=dict(dataset.get("provinces_by_state_slug", {}) or {}),
+        military_by_state_slug=dict(dataset.get("military_by_state_slug", {}) or {}),
+        relations_matrix=dict(dataset.get("relations_matrix", {}) or {}),
+        biome_rows=list(dataset.get("biome_rows", []) or []),
+        biome_severity_index=dict(dataset.get("biome_severity_index", {}) or {}),
+        burg_rows=list(dataset.get("burg_rows", []) or []),
+        marker_rows=list(dataset.get("marker_rows", []) or []),
+        religion_rows=list(dataset.get("religion_rows", []) or []),
+        river_rows=list(dataset.get("river_rows", []) or []),
+        route_rows=list(dataset.get("route_rows", []) or []),
+    )
+
+
 def _build_biome_severity_index(biome_rows: list[dict[str, object]]) -> dict[str, int]:
     if not biome_rows:
         return {}
@@ -208,8 +349,18 @@ def _build_biome_severity_index(biome_rows: list[dict[str, object]]) -> dict[str
 
 
 def load_reference_world_dataset(reference_dir: Path | None = None) -> ReferenceWorldDataset:
-    resolved_reference_dir = Path(reference_dir) if reference_dir is not None else Path(__file__).resolve().parents[4] / "reference_"
+    resolved_reference_dir = (
+        Path(reference_dir)
+        if reference_dir is not None
+        else Path(__file__).resolve().parents[4] / "data" / "reference_world"
+    )
     files = discover_reference_files(resolved_reference_dir)
+
+    if not files:
+        unified_path = resolved_reference_dir / "unified_reference_world.json"
+        loaded = _load_from_unified_json(unified_path)
+        if loaded is not None:
+            return loaded
 
     states = _load_states(_read_csv_rows(files["states"])) if "states" in files else {}
     provinces = _load_provinces(_read_csv_rows(files["provinces"])) if "provinces" in files else {}
@@ -217,6 +368,11 @@ def load_reference_world_dataset(reference_dir: Path | None = None) -> Reference
     relations = _load_relations_matrix(files["relations"]) if "relations" in files else {}
     biome_rows = _load_biomes(_read_csv_rows(files["biomes"])) if "biomes" in files else []
     biome_severity = _build_biome_severity_index(biome_rows)
+    burg_rows = _load_burgs(_read_csv_rows(files["burgs"])) if "burgs" in files else []
+    marker_rows = _load_markers(_read_csv_rows(files["markers"])) if "markers" in files else []
+    religion_rows = _load_religions(_read_csv_rows(files["religions"])) if "religions" in files else []
+    river_rows = _load_rivers(_read_csv_rows(files["rivers"])) if "rivers" in files else []
+    route_rows = _load_routes(_read_csv_rows(files["routes"])) if "routes" in files else []
 
     source_files = {key: str(path) for key, path in files.items()}
     return ReferenceWorldDataset(
@@ -227,4 +383,9 @@ def load_reference_world_dataset(reference_dir: Path | None = None) -> Reference
         relations_matrix=relations,
         biome_rows=biome_rows,
         biome_severity_index=biome_severity,
+        burg_rows=burg_rows,
+        marker_rows=marker_rows,
+        religion_rows=religion_rows,
+        river_rows=river_rows,
+        route_rows=route_rows,
     )

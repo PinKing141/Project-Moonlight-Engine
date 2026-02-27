@@ -270,6 +270,187 @@ class GameServiceTests(unittest.TestCase):
         self.assertIn("Climbing Kit", names)
         self.assertIn("Antitoxin", names)
 
+    def test_cataclysm_state_is_normalized_and_persisted_on_read(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=3)
+        world = world_repo.load_default()
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "unknown_kind",
+            "phase": "invalid_phase",
+            "progress": 177,
+            "seed": -3,
+            "started_turn": -1,
+            "last_advance_turn": -9,
+        }
+
+        normalized = GameService._world_cataclysm_state(world)
+        self.assertTrue(bool(normalized["active"]))
+        self.assertEqual("", str(normalized["kind"]))
+        self.assertEqual("", str(normalized["phase"]))
+        self.assertEqual(100, int(normalized["progress"]))
+        self.assertEqual(0, int(normalized["seed"]))
+        self.assertEqual(0, int(normalized["started_turn"]))
+        self.assertEqual(0, int(normalized["last_advance_turn"]))
+
+        persisted = world.flags.get("cataclysm_state", {})
+        self.assertIsInstance(persisted, dict)
+        self.assertEqual(100, int(persisted.get("progress", 0) or 0))
+
+    def test_game_loop_and_town_views_surface_cataclysm_summary(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=3)
+        world = world_repo.load_default()
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "plague",
+            "phase": "grip_tightens",
+            "progress": 48,
+            "seed": 1234,
+            "started_turn": 4,
+            "last_advance_turn": 7,
+        }
+        world_repo.save(world)
+
+        character = Character(id=99, name="Rhea", location_id=1)
+        character_repo = InMemoryCharacterRepository({99: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        loop_view = service.get_game_loop_view(99)
+        self.assertTrue(loop_view.cataclysm_active)
+        self.assertEqual("plague", loop_view.cataclysm_kind)
+        self.assertEqual("grip_tightens", loop_view.cataclysm_phase)
+        self.assertEqual(48, int(loop_view.cataclysm_progress))
+        self.assertIn("Plague", loop_view.cataclysm_summary)
+
+        town_view = service.get_town_view_intent(99)
+        self.assertTrue(town_view.cataclysm_active)
+        self.assertEqual("plague", town_view.cataclysm_kind)
+        self.assertEqual("grip_tightens", town_view.cataclysm_phase)
+        self.assertEqual(48, int(town_view.cataclysm_progress))
+        self.assertIn("Grip Tightens", town_view.cataclysm_summary)
+
+    def test_cataclysm_quest_pushback_reduction_is_deterministic(self) -> None:
+        def _build_world_repo(seed: int) -> InMemoryWorldRepository:
+            repo = InMemoryWorldRepository(seed=seed)
+            world = repo.load_default()
+            world.current_turn = 9
+            world.flags["cataclysm_state"] = {
+                "active": True,
+                "kind": "demon_king",
+                "phase": "grip_tightens",
+                "progress": 64,
+                "seed": 9102,
+                "started_turn": 3,
+                "last_advance_turn": 8,
+            }
+            repo.save(world)
+            return repo
+
+        quest_payload = {
+            "cataclysm_pushback": True,
+            "pushback_tier": 2,
+        }
+
+        service_a = self._build_service(
+            character_repo=InMemoryCharacterRepository({1: Character(id=1, name="A", location_id=1)}),
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=_build_world_repo(seed=302),
+        )
+        service_b = self._build_service(
+            character_repo=InMemoryCharacterRepository({1: Character(id=1, name="A", location_id=1)}),
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=_build_world_repo(seed=302),
+        )
+
+        world_a = service_a.world_repo.load_default()
+        world_b = service_b.world_repo.load_default()
+        reduction_a = service_a._apply_cataclysm_pushback_from_quest(
+            world_a,
+            quest_id="cataclysm_alliance_accord",
+            quest=dict(quest_payload),
+            character_id=1,
+        )
+        reduction_b = service_b._apply_cataclysm_pushback_from_quest(
+            world_b,
+            quest_id="cataclysm_alliance_accord",
+            quest=dict(quest_payload),
+            character_id=1,
+        )
+
+        self.assertEqual(reduction_a, reduction_b)
+        self.assertEqual(
+            int(world_a.flags.get("cataclysm_state", {}).get("progress", 0) or 0),
+            int(world_b.flags.get("cataclysm_state", {}).get("progress", 0) or 0),
+        )
+
+    def test_cataclysm_apex_objective_spawns_at_threshold(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=401)
+        world = world_repo.load_default()
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "tyrant",
+            "phase": "map_shrinks",
+            "progress": 20,
+            "seed": 2201,
+            "started_turn": 3,
+            "last_advance_turn": world.current_turn,
+        }
+        world_repo.save(world)
+
+        character = Character(id=501, name="Vale", location_id=1)
+        service = self._build_service(
+            character_repo=InMemoryCharacterRepository({character.id: character}),
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        board = service.get_quest_board_intent(character.id)
+        quest_ids = {row.quest_id for row in board.quests}
+
+        self.assertIn("cataclysm_apex_clash", quest_ids)
+
+    def test_world_fell_end_state_persists_and_surfaces_terminal_intent(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=402)
+        world = world_repo.load_default()
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "demon_king",
+            "phase": "ruin",
+            "progress": 100,
+            "seed": 2202,
+            "started_turn": 2,
+            "last_advance_turn": world.current_turn,
+        }
+        world_repo.save(world)
+
+        character = Character(id=502, name="Vale", location_id=1)
+        service = self._build_service(
+            character_repo=InMemoryCharacterRepository({character.id: character}),
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        terminal = service.get_cataclysm_terminal_state_intent(character.id)
+        self.assertIsNotNone(terminal)
+        game_over, message = terminal or (False, "")
+        self.assertTrue(game_over)
+        self.assertIn("World Fell", message)
+
+        saved_world = world_repo.load_default()
+        end_state = saved_world.flags.get("cataclysm_end_state", {})
+        self.assertEqual("world_fell", str(end_state.get("status", "")))
+        self.assertTrue(bool(end_state.get("game_over", False)))
+
     def test_hazard_resolution_consumes_matching_utility_item(self) -> None:
         world_repo = InMemoryWorldRepository(seed=4)
         character = Character(id=31, name="Nia", location_id=1, hp_current=12, hp_max=12)
@@ -746,6 +927,39 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual(2, level)
         self.assertEqual(2, max_enemies)
         self.assertEqual("wild", bias)
+
+    def test_cataclysm_phase_applies_explore_encounter_pressure(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=201)
+        world = world_repo.load_default()
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "tyrant",
+            "phase": "ruin",
+            "progress": 96,
+            "seed": 122,
+            "started_turn": 5,
+            "last_advance_turn": world.current_turn,
+        }
+        world_repo.save(world)
+
+        character = Character(id=401, name="Rin", location_id=1, level=2)
+        service = self._build_service(
+            character_repo=InMemoryCharacterRepository({character.id: character}),
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Frontier", factions=["wild"])}),
+            world_repo=world_repo,
+        )
+
+        level, max_enemies, bias = service._encounter_flashpoint_adjustments(
+            world,
+            base_player_level=2,
+            base_max_enemies=2,
+            base_faction_bias="wild",
+        )
+
+        self.assertEqual(4, level)
+        self.assertEqual(3, max_enemies)
+        self.assertEqual("the_crown", bias)
 
     def test_faction_heat_pressure_raises_travel_risk_hint(self) -> None:
         character = Character(id=50, name="Dane", location_id=1, level=1)
@@ -1372,6 +1586,46 @@ class GameServiceTests(unittest.TestCase):
         self.assertGreaterEqual(int(saved.hp_current), 6)
         self.assertTrue(any("campfire" in line.lower() for line in result.messages))
 
+    def test_rest_and_camp_surface_cataclysm_corruption_penalties(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=144)
+        world = world_repo.load_default()
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "plague",
+            "phase": "map_shrinks",
+            "progress": 72,
+            "seed": 456,
+            "started_turn": 6,
+            "last_advance_turn": world.current_turn,
+        }
+        world_repo.save(world)
+
+        rest_character = Character(id=182, name="Ari", location_id=1, hp_current=8, hp_max=20)
+        camp_character = Character(id=183, name="Ari", location_id=1, hp_current=8, hp_max=20)
+        camp_character.inventory = ["Sturdy Rations"]
+
+        rest_service = self._build_service(
+            character_repo=InMemoryCharacterRepository({rest_character.id: rest_character}),
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+        camp_service = self._build_service(
+            character_repo=InMemoryCharacterRepository({camp_character.id: camp_character}),
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Deep Wild", biome="forest")}),
+            world_repo=InMemoryWorldRepository(seed=144),
+        )
+        camp_world = camp_service.world_repo.load_default()
+        camp_world.flags["cataclysm_state"] = dict(world.flags["cataclysm_state"])
+        camp_service.world_repo.save(camp_world)
+
+        rest_result = rest_service.rest_intent(rest_character.id)
+        camp_result = camp_service.submit_camp_activity_intent(camp_character.id, "watch")
+
+        self.assertTrue(any("corruption" in line.lower() for line in rest_result.messages))
+        self.assertTrue(any("corruption" in line.lower() for line in camp_result.messages))
+
     def test_shop_after_hours_label_applies_at_night(self) -> None:
         world_repo = InMemoryWorldRepository(seed=44)
         world = world_repo.load_default()
@@ -1390,6 +1644,44 @@ class GameServiceTests(unittest.TestCase):
         shop = service.get_shop_view_intent(character.id)
 
         self.assertIn("after-hours", str(shop.price_modifier_label).lower())
+
+    def test_cataclysm_pressure_affects_shop_inventory_and_routes(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=188)
+        world = world_repo.load_default()
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "demon_king",
+            "phase": "ruin",
+            "progress": 100,
+            "seed": 999,
+            "started_turn": 2,
+            "last_advance_turn": world.current_turn,
+        }
+        world_repo.save(world)
+
+        character = Character(id=190, name="Ari", location_id=1, money=200)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        location_repo = InMemoryLocationRepository(
+            {
+                1: Location(id=1, name="Town", x=0.0, y=0.0),
+                2: Location(id=2, name="Far Wild", biome="forest", x=0.0, y=0.0),
+            }
+        )
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        shop = service.get_shop_view_intent(character.id)
+        destinations = service.get_travel_destinations_intent(character.id)
+
+        item_ids = {item.item_id for item in shop.items}
+        self.assertIn("cataclysm strain", str(shop.price_modifier_label).lower())
+        self.assertNotIn("climbing_kit", item_ids)
+        self.assertGreaterEqual(len(destinations), 1)
+        self.assertTrue(any("cataclysm pressure" in destination.route_note.lower() for destination in destinations))
 
     def test_short_rest_recovers_less_than_long_rest(self) -> None:
         world_repo = InMemoryWorldRepository(seed=47)

@@ -133,6 +133,130 @@ class WorldProgressionTests(unittest.TestCase):
         self.assertEqual(1, len(events))
         self.assertEqual(3, events[0].turn_after)
 
+    def test_cataclysm_clock_advances_phase_with_turns(self) -> None:
+        world_repo = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        bus = EventBus()
+        progression = WorldProgression(world_repo, entity_repo, bus)
+
+        world_repo.world.flags = {
+            "cataclysm_state": {
+                "active": True,
+                "kind": "plague",
+                "phase": "whispers",
+                "progress": 0,
+                "seed": 111,
+                "started_turn": 0,
+                "last_advance_turn": 0,
+            }
+        }
+
+        progression.tick(world_repo.world, ticks=30)
+        state = world_repo.world.flags.get("cataclysm_state", {})
+        self.assertGreater(int(state.get("progress", 0) or 0), 0)
+        self.assertIn(str(state.get("phase", "")), {"whispers", "grip_tightens", "map_shrinks", "ruin"})
+
+    def test_cataclysm_clock_is_deterministic_for_same_state(self) -> None:
+        repo_a = _StubWorldRepository()
+        repo_b = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        bus_a = EventBus()
+        bus_b = EventBus()
+        progression_a = WorldProgression(repo_a, entity_repo, bus_a)
+        progression_b = WorldProgression(repo_b, entity_repo, bus_b)
+
+        state = {
+            "active": True,
+            "kind": "tyrant",
+            "phase": "whispers",
+            "progress": 8,
+            "seed": 222,
+            "started_turn": 0,
+            "last_advance_turn": 0,
+        }
+        repo_a.world.flags = {"cataclysm_state": dict(state)}
+        repo_b.world.flags = {"cataclysm_state": dict(state)}
+
+        progression_a.tick(repo_a.world, ticks=25)
+        progression_b.tick(repo_b.world, ticks=25)
+
+        self.assertEqual(
+            repo_a.world.flags.get("cataclysm_state", {}),
+            repo_b.world.flags.get("cataclysm_state", {}),
+        )
+
+    def test_cataclysm_clock_applies_slowdown_and_rollback_buffers(self) -> None:
+        world_repo = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        bus = EventBus()
+        progression = WorldProgression(world_repo, entity_repo, bus)
+
+        world_repo.world.flags = {
+            "cataclysm_state": {
+                "active": True,
+                "kind": "demon_king",
+                "phase": "grip_tightens",
+                "progress": 40,
+                "seed": 333,
+                "started_turn": 0,
+                "last_advance_turn": 0,
+                "slowdown_ticks": 4,
+                "rollback_buffer": 8,
+            }
+        }
+
+        progression.tick(world_repo.world, ticks=1)
+        state = world_repo.world.flags.get("cataclysm_state", {})
+        self.assertLessEqual(int(state.get("progress", 0) or 0), 40)
+        self.assertLess(int(state.get("slowdown_ticks", 0) or 0), 4)
+
+    def test_cataclysm_clock_uses_biome_severity_pressure_for_escalation(self) -> None:
+        high_repo = _StubWorldRepository()
+        low_repo = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        progression_high = WorldProgression(high_repo, entity_repo, EventBus())
+        progression_low = WorldProgression(low_repo, entity_repo, EventBus())
+
+        base_state = {
+            "active": True,
+            "kind": "plague",
+            "phase": "whispers",
+            "progress": 0,
+            "seed": 444,
+            "started_turn": 0,
+            "last_advance_turn": 0,
+        }
+        high_repo.world.flags = {
+            "cataclysm_focus_biome": "glacier",
+            "cataclysm_state": dict(base_state),
+        }
+        low_repo.world.flags = {
+            "cataclysm_focus_biome": "temperate_deciduous_forest",
+            "cataclysm_state": dict(base_state),
+        }
+
+        dataset = type(
+            "Dataset",
+            (),
+            {
+                "biome_severity_index": {
+                    "glacier": 95,
+                    "temperate_deciduous_forest": 20,
+                }
+            },
+        )()
+
+        progression_high._REFERENCE_WORLD_DATASET_CACHE.clear()
+        progression_low._REFERENCE_WORLD_DATASET_CACHE.clear()
+
+        with unittest.mock.patch.object(WorldProgression, "_load_reference_world_dataset_cached", return_value=dataset):
+            progression_high.tick(high_repo.world, ticks=12)
+            progression_low.tick(low_repo.world, ticks=12)
+
+        high_progress = int(high_repo.world.flags.get("cataclysm_state", {}).get("progress", 0) or 0)
+        low_progress = int(low_repo.world.flags.get("cataclysm_state", {}).get("progress", 0) or 0)
+        self.assertGreater(high_progress, low_progress)
+
 
 if __name__ == "__main__":
     unittest.main()
