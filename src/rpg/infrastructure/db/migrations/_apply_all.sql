@@ -13,3 +13,7 @@ SOURCE ./010_add_world_flag_and_progression_tables.sql;
 SOURCE ./011_seed_factions.sql;
 SOURCE ./012_add_entity_tags.sql;
 SOURCE ./013_seed_new_consumables.sql;
+SOURCE ./014_add_character_inventory_flags_json.sql;
+SOURCE ./015_expand_faction_roster.sql;
+SOURCE ./016_seed_taklamakan_locations.sql;
+SOURCE ./017_seed_conclave_of_colours.sql;

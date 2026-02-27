@@ -26,6 +26,24 @@ _BORDER_CHARACTER = "yellow"
 _BORDER_EQUIPMENT = "green"
 
 
+def _threat_descriptor(threat_level) -> str:
+    if threat_level is None:
+        return "Unknown"
+    try:
+        normalized = int(threat_level)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if normalized <= 1:
+        return "Safe"
+    if normalized == 2:
+        return "Guarded"
+    if normalized == 3:
+        return "Frontier"
+    if normalized == 4:
+        return "Perilous"
+    return "Lawless"
+
+
 def _ornate_title(title: str, panel_key: str = "") -> str:
     core = str(title or "").strip() or "Panel"
     return f"[bold yellow]{core}[/bold yellow]"
@@ -84,7 +102,8 @@ def _render_message_panel(
         print(row)
 
 
-def _render_loop_header(context, view, descriptor: str, diff_label: str, world_line: str) -> None:
+def _render_loop_header(context, view, descriptor: str, diff_label: str, world_line: str, party_lines: list[str] | None = None) -> None:
+    party_lines = [str(line) for line in list(party_lines or []) if str(line).strip()]
     if _CONSOLE is not None and Panel is not None and Table is not None:
         header = Table.grid(padding=(0, 1))
         header.add_column(style="bold yellow", justify="right")
@@ -94,6 +113,8 @@ def _render_loop_header(context, view, descriptor: str, diff_label: str, world_l
         header.add_row("Adventurer", f"{view.name} the {descriptor}")
         header.add_row("Difficulty", diff_label.title())
         header.add_row("HP", f"{view.hp_current}/{view.hp_max}")
+        if party_lines:
+            header.add_row("Party", "\n".join(f"- {line}" for line in party_lines))
         _CONSOLE.print(
             Panel.fit(
                 header,
@@ -109,11 +130,15 @@ def _render_loop_header(context, view, descriptor: str, diff_label: str, world_l
     print(f"{world_line}")
     print(f"Location: {context.current_location_name}")
     print(f"{view.name} the {descriptor} | Difficulty: {diff_label.title()} | HP: {view.hp_current}/{view.hp_max}")
+    if party_lines:
+        print("Party:")
+        for line in party_lines:
+            print(f"- {line}")
 
 
 def _render_town_header(town_view) -> None:
     day = town_view.day if town_view.day is not None else "?"
-    threat = town_view.threat_level if town_view.threat_level is not None else "?"
+    threat = _threat_descriptor(town_view.threat_level)
     location_name = str(getattr(town_view, "location_name", "") or "Town")
     consequences = list(town_view.consequences or [])
 
@@ -157,8 +182,9 @@ def _render_town_header(town_view) -> None:
             print(f"- {line}")
 
 
-def _render_faction_standings(standings, empty_state_hint: str = "") -> None:
+def _render_faction_standings(standings, descriptions=None, empty_state_hint: str = "") -> None:
     clear_screen()
+    descriptions = descriptions or {}
     if _CONSOLE is not None and Panel is not None and Table is not None:
         if not standings:
             _CONSOLE.print(
@@ -174,8 +200,9 @@ def _render_faction_standings(standings, empty_state_hint: str = "") -> None:
         table = Table(show_header=True, header_style="bold yellow")
         table.add_column("Faction")
         table.add_column("Score", justify="right")
+        table.add_column("Description")
         for faction_id, score in standings.items():
-            table.add_row(str(faction_id), str(score))
+            table.add_row(str(faction_id), str(score), str(descriptions.get(str(faction_id), "")))
         _CONSOLE.print(
             Panel.fit(
                 table,
@@ -192,7 +219,11 @@ def _render_faction_standings(standings, empty_state_hint: str = "") -> None:
         print(empty_state_hint or "No standings tracked yet.")
     else:
         for faction_id, score in standings.items():
-            print(f"- {faction_id}: {score}")
+            description = str(descriptions.get(str(faction_id), "") or "").strip()
+            if description:
+                print(f"- {faction_id}: {score} — {description}")
+            else:
+                print(f"- {faction_id}: {score}")
 
 
 def _render_shop_header(shop, location_name: str = "Town") -> None:
@@ -499,6 +530,112 @@ def _render_equipment_view(equipment_view) -> None:
         print(f"- {row.name} ({slot}) {state}".rstrip())
 
 
+def _run_party_management(game_service, character_id: int, character_name: str) -> None:
+    while True:
+        rows = list(game_service.get_party_management_intent(character_id) or [])
+        active_count, max_count = game_service.get_party_capacity_intent(character_id)
+        capacity_label = f"Active companions: {active_count}/{max_count}"
+        if active_count >= max_count:
+            capacity_label = f"{capacity_label} (Full)"
+        lines = [capacity_label, ""]
+        options = []
+        for row in rows:
+            unlocked = bool(row.get("unlocked", False))
+            if unlocked:
+                status = "Active" if bool(row.get("active")) else "Reserve"
+                lane = str(row.get("lane", "auto") or "auto").title()
+                text = f"{row.get('name', 'Companion')} [{status}] — {row.get('status', '')} — Lane {lane}"
+            else:
+                recruitable = bool(row.get("recruitable", False))
+                lock_state = "Recruitable" if recruitable else "Locked"
+                gate_note = str(row.get("gate_note", "") or "").strip()
+                text = f"{row.get('name', 'Companion')} [{lock_state}]"
+                if gate_note:
+                    text = f"{text} — {gate_note}"
+            lines.append(text)
+            options.append(text)
+        if not options:
+            clear_screen()
+            _render_message_panel(
+                "Party",
+                ["No companions are available right now."],
+                border_style=_BORDER_CHARACTER,
+                panel_key="character",
+            )
+            _prompt_continue()
+            return
+
+        clear_screen()
+        _render_message_panel("Party", lines, border_style=_BORDER_CHARACTER, panel_key="character")
+        options.append("Back")
+        selected = arrow_menu(f"Party — {character_name}", options)
+        if selected in {-1, len(options) - 1}:
+            return
+
+        chosen = rows[selected]
+        companion_id = str(chosen.get("companion_id", "") or "")
+        companion_name = str(chosen.get("name", "Companion") or "Companion")
+        active = bool(chosen.get("active"))
+        unlocked = bool(chosen.get("unlocked", False))
+
+        if not unlocked:
+            recruitable = bool(chosen.get("recruitable", False))
+            recruit_label = "Recruit" if recruitable else "Recruit (Locked)"
+            sub_choice = arrow_menu(f"Party Member — {companion_name}", [recruit_label, "Back"])
+            if sub_choice in {-1, 1}:
+                continue
+            result = game_service.recruit_companion_intent(character_id, companion_id)
+            clear_screen()
+            _render_message_panel("Party", list(result.messages or []), border_style=_BORDER_CHARACTER, panel_key="character")
+            _prompt_continue()
+            continue
+
+        while True:
+            lane = str(chosen.get("lane", "auto") or "auto").lower()
+            lane_options = ["Auto", "Vanguard", "Rearguard"]
+            lane_idx = 0
+            if lane == "vanguard":
+                lane_idx = 1
+            elif lane == "rearguard":
+                lane_idx = 2
+
+            active_count, max_count = game_service.get_party_capacity_intent(character_id)
+            can_activate = active or active_count < max_count
+            activate_label = "Deactivate" if active else ("Activate" if can_activate else "Activate (Party Full)")
+
+            sub_options = [
+                activate_label,
+                f"Lane: {lane_options[lane_idx]}",
+                "Back",
+            ]
+            sub_choice = arrow_menu(f"Party Member — {companion_name}", sub_options)
+            if sub_choice in {-1, 2}:
+                break
+            if sub_choice == 0:
+                if not active and not can_activate:
+                    clear_screen()
+                    _render_message_panel(
+                        "Party",
+                        [f"Party is full ({active_count}/{max_count}). Deactivate a companion first."],
+                        border_style=_BORDER_CHARACTER,
+                        panel_key="character",
+                    )
+                    _prompt_continue()
+                    continue
+                result = game_service.set_party_companion_active_intent(character_id, companion_id, not active)
+                clear_screen()
+                _render_message_panel("Party", list(result.messages or []), border_style=_BORDER_CHARACTER, panel_key="character")
+                _prompt_continue()
+                break
+
+            next_lane = lane_options[(lane_idx + 1) % len(lane_options)].lower()
+            result = game_service.set_party_companion_lane_intent(character_id, companion_id, next_lane)
+            clear_screen()
+            _render_message_panel("Party", list(result.messages or []), border_style=_BORDER_CHARACTER, panel_key="character")
+            _prompt_continue()
+            break
+
+
 def _render_combat_round(round_view) -> None:
     clear_screen()
     if _CONSOLE is not None and Panel is not None and Table is not None:
@@ -630,10 +767,11 @@ def run_game_loop(game_service, character_id: int):
             title_bits.append(view.class_name.title())
         descriptor = " ".join(title_bits) if title_bits else "Adventurer"
         diff_label = view.difficulty or "normal"
+        threat_label = _threat_descriptor(view.threat_level)
         world_line = (
-            f"Day {view.world_turn} – Threat: {view.threat_level}"
+            f"Day {view.world_turn} – Threat: {threat_label}"
             if view.world_turn is not None
-            else "Day ? – Threat: ?"
+            else "Day ? – Threat: Unknown"
         )
         _render_loop_header(
             context=context,
@@ -641,6 +779,7 @@ def run_game_loop(game_service, character_id: int):
             descriptor=descriptor,
             diff_label=diff_label,
             world_line=world_line,
+            party_lines=game_service.get_party_status_intent(character_id),
         )
         recovery_note = game_service.get_recovery_status_intent(character_id)
         if recovery_note:
@@ -688,8 +827,8 @@ def run_game_loop(game_service, character_id: int):
 
         elif choice == 3:
             while True:
-                char_choice = arrow_menu(f"Character — {view.name}", ["View Sheet", "Quest Journal", "Equipment", "Back"])
-                if char_choice in {-1, 3}:
+                char_choice = arrow_menu(f"Character — {view.name}", ["View Sheet", "Quest Journal", "Equipment", "Party", "Companion Leads", "Back"])
+                if char_choice in {-1, 5}:
                     break
                 if char_choice == 0:
                     character_sheet = game_service.get_character_sheet_intent(character_id)
@@ -700,6 +839,12 @@ def run_game_loop(game_service, character_id: int):
                     journal = game_service.get_quest_journal_intent(character_id)
                     _render_quest_journal(journal)
                     _prompt_continue()
+                    continue
+                if char_choice == 3:
+                    _run_party_management(game_service, character_id, view.name)
+                    continue
+                if char_choice == 4:
+                    _run_companion_leads(game_service, character_id)
                     continue
 
                 while True:
@@ -781,7 +926,11 @@ def _run_town(game_service, character_id: int):
             continue
         if choice == 6:
             standings_view = game_service.get_faction_standings_view_intent(character_id)
-            _render_faction_standings(standings_view.standings, standings_view.empty_state_hint)
+            _render_faction_standings(
+                standings_view.standings,
+                standings_view.descriptions,
+                standings_view.empty_state_hint,
+            )
             _prompt_continue()
             continue
 
@@ -818,6 +967,15 @@ def _run_town(game_service, character_id: int):
         _render_social_result_header(outcome)
         _render_message_panel("Social Outcome", list(outcome.messages or []), border_style=_BORDER_SOCIAL, panel_key="social")
         _prompt_continue()
+
+
+def _run_companion_leads(game_service, character_id: int) -> None:
+    lines = list(game_service.get_companion_leads_intent(character_id) or [])
+    if not lines:
+        lines = ["No companion intelligence has been recorded yet."]
+    clear_screen()
+    _render_message_panel("Companion Leads", lines, border_style=_BORDER_CHARACTER, panel_key="character")
+    _prompt_continue()
 
 
 def _run_rumour_board(game_service, character_id: int):
@@ -1024,50 +1182,110 @@ def _run_explore(game_service, character_id: int):
         return
 
     player = character
-    player_survived = True
+    scene = _generate_scene()
+    clear_screen()
+    lines = [
+        game_service.encounter_intro_intent(enemies[0]),
+        _scene_flavour(scene, verbosity=game_service.get_combat_verbosity()),
+        f"Hostiles: {', '.join(f'{enemy.name} ({enemy.hp_current}/{enemy.hp_max})' for enemy in enemies)}",
+    ]
+    _render_message_panel("Encounter", lines, border_style=_BORDER_LOOP, panel_key="loop")
+    _prompt_continue("Press ENTER to start combat...")
 
-    for idx, enemy in enumerate(enemies, start=1):
-        intro = game_service.encounter_intro_intent(enemy)
-        scene = _generate_scene()
-        clear_screen()
-        lines = [intro]
-        verbosity = game_service.get_combat_verbosity()
-        lines.append(_scene_flavour(scene, verbosity=verbosity))
-        lines.append(f"Enemy {idx}/{len(enemies)}: {enemy.name} (AC {enemy.armour_class}, HP {enemy.hp_current}/{enemy.hp_max})")
-        _render_message_panel("Encounter", lines, border_style=_BORDER_LOOP, panel_key="loop")
-        _prompt_continue("Press ENTER to start combat...")
+    result = game_service.combat_resolve_party_intent(
+        player,
+        enemies,
+        lambda options, p, e, round_no, ctx=None: _choose_combat_action(game_service, options, p, e, round_no, scene),
+        choose_target=lambda actor, allies, foes, round_no, scene_ctx, action: _choose_party_target(actor, allies, foes, round_no, scene_ctx, action),
+        scene=scene,
+    )
 
-        result = game_service.combat_resolve_intent(
-            player,
-            enemy,
-            lambda options, p, e, round_no, ctx=None: _choose_combat_action(game_service, options, p, e, round_no, scene),
-            scene=scene,
-        )
-        player = result.player
-        game_service.save_character_state(player)
+    player_after = next((ally for ally in result.allies if int(getattr(ally, "id", 0) or 0) == int(getattr(player, "id", 0) or 0)), None)
+    if player_after is not None:
+        player = player_after
+    game_service.save_character_state(player)
 
-        clear_screen()
-        _render_message_panel("Combat Log", [entry.text for entry in result.log], border_style=_BORDER_LOOP, panel_key="loop")
+    clear_screen()
+    _render_message_panel("Combat Log", [entry.text for entry in result.log], border_style=_BORDER_LOOP, panel_key="loop")
 
-        if result.fled:
-            lines = ["You escaped the encounter."]
-            retreat = game_service.apply_retreat_consequence_intent(player.id)
-            lines.extend(list(retreat.messages or []))
-            _render_message_panel("Retreat", lines, border_style=_BORDER_LOOP, panel_key="loop")
-            _prompt_continue()
-            return
+    if result.fled:
+        lines = ["You escaped the encounter."]
+        retreat = game_service.apply_retreat_consequence_intent(player.id)
+        lines.extend(list(retreat.messages or []))
+        _render_message_panel("Retreat", lines, border_style=_BORDER_LOOP, panel_key="loop")
+        _prompt_continue()
+        return
 
-        if not result.player_won:
-            player_survived = False
-            break
-
-    if player_survived:
-        lines = ["You survive the encounter."]
+    if result.allies_won:
+        lines = ["Your party survives the encounter."]
     else:
         defeat = game_service.apply_defeat_consequence_intent(player.id)
         lines = list(defeat.messages or [])
     _render_message_panel("Encounter Result", lines, border_style=_BORDER_LOOP, panel_key="loop")
     _prompt_continue()
+
+
+def _combat_lane(actor) -> str:
+    flags = getattr(actor, "flags", None)
+    if isinstance(flags, dict):
+        forced = str(flags.get("combat_lane", "") or "").strip().lower()
+        if forced in {"vanguard", "rearguard"}:
+            return forced
+    class_name = str(getattr(actor, "class_name", "") or "").strip().lower()
+    if class_name in {"wizard", "sorcerer", "warlock", "bard"}:
+        return "rearguard"
+    name = str(getattr(actor, "name", "") or "").strip().lower()
+    if any(word in name for word in ("archer", "shaman", "mage", "warlock", "witch", "priest", "acolyte")):
+        return "rearguard"
+    return "vanguard"
+
+
+def _choose_party_target(actor, allies, foes, round_no, scene_ctx, action):
+    _ = round_no
+    _ = scene_ctx
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action in {"flee", "dash", "dodge", "use item"}:
+        return 0
+
+    if normalized_action == "cast spell":
+        lane_options = ["Enemy Target", "Ally Target", "Auto"]
+        lane_idx = arrow_menu("Cast Spell — Target Group", lane_options)
+        if lane_idx == 1:
+            target_pool = allies
+            side_key = "ally"
+        else:
+            target_pool = foes
+            side_key = "enemy"
+    else:
+        target_pool = foes
+        side_key = "enemy"
+    if not target_pool:
+        return 0
+
+    _render_party_lane_snapshot(actor=actor, allies=allies, foes=foes)
+    options = [f"{row.name} ({row.hp_current}/{row.hp_max}) [{_combat_lane(row).title()}]" for row in target_pool]
+    idx = arrow_menu(f"Choose Target — {str(action).title()}", options)
+    if idx < 0:
+        return 0
+    return (side_key, idx)
+
+
+def _render_party_lane_snapshot(actor, allies, foes):
+    clear_screen()
+    ally_vanguard = [row for row in allies if _combat_lane(row) == "vanguard"]
+    ally_rearguard = [row for row in allies if _combat_lane(row) == "rearguard"]
+    enemy_vanguard = [row for row in foes if _combat_lane(row) == "vanguard"]
+    enemy_rearguard = [row for row in foes if _combat_lane(row) == "rearguard"]
+
+    lines = [
+        f"Acting: {getattr(actor, 'name', 'Unknown')}",
+        f"Enemy Vanguard: {', '.join(f'{row.name} ({row.hp_current}/{row.hp_max})' for row in enemy_vanguard) or 'None'}",
+        f"Enemy Rearguard: {', '.join(f'{row.name} ({row.hp_current}/{row.hp_max})' for row in enemy_rearguard) or 'None'}",
+        "---",
+        f"Your Vanguard: {', '.join(f'{row.name} ({row.hp_current}/{row.hp_max})' for row in ally_vanguard) or 'None'}",
+        f"Your Rearguard: {', '.join(f'{row.name} ({row.hp_current}/{row.hp_max})' for row in ally_rearguard) or 'None'}",
+    ]
+    _render_message_panel("Party Formation", lines, border_style=_BORDER_LOOP, panel_key="loop")
 
 
 def _choose_combat_action(game_service, options, player, enemy, round_no, scene_ctx=None):

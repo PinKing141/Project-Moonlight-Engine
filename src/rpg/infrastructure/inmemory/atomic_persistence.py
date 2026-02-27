@@ -7,6 +7,35 @@ from rpg.domain.models.character import Character
 from rpg.domain.models.world import World
 
 
+class _InMemoryOperationResult:
+    def all(self):
+        return []
+
+    def first(self):
+        return None
+
+    def scalar(self):
+        return None
+
+    def scalar_one(self):
+        return 0
+
+
+class _InMemoryOperationSession:
+    class _Dialect:
+        name = "inmemory"
+
+    class _Bind:
+        def __init__(self) -> None:
+            self.dialect = _InMemoryOperationSession._Dialect()
+
+    def __init__(self) -> None:
+        self.bind = _InMemoryOperationSession._Bind()
+
+    def execute(self, *_args, **_kwargs):
+        return _InMemoryOperationResult()
+
+
 def create_inmemory_atomic_persistor(character_repo, world_repo) -> Callable[..., None]:
     def _persist(
         character: Character,
@@ -23,8 +52,9 @@ def create_inmemory_atomic_persistor(character_repo, world_repo) -> Callable[...
         try:
             character_repo.save(character)
             world_repo.save(world)
+            operation_session = _InMemoryOperationSession()
             for operation in operations or ():
-                operation(None)
+                operation(operation_session)
         except Exception:
             if hasattr(character_repo, "_characters"):
                 character_repo._characters = snapshot["characters"]

@@ -54,6 +54,8 @@ def _bootstrap_character_schema(engine) -> None:
                     level INTEGER NOT NULL,
                     xp INTEGER NOT NULL,
                     money INTEGER NOT NULL,
+                    inventory_json TEXT,
+                    flags_json TEXT,
                     hp_current INTEGER NOT NULL,
                     hp_max INTEGER NOT NULL,
                     armour_class INTEGER,
@@ -159,6 +161,8 @@ class MysqlCharacterRepositoryStatsIntegrationTests(unittest.TestCase):
                 attack_bonus=5,
                 damage_die="d10",
                 speed=25,
+                inventory=["Healing Potion", "Whetstone"],
+                flags={"equipment": {"weapon": "Longsword"}},
                 attributes={},
             ),
             location_id=1,
@@ -175,6 +179,8 @@ class MysqlCharacterRepositoryStatsIntegrationTests(unittest.TestCase):
         self.assertEqual(5, loaded.attack_bonus)
         self.assertEqual("d10", loaded.damage_die)
         self.assertEqual(25, loaded.speed)
+        self.assertEqual(["Healing Potion", "Whetstone"], loaded.inventory)
+        self.assertEqual({"equipment": {"weapon": "Longsword"}}, loaded.flags)
 
     def test_save_updates_character_combat_stats(self) -> None:
         created = self.repo.create(
@@ -187,6 +193,8 @@ class MysqlCharacterRepositoryStatsIntegrationTests(unittest.TestCase):
         created.attack_bonus = 6
         created.damage_die = "d12"
         created.speed = 35
+        created.inventory = ["Focus Potion"]
+        created.flags = {"travel_prep": {"rations": 2}}
 
         self.repo.save(created)
         created_id = created.id
@@ -199,6 +207,8 @@ class MysqlCharacterRepositoryStatsIntegrationTests(unittest.TestCase):
         self.assertEqual(6, loaded.attack_bonus)
         self.assertEqual("d12", loaded.damage_die)
         self.assertEqual(35, loaded.speed)
+        self.assertEqual(["Focus Potion"], loaded.inventory)
+        self.assertEqual({"travel_prep": {"rations": 2}}, loaded.flags)
 
 
 if __name__ == "__main__":
