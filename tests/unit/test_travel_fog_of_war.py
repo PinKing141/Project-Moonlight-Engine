@@ -54,9 +54,10 @@ class TravelFogOfWarTests(unittest.TestCase):
         destinations = service.get_travel_destinations_intent(character_id)
 
         self.assertEqual(1, len(destinations))
-        self.assertIn("Unknown Settlement", destinations[0].name)
-        self.assertIn("East", destinations[0].name)
-        self.assertIn("Risk", destinations[0].preview)
+        self.assertEqual("Eastern Wilderness", destinations[0].name)
+        self.assertIn("Lv", destinations[0].preview)
+        self.assertIn("d", destinations[0].preview)
+        self.assertNotIn("Risk", destinations[0].preview)
         self.assertNotIn("Low", destinations[0].preview)
         self.assertNotIn("Moderate", destinations[0].preview)
         self.assertNotIn("High", destinations[0].preview)

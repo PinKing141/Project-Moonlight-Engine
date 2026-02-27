@@ -26,10 +26,43 @@ class _StubEntityRepository(EntityRepository):
         return [row for row in self._entities if row.id in entity_ids]
 
     def list_for_level(self, target_level: int, tolerance: int = 2):
-        return list(self._entities)
+        lower = target_level - tolerance
+        upper = target_level + tolerance
+        return [row for row in self._entities if lower <= row.level <= upper]
 
     def list_by_location(self, location_id: int):
         return list(self._entities)
+
+    def list_by_level_band(self, level_min: int, level_max: int):
+        return [row for row in self._entities if level_min <= row.level <= level_max]
+
+
+class _HighVarianceLocationEntityRepository(EntityRepository):
+    def __init__(self) -> None:
+        self._entities = [
+            Entity(id=1, name="Rat", level=1, hp=6, hp_current=6, hp_max=6),
+            Entity(id=2, name="Ancient Horror", level=20, hp=180, hp_current=180, hp_max=180),
+        ]
+
+    def get(self, entity_id: int):
+        for row in self._entities:
+            if row.id == entity_id:
+                return row
+        return None
+
+    def get_many(self, entity_ids: list[int]):
+        return [row for row in self._entities if row.id in entity_ids]
+
+    def list_for_level(self, target_level: int, tolerance: int = 2):
+        lower = target_level - tolerance
+        upper = target_level + tolerance
+        return [row for row in self._entities if lower <= row.level <= upper]
+
+    def list_by_location(self, location_id: int):
+        return list(self._entities)
+
+    def list_by_level_band(self, level_min: int, level_max: int):
+        return [row for row in self._entities if level_min <= row.level <= level_max]
 
 
 class EncounterServiceHazardTests(unittest.TestCase):
@@ -102,6 +135,22 @@ class EncounterServiceHazardTests(unittest.TestCase):
             signature_b.append((tuple(plan_b.hazards), tuple(enemy.id for enemy in plan_b.enemies)))
 
         self.assertNotEqual(signature_a, signature_b)
+
+    def test_location_pool_filters_out_extreme_enemy_levels(self) -> None:
+        service = EncounterService(entity_repo=_HighVarianceLocationEntityRepository())
+
+        plan = service.generate_plan(
+            location_id=1,
+            player_level=1,
+            world_turn=1,
+            faction_bias=None,
+            max_enemies=2,
+            location_biome="wilderness",
+        )
+
+        self.assertTrue(plan.enemies)
+        self.assertTrue(all(enemy.level <= 3 for enemy in plan.enemies))
+        self.assertTrue(all(enemy.level >= 1 for enemy in plan.enemies))
 
 
 if __name__ == "__main__":

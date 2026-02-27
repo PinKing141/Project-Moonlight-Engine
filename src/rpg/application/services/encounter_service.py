@@ -16,6 +16,9 @@ from rpg.domain.services.encounter_planner import plan_biome_hazards
 
 
 class EncounterService:
+    _ENEMY_LEVEL_FLOOR_OFFSET = 1
+    _ENEMY_LEVEL_CEILING_OFFSET = 2
+
     def __init__(
         self,
         entity_repo: EntityRepository,
@@ -78,6 +81,16 @@ class EncounterService:
         location_key = f"location:{int(location_id)}:peaceful"
         return bool(world_flags.get(location_key, False))
 
+    @classmethod
+    def _enemy_level_bounds(cls, player_level: int) -> tuple[int, int]:
+        level = max(1, int(player_level))
+        return max(1, level - cls._ENEMY_LEVEL_FLOOR_OFFSET), level + cls._ENEMY_LEVEL_CEILING_OFFSET
+
+    @classmethod
+    def _filter_enemy_band(cls, pool: list[Entity], player_level: int) -> list[Entity]:
+        level_min, level_max = cls._enemy_level_bounds(player_level)
+        return [entity for entity in pool if level_min <= int(getattr(entity, "level", 1) or 1) <= level_max]
+
     def generate_plan(
         self,
         location_id: int,
@@ -127,22 +140,32 @@ class EncounterService:
                 max_enemies=max_enemies,
             )
             if enemies:
-                return EncounterPlan(
-                    enemies=enemies,
-                    definition_id=chosen.id if chosen else None,
-                    faction_bias=faction_bias,
-                    source="definition",
-                    hazards=hazards,
-                )
+                enemies = self._filter_enemy_band(enemies, player_level)
+                if not enemies:
+                    chosen = None
+                else:
+                    return EncounterPlan(
+                        enemies=enemies,
+                        definition_id=chosen.id if chosen else None,
+                        faction_bias=faction_bias,
+                        source="definition",
+                        hazards=hazards,
+                    )
 
         by_location = self.entity_repo.list_by_location(location_id)
         if by_location:
-            count = min(max(1, max_enemies), len(by_location))
-            enemies = self._weighted_pick(by_location, count, faction_bias, rng)
-            return EncounterPlan(enemies=enemies, faction_bias=faction_bias, source="location", hazards=hazards)
+            filtered_location_pool = self._filter_enemy_band(by_location, player_level)
+            if filtered_location_pool:
+                count = min(max(1, max_enemies), len(filtered_location_pool))
+                enemies = self._weighted_pick(filtered_location_pool, count, faction_bias, rng)
+                return EncounterPlan(
+                    enemies=enemies,
+                    faction_bias=faction_bias,
+                    source="location",
+                    hazards=hazards,
+                )
 
-        level_min = max(1, player_level - 1)
-        level_max = player_level + 2
+        level_min, level_max = self._enemy_level_bounds(player_level)
         candidates = getattr(self.entity_repo, "list_by_level_band", None)
         if callable(candidates):
             band = self.entity_repo.list_by_level_band(level_min, level_max)

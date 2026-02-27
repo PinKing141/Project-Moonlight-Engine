@@ -140,6 +140,8 @@ def _render_town_header(town_view) -> None:
     day = town_view.day if town_view.day is not None else "?"
     threat = _threat_descriptor(town_view.threat_level)
     location_name = str(getattr(town_view, "location_name", "") or "Town")
+    time_label = str(getattr(town_view, "time_label", "") or "")
+    weather_label = str(getattr(town_view, "weather_label", "") or "Unknown")
     consequences = list(town_view.consequences or [])
 
     if _CONSOLE is not None and Panel is not None and Table is not None:
@@ -149,12 +151,20 @@ def _render_town_header(town_view) -> None:
         header.add_row("Location", location_name)
         header.add_row("Day", str(day))
         header.add_row("Threat", str(threat))
+        if time_label:
+            header.add_row("Time", time_label)
+        header.add_row("Weather", weather_label)
         if getattr(town_view, "district_tag", ""):
             header.add_row("District", str(town_view.district_tag))
         if getattr(town_view, "landmark_tag", ""):
             header.add_row("Landmark", str(town_view.landmark_tag))
         if getattr(town_view, "active_prep_summary", ""):
             header.add_row("Travel Prep", str(town_view.active_prep_summary))
+        if getattr(town_view, "pressure_summary", ""):
+            header.add_row("Pressure", str(town_view.pressure_summary))
+        pressure_lines = [str(line) for line in list(getattr(town_view, "pressure_lines", []) or []) if str(line).strip()]
+        if pressure_lines:
+            header.add_row("Hot Factions", "\n".join(f"- {line}" for line in pressure_lines))
         if consequences:
             header.add_row("Recent", "\n".join(f"- {line}" for line in consequences))
         _CONSOLE.print(
@@ -170,12 +180,22 @@ def _render_town_header(town_view) -> None:
 
     print(f"=== {location_name} ===")
     print(f"Day {day} | Threat: {threat}")
+    if time_label:
+        print(f"Time: {time_label}")
+    print(f"Weather: {weather_label}")
     if getattr(town_view, "district_tag", ""):
         print(f"District: {town_view.district_tag}")
     if getattr(town_view, "landmark_tag", ""):
         print(f"Landmark: {town_view.landmark_tag}")
     if getattr(town_view, "active_prep_summary", ""):
         print(f"Travel Prep: {town_view.active_prep_summary}")
+    if getattr(town_view, "pressure_summary", ""):
+        print(f"Pressure: {town_view.pressure_summary}")
+    pressure_lines = [str(line) for line in list(getattr(town_view, "pressure_lines", []) or []) if str(line).strip()]
+    if pressure_lines:
+        print("Hot factions:")
+        for line in pressure_lines:
+            print(f"- {line}")
     if consequences:
         print("Recent consequences:")
         for line in consequences:
@@ -404,6 +424,11 @@ def _render_character_sheet(sheet) -> None:
         table.add_row("To Next", str(sheet.xp_to_next_level))
         table.add_row("HP", f"{sheet.hp_current}/{sheet.hp_max}")
         table.add_row("Difficulty", str(sheet.difficulty).title())
+        if getattr(sheet, "pressure_summary", ""):
+            table.add_row("Pressure", str(sheet.pressure_summary))
+        pressure_lines = [str(line) for line in list(getattr(sheet, "pressure_lines", []) or []) if str(line).strip()]
+        if pressure_lines:
+            table.add_row("Hot Factions", "\n".join(f"- {line}" for line in pressure_lines))
         _CONSOLE.print(
             Panel.fit(
                 table,
@@ -422,6 +447,13 @@ def _render_character_sheet(sheet) -> None:
     print(f"XP: {sheet.xp}/{sheet.next_level_xp} (to next: {sheet.xp_to_next_level})")
     print(f"HP: {sheet.hp_current}/{sheet.hp_max}")
     print(f"Difficulty: {str(sheet.difficulty).title()}")
+    if getattr(sheet, "pressure_summary", ""):
+        print(f"Pressure: {sheet.pressure_summary}")
+    pressure_lines = [str(line) for line in list(getattr(sheet, "pressure_lines", []) or []) if str(line).strip()]
+    if pressure_lines:
+        print("Hot factions:")
+        for line in pressure_lines:
+            print(f"- {line}")
 
 
 def _render_quest_journal(journal) -> None:
@@ -769,9 +801,9 @@ def run_game_loop(game_service, character_id: int):
         diff_label = view.difficulty or "normal"
         threat_label = _threat_descriptor(view.threat_level)
         world_line = (
-            f"Day {view.world_turn} – Threat: {threat_label}"
+            f"Day {view.world_turn} – Threat: {threat_label} | {view.time_label or 'Time Unknown'} | Weather: {view.weather_label or 'Unknown'}"
             if view.world_turn is not None
-            else "Day ? – Threat: Unknown"
+            else "Day ? – Threat: Unknown | Time Unknown | Weather: Unknown"
         )
         _render_loop_header(
             context=context,
@@ -798,7 +830,8 @@ def run_game_loop(game_service, character_id: int):
         elif choice == 1:
             destinations = game_service.get_travel_destinations_intent(character_id)
             if destinations:
-                options = [f"{row.name} ({row.preview})" for row in destinations] + ["Back"]
+                max_name_width = max(len(str(row.name)) for row in destinations)
+                options = [f"{str(row.name):<{max_name_width}} • {row.preview}" for row in destinations] + ["Back"]
                 selected = arrow_menu(context.travel_label, options)
                 if selected in {-1, len(options) - 1}:
                     continue
@@ -815,19 +848,49 @@ def run_game_loop(game_service, character_id: int):
             _prompt_continue()
 
         elif choice == 2:
+            result = None
             try:
-                result = game_service.rest_intent(character_id)
+                if context.location_type == "wilderness":
+                    rest_choice = arrow_menu("Wilderness Rest", ["Short Rest", "Long Rest", "Camp Activity", "Back"])
+                    if rest_choice in {-1, 3}:
+                        continue
+                    if rest_choice == 0:
+                        result = game_service.short_rest_intent(character_id)
+                    elif rest_choice == 1:
+                        result = game_service.long_rest_intent(character_id)
+                    else:
+                        options = list(game_service.get_camp_activity_options_intent(character_id) or [])
+                        if not options:
+                            result = game_service.long_rest_intent(character_id)
+                        else:
+                            labels = [label for _activity_id, label in options] + ["Back"]
+                            selected = arrow_menu("Campfire Activities", labels)
+                            if selected in {-1, len(labels) - 1}:
+                                continue
+                            activity_id = options[selected][0]
+                            result = game_service.submit_camp_activity_intent(character_id, activity_id)
+                else:
+                    rest_choice = arrow_menu("Town Rest", ["Short Rest", "Long Rest", "Back"])
+                    if rest_choice in {-1, 2}:
+                        continue
+                    if rest_choice == 0:
+                        result = game_service.short_rest_intent(character_id)
+                    else:
+                        result = game_service.long_rest_intent(character_id)
                 fallback_message = "You rest and feel restored." if context.location_type == "town" else "You make camp and recover."
                 message = result.messages[0] if result.messages else fallback_message
             except Exception:
                 message = "You rest and feel restored." if context.location_type == "town" else "You make camp and recover."
             clear_screen()
-            _render_message_panel("Rest", [message], border_style=_BORDER_LOOP, panel_key="loop")
+            if result is not None and getattr(result, "messages", None):
+                _render_message_panel("Rest", list(result.messages or []), border_style=_BORDER_LOOP, panel_key="loop")
+            else:
+                _render_message_panel("Rest", [message], border_style=_BORDER_LOOP, panel_key="loop")
             _prompt_continue()
 
         elif choice == 3:
             while True:
-                char_choice = arrow_menu(f"Character — {view.name}", ["View Sheet", "Quest Journal", "Equipment", "Party", "Companion Leads", "Back"])
+                char_choice = arrow_menu(f"Character — {view.name}", ["View Sheet", "Quest Journal", "Equipment", "Party", "Codex", "Back"])
                 if char_choice in {-1, 5}:
                     break
                 if char_choice == 0:
@@ -844,7 +907,7 @@ def run_game_loop(game_service, character_id: int):
                     _run_party_management(game_service, character_id, view.name)
                     continue
                 if char_choice == 4:
-                    _run_companion_leads(game_service, character_id)
+                    _run_codex(game_service, character_id)
                     continue
 
                 while True:
@@ -905,9 +968,9 @@ def _run_town(game_service, character_id: int):
         town_name = str(getattr(town_view, "location_name", "") or "Town")
         choice = arrow_menu(
             f"Town Options — {town_name}",
-            ["Talk", "Quest Board", "Rumour Board", "Shop", "Training", "Travel Prep", "View Factions", "Leave Town"],
+            ["Talk", "Quest Board", "Rumour Board", "Shop", "Training", "Travel Prep", "Lay Low", "View Factions", "Leave Town"],
         )
-        if choice in {-1, 7}:
+        if choice in {-1, 8}:
             return
         if choice == 1:
             _run_quest_board(game_service, character_id)
@@ -925,6 +988,9 @@ def _run_town(game_service, character_id: int):
             _run_travel_prep(game_service, character_id)
             continue
         if choice == 6:
+            _run_pressure_relief(game_service, character_id)
+            continue
+        if choice == 7:
             standings_view = game_service.get_faction_standings_view_intent(character_id)
             _render_faction_standings(
                 standings_view.standings,
@@ -969,12 +1035,74 @@ def _run_town(game_service, character_id: int):
         _prompt_continue()
 
 
-def _run_companion_leads(game_service, character_id: int) -> None:
-    lines = list(game_service.get_companion_leads_intent(character_id) or [])
-    if not lines:
-        lines = ["No companion intelligence has been recorded yet."]
+def _run_pressure_relief(game_service, character_id: int) -> None:
+    targets = list(game_service.get_pressure_relief_targets_intent(character_id) or [])
+    if not targets:
+        clear_screen()
+        _render_message_panel(
+            "Lay Low",
+            ["No elevated faction pressure to reduce right now."],
+            border_style=_BORDER_TOWN,
+            panel_key="town",
+        )
+        _prompt_continue()
+        return
+
+    options = [f"{faction_id.replace('_', ' ').title()} (Heat {score})" for faction_id, score in targets]
+    options.append("Back")
+    selected = arrow_menu("Lay Low — Choose Faction", options)
+    if selected in {-1, len(options) - 1}:
+        return
+
+    target_faction, _ = targets[selected]
+    result = game_service.submit_pressure_relief_intent(character_id, faction_id=target_faction)
     clear_screen()
-    _render_message_panel("Companion Leads", lines, border_style=_BORDER_CHARACTER, panel_key="character")
+    _render_message_panel("Lay Low", list(result.messages or []), border_style=_BORDER_TOWN, panel_key="town")
+    _prompt_continue()
+
+
+def _run_companion_leads(game_service, character_id: int) -> None:
+    while True:
+        lines = list(game_service.get_companion_leads_intent(character_id) or [])
+        if not lines:
+            lines = ["No companion intelligence has been recorded yet."]
+        clear_screen()
+        _render_message_panel("Companion Leads", lines, border_style=_BORDER_CHARACTER, panel_key="character")
+
+        arc_choices = list(game_service.get_companion_arc_choices_intent(character_id) or [])
+        if not arc_choices:
+            _prompt_continue()
+            return
+
+        action = arrow_menu("Companion Leads", ["Resolve Arc Choice", "Back"])
+        if action in {-1, 1}:
+            return
+
+        companion_options = [name for _companion_id, name in arc_choices]
+        companion_options.append("Back")
+        selected = arrow_menu("Resolve Arc Choice — Select Companion", companion_options)
+        if selected in {-1, len(companion_options) - 1}:
+            continue
+
+        companion_id, companion_name = arc_choices[selected]
+        outcome_pick = arrow_menu(f"Arc Choice — {companion_name}", ["Oathbound", "Distant", "Back"])
+        if outcome_pick in {-1, 2}:
+            continue
+
+        result = game_service.submit_companion_arc_choice_intent(
+            character_id,
+            companion_id,
+            "oath" if outcome_pick == 0 else "distance",
+        )
+        clear_screen()
+        _render_message_panel("Companion Arc", list(result.messages or []), border_style=_BORDER_CHARACTER, panel_key="character")
+        _prompt_continue()
+
+
+def _run_codex(game_service, character_id: int) -> None:
+    lines = list(game_service.get_codex_entries_intent(character_id) or [])
+    clear_screen()
+    _render_message_panel("Codex", lines, border_style=_BORDER_CHARACTER, panel_key="character")
     _prompt_continue()
 
 
@@ -1166,63 +1294,110 @@ def _run_quest_board(game_service, character_id: int):
 
 
 def _run_explore(game_service, character_id: int):
-    clear_screen()
-    try:
-        explore_view, character, enemies = game_service.explore_intent(character_id)
-    except Exception:
-        explore_view = None
-        character = None
-        enemies = []
+    while True:
+        choice = arrow_menu(
+            "Wilderness Actions",
+            [
+                "Press On",
+                "Scout (WIS - Survival)",
+                "Investigate (INT - Investigation)",
+                "Forage (WIS - Nature)",
+                "Sneak (DEX - Stealth)",
+                "Back",
+            ],
+        )
+        if choice in {-1, 5}:
+            return
 
-    if not enemies:
-        fallback = "You find nothing of interest today."
+        if choice == 1:
+            result = game_service.wilderness_action_intent(character_id, "scout")
+            clear_screen()
+            _render_message_panel("Scout", list(result.messages or []), border_style=_BORDER_LOOP, panel_key="loop")
+            _prompt_continue()
+            continue
+        if choice == 2:
+            result = game_service.wilderness_action_intent(character_id, "investigate")
+            clear_screen()
+            _render_message_panel("Investigate", list(result.messages or []), border_style=_BORDER_LOOP, panel_key="loop")
+            _prompt_continue()
+            continue
+        if choice == 3:
+            result = game_service.wilderness_action_intent(character_id, "forage")
+            clear_screen()
+            _render_message_panel("Forage", list(result.messages or []), border_style=_BORDER_LOOP, panel_key="loop")
+            _prompt_continue()
+            continue
+        if choice == 4:
+            result = game_service.wilderness_action_intent(character_id, "sneak")
+            clear_screen()
+            _render_message_panel("Sneak", list(result.messages or []), border_style=_BORDER_LOOP, panel_key="loop")
+            _prompt_continue()
+            continue
+
         clear_screen()
-        _render_message_panel("Explore", [explore_view.message if explore_view else fallback], border_style=_BORDER_LOOP, panel_key="loop")
+        try:
+            explore_view, character, enemies = game_service.explore_intent(character_id)
+        except Exception:
+            explore_view = None
+            character = None
+            enemies = []
+
+        if not enemies:
+            fallback = "You find nothing of interest today."
+            clear_screen()
+            _render_message_panel("Explore", [explore_view.message if explore_view else fallback], border_style=_BORDER_LOOP, panel_key="loop")
+            _prompt_continue()
+            return
+
+        player = character
+        scene = _generate_scene()
+        loop_view = game_service.get_game_loop_view(character_id)
+        if getattr(loop_view, "weather_label", None):
+            scene["weather"] = str(loop_view.weather_label)
+        surprise_override = game_service.consume_next_explore_surprise_intent(character_id)
+        if surprise_override:
+            scene["surprise"] = surprise_override
+        clear_screen()
+        lines = [
+            game_service.encounter_intro_intent(enemies[0], character_id=character_id),
+            _scene_flavour(scene, verbosity=game_service.get_combat_verbosity()),
+            f"Hostiles: {', '.join(f'{enemy.name} ({enemy.hp_current}/{enemy.hp_max})' for enemy in enemies)}",
+        ]
+        _render_message_panel("Encounter", lines, border_style=_BORDER_LOOP, panel_key="loop")
+        _prompt_continue("Press ENTER to start combat...")
+
+        result = game_service.combat_resolve_party_intent(
+            player,
+            enemies,
+            lambda options, p, e, round_no, ctx=None: _choose_combat_action(game_service, options, p, e, round_no, scene),
+            choose_target=lambda actor, allies, foes, round_no, scene_ctx, action: _choose_party_target(actor, allies, foes, round_no, scene_ctx, action),
+            scene=scene,
+        )
+
+        player_after = next((ally for ally in result.allies if int(getattr(ally, "id", 0) or 0) == int(getattr(player, "id", 0) or 0)), None)
+        if player_after is not None:
+            player = player_after
+        game_service.save_character_state(player)
+
+        clear_screen()
+        _render_message_panel("Combat Log", [entry.text for entry in result.log], border_style=_BORDER_LOOP, panel_key="loop")
+
+        if result.fled:
+            lines = ["You escaped the encounter."]
+            retreat = game_service.apply_retreat_consequence_intent(player.id)
+            lines.extend(list(retreat.messages or []))
+            _render_message_panel("Retreat", lines, border_style=_BORDER_LOOP, panel_key="loop")
+            _prompt_continue()
+            return
+
+        if result.allies_won:
+            lines = ["Your party survives the encounter."]
+        else:
+            defeat = game_service.apply_defeat_consequence_intent(player.id)
+            lines = list(defeat.messages or [])
+        _render_message_panel("Encounter Result", lines, border_style=_BORDER_LOOP, panel_key="loop")
         _prompt_continue()
         return
-
-    player = character
-    scene = _generate_scene()
-    clear_screen()
-    lines = [
-        game_service.encounter_intro_intent(enemies[0]),
-        _scene_flavour(scene, verbosity=game_service.get_combat_verbosity()),
-        f"Hostiles: {', '.join(f'{enemy.name} ({enemy.hp_current}/{enemy.hp_max})' for enemy in enemies)}",
-    ]
-    _render_message_panel("Encounter", lines, border_style=_BORDER_LOOP, panel_key="loop")
-    _prompt_continue("Press ENTER to start combat...")
-
-    result = game_service.combat_resolve_party_intent(
-        player,
-        enemies,
-        lambda options, p, e, round_no, ctx=None: _choose_combat_action(game_service, options, p, e, round_no, scene),
-        choose_target=lambda actor, allies, foes, round_no, scene_ctx, action: _choose_party_target(actor, allies, foes, round_no, scene_ctx, action),
-        scene=scene,
-    )
-
-    player_after = next((ally for ally in result.allies if int(getattr(ally, "id", 0) or 0) == int(getattr(player, "id", 0) or 0)), None)
-    if player_after is not None:
-        player = player_after
-    game_service.save_character_state(player)
-
-    clear_screen()
-    _render_message_panel("Combat Log", [entry.text for entry in result.log], border_style=_BORDER_LOOP, panel_key="loop")
-
-    if result.fled:
-        lines = ["You escaped the encounter."]
-        retreat = game_service.apply_retreat_consequence_intent(player.id)
-        lines.extend(list(retreat.messages or []))
-        _render_message_panel("Retreat", lines, border_style=_BORDER_LOOP, panel_key="loop")
-        _prompt_continue()
-        return
-
-    if result.allies_won:
-        lines = ["Your party survives the encounter."]
-    else:
-        defeat = game_service.apply_defeat_consequence_intent(player.id)
-        lines = list(defeat.messages or [])
-    _render_message_panel("Encounter Result", lines, border_style=_BORDER_LOOP, panel_key="loop")
-    _prompt_continue()
 
 
 def _combat_lane(actor) -> str:
@@ -1370,6 +1545,7 @@ def _scene_flavour(scene: dict, verbosity: str = "compact") -> str:
     distance = scene.get("distance", "close")
     surprise = scene.get("surprise", "none")
     terrain = scene.get("terrain", "open")
+    weather = str(scene.get("weather", "") or "")
     dist_line = {
         "close": "The enemy is already upon you.",
         "mid": "You spot movement not far away.",
@@ -1385,7 +1561,8 @@ def _scene_flavour(scene: dict, verbosity: str = "compact") -> str:
         "cramped": "The space is tight and cluttered.",
         "difficult": "The ground is uneven and treacherous.",
     }.get(terrain, "")
-    lines = [line for line in (dist_line, surprise_line, terrain_line) if line]
+    weather_line = f"Weather turns against you: {weather}." if weather else ""
+    lines = [line for line in (dist_line, surprise_line, terrain_line, weather_line) if line]
     limit = 2 if verbosity == "compact" else (3 if verbosity == "normal" else len(lines))
     return "\n".join(lines[:limit])
 

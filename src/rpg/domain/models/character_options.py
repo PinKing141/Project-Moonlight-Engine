@@ -8,6 +8,7 @@ class Race:
     bonuses: Dict[str, int] = field(default_factory=dict)
     speed: int = 30
     traits: List[str] = field(default_factory=list)
+    playable: bool = True
 
 
 @dataclass(frozen=True)

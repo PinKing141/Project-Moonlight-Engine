@@ -76,9 +76,10 @@ class LocationContextFlowTests(unittest.TestCase):
 
         self.assertEqual(1, len(destinations))
         self.assertEqual(2, destinations[0].location_id)
-        self.assertIn("Wilderness", destinations[0].preview)
-        self.assertIn("Days", destinations[0].preview)
-        self.assertIn("Risk", destinations[0].preview)
+        self.assertIn("Lv", destinations[0].preview)
+        self.assertIn("d", destinations[0].preview)
+        self.assertNotIn("Risk", destinations[0].preview)
+        self.assertNotIn("Days", destinations[0].preview)
         self.assertGreaterEqual(destinations[0].estimated_days, 1)
         self.assertIn("Modes:", destinations[0].mode_hint)
 
@@ -125,7 +126,8 @@ class LocationContextFlowTests(unittest.TestCase):
         destinations_b = service_b.get_travel_destinations_intent(character_id_b)
 
         self.assertEqual([row.preview for row in destinations_a], [row.preview for row in destinations_b])
-        self.assertTrue(all("Risk" in row.preview for row in destinations_a))
+        self.assertTrue(all("Lv" in row.preview for row in destinations_a))
+        self.assertTrue(all("d" in row.preview for row in destinations_a))
 
     def test_travel_mode_affects_message_and_remains_deterministic(self):
         service_a, _repo_a, _world_a, character_id_a = self._build_service()
@@ -179,7 +181,7 @@ class LocationContextFlowTests(unittest.TestCase):
         after_trip = service.get_travel_destinations_intent(character_id)[0]
 
         self.assertIn("Travel prep secured", " ".join(buy.messages))
-        self.assertIn("Prep", after_purchase.preview)
+        self.assertNotIn("Prep", after_purchase.preview)
         self.assertNotEqual(before.estimated_days, after_purchase.estimated_days)
         self.assertIn("Travel prep consumed", " ".join(travel.messages))
         self.assertNotIn("Prep", after_trip.preview)

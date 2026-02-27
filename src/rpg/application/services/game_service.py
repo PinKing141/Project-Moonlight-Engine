@@ -4,6 +4,7 @@ import json
 import math
 import random
 import time
+from pathlib import Path
 from collections.abc import Callable, Sequence
 from typing import Optional, cast
 
@@ -74,6 +75,7 @@ from rpg.application.services.balance_tables import (
 from rpg.application.services.world_progression import WorldProgression
 from rpg.application.services.encounter_flavour import random_intro
 from rpg.application.services.progression_service import ProgressionService
+from rpg.infrastructure.world_import.reference_dataset_loader import load_reference_world_dataset
 from rpg.domain.events import FactionReputationChangedEvent, MonsterSlain
 from rpg.domain.models.character import Character
 from rpg.domain.models.entity import Entity
@@ -96,19 +98,135 @@ from rpg.domain.repositories import (
 
 
 class GameService:
+    _REFERENCE_WORLD_DATASET_CACHE: dict[str, object] = {}
+    _BIOME_SEVERITY_DEFAULT_CACHE: dict[str, dict[str, int]] = {}
     _RUMOUR_HISTORY_MAX = 12
     _RUMOUR_HISTORY_TURN_WINDOW = 8
     _TRAVEL_MAX_RADIUS = 150.0
     _TRAVEL_SPEED_DIVISOR = 25.0
+    _TRAVEL_PREVIEW_RISK_WIDTH = 8
     _MAX_ACTIVE_COMPANIONS = 3
     _MAX_CAMPAIGN_RECRUITED_COMPANIONS = 3
     _COMPANION_LEAD_DISCOVERY_BASE_CHANCE = 4
+    _FACTION_HEAT_MAX = 20
+    _FACTION_HEAT_LOG_MAX = 32
+    _FACTION_HEAT_TRAVEL_DECAY_AMOUNT = 1
+    _FACTION_HEAT_TRAVEL_DECAY_INTERVAL = 3
+    _FACTION_HEAT_REST_DECAY_AMOUNT = 2
+    _FACTION_HEAT_RELIEF_COST = 6
+    _FACTION_HEAT_RELIEF_AMOUNT = 3
+    _COMPANION_ARC_MAX = 100
+    _COMPANION_ARC_HISTORY_MAX = 30
+    _NPC_COMPANION_MAP = {
+        "broker_silas": "npc_silas",
+        "captain_ren": "captain_ren",
+    }
+    _NPC_FACTION_AFFINITY = {
+        "captain_ren": "the_crown",
+        "broker_silas": "thieves_guild",
+        "innkeeper_mara": "wardens",
+    }
+    _FACTION_ENCOUNTER_PACKAGES = {
+        "wardens": {"hazard": "Checkpoint Barricade", "money_bonus": 0, "bonus_item": "Whetstone"},
+        "wild": {"hazard": "Predator Trails", "money_bonus": 0, "bonus_item": "Antitoxin"},
+        "thieves_guild": {"hazard": "Hidden Snare", "money_bonus": 2, "bonus_item": ""},
+        "the_crown": {"hazard": "Patrol Sweep", "money_bonus": 1, "bonus_item": "Torch"},
+    }
     _RISK_DESCRIPTORS = {
         1: "Safe",
         2: "Guarded",
         3: "Frontier",
         4: "Perilous",
         5: "Lawless",
+    }
+    _DEFAULT_BIOME_SEVERITY_INDEX = {
+        "temperate_deciduous_forest": 36,
+        "grassland": 32,
+        "steppe": 42,
+        "savanna": 45,
+        "taiga": 50,
+        "tundra": 64,
+        "desert": 78,
+        "marsh": 70,
+        "swamp": 74,
+        "mountain": 68,
+        "glacier": 92,
+    }
+    _DEFAULT_BIOME_SEVERITY_FILE = "data/world/biome_severity_defaults.json"
+    _WORLD_WEATHER_BANDS = (
+        (30, "Clear"),
+        (55, "Overcast"),
+        (75, "Rain"),
+        (88, "Fog"),
+        (97, "Storm"),
+        (100, "Blizzard"),
+    )
+    _CAMP_ACTIVITY_DEFS = {
+        "forage": {
+            "label": "Forage",
+            "heal_ratio": 0.9,
+            "risk_shift": 8,
+            "summary": "You scout nearby brush for useful supplies.",
+        },
+        "repair": {
+            "label": "Repair Gear",
+            "heal_ratio": 0.8,
+            "risk_shift": 4,
+            "summary": "You mend straps and reinforce worn equipment.",
+        },
+        "watch": {
+            "label": "Keep Watch",
+            "heal_ratio": 0.55,
+            "risk_shift": -12,
+            "summary": "You sleep lightly while maintaining a vigilant watch.",
+        },
+    }
+    _SHORT_REST_HEAL_RATIO = 0.45
+    _SHORT_REST_MAX_SPELL_RECOVERY = 1
+    _INVESTIGATE_BIOME_LORE = {
+        "forest": (
+            "Fresh bark cuts suggest hurried wardens moved through recently.",
+            "Moss-lined stones hide old hunter marks pointing toward safer passes.",
+        ),
+        "ruins": (
+            "Collapsed masonry reveals older sigils beneath the current settlement era.",
+            "Scored stone and ash indicate repeated skirmishes around these halls.",
+        ),
+        "swamp": (
+            "Tainted runoff patterns show where hostile camps dump alchemical waste.",
+            "Reed bundles tied to roots mark hidden paths locals use after dark.",
+        ),
+        "wilderness": (
+            "Wind-scoured tracks hint at patrol routes rotating every few nights.",
+            "Discarded bindings and fire pits imply transient warbands nearby.",
+        ),
+    }
+    _INVESTIGATE_FACTION_LORE = {
+        "wardens": "Their watch-signs prioritize chokepoints and civilian routes.",
+        "thieves_guild": "Encrypted chalk symbols mark caches and messenger paths.",
+        "the_crown": "Military survey stakes map defensible ground for rapid mustering.",
+        "wild": "Predator totems and bone markers signal territorial boundaries.",
+        "tower_obsidian": "Obsidian etchings imply ritual study of battlefield remains.",
+    }
+    _NPC_ROUTINES = {
+        "innkeeper_mara": {
+            "day": "Town Inn",
+            "night": "Common Room",
+            "midnight": "Back Office",
+            "closed": False,
+        },
+        "captain_ren": {
+            "day": "Watch Post",
+            "night": "Tavern Patrol",
+            "midnight": "Watch Barracks",
+            "closed": True,
+        },
+        "broker_silas": {
+            "day": "Market Edge",
+            "night": "Tavern Corner",
+            "midnight": "Shadowside Booth",
+            "closed": False,
+        },
     }
     _COMPANION_TEMPLATES = {
         "npc_silas": {
@@ -120,7 +238,7 @@ class GameService:
             "attributes": {"dexterity": 16, "strength": 10, "constitution": 12, "intelligence": 12, "wisdom": 11, "charisma": 13},
             "known_spells": [],
             "spell_slots_max": 0,
-            "default_unlocked": True,
+            "default_unlocked": False,
             "req_reputation": {},
             "req_completed_quest": "",
             "locked_by_companions": [],
@@ -134,7 +252,7 @@ class GameService:
             "attributes": {"dexterity": 12, "strength": 8, "constitution": 11, "intelligence": 16, "wisdom": 12, "charisma": 10},
             "known_spells": ["Fire Bolt", "Magic Missile", "Cure Wounds"],
             "spell_slots_max": 2,
-            "default_unlocked": True,
+            "default_unlocked": False,
             "req_reputation": {},
             "req_completed_quest": "",
             "locked_by_companions": [],
@@ -148,7 +266,7 @@ class GameService:
             "attributes": {"dexterity": 12, "strength": 15, "constitution": 14, "intelligence": 10, "wisdom": 12, "charisma": 11},
             "known_spells": [],
             "spell_slots_max": 0,
-            "default_unlocked": True,
+            "default_unlocked": False,
             "req_reputation": {},
             "req_completed_quest": "",
             "locked_by_companions": [],
@@ -327,6 +445,48 @@ class GameService:
             "base_price": 11,
         },
         {
+            "id": "torch",
+            "name": "Torch",
+            "description": "Improves visibility in dark ruins and caves.",
+            "base_price": 5,
+        },
+        {
+            "id": "rope",
+            "name": "Rope",
+            "description": "Secures crossings over ledges and unstable paths.",
+            "base_price": 7,
+        },
+        {
+            "id": "climbing_kit",
+            "name": "Climbing Kit",
+            "description": "Pitons and harnesses that reduce vertical traversal risk.",
+            "base_price": 12,
+        },
+        {
+            "id": "antitoxin",
+            "name": "Antitoxin",
+            "description": "Neutralizes poisonous spores, fumes, and swamp toxins.",
+            "base_price": 15,
+        },
+        {
+            "id": "iron_longsword",
+            "name": "Iron Longsword",
+            "description": "Reliable tier-I steel for front-line fighters.",
+            "base_price": 28,
+        },
+        {
+            "id": "leather_armor",
+            "name": "Leather Armor",
+            "description": "Light tier-I armor favored by scouts.",
+            "base_price": 24,
+        },
+        {
+            "id": "chain_shirt",
+            "name": "Chain Shirt",
+            "description": "Mid-tier armor balancing mobility and defense.",
+            "base_price": 42,
+        },
+        {
             "id": "wardens_token",
             "name": "Wardens Token",
             "description": "Recognized by local wardens and scouts.",
@@ -467,6 +627,31 @@ class GameService:
         "Scout Notes",
         "Traveler's Charm",
     )
+    _TIERED_LOOT_TABLE: dict[int, tuple[str, ...]] = {
+        1: (
+            "Sturdy Rations",
+            "Torch",
+            "Rope",
+            "Whetstone",
+            "Leather Armor",
+            "Iron Longsword",
+        ),
+        2: (
+            "Focus Potion",
+            "Antitoxin",
+            "Climbing Kit",
+            "Chain Shirt",
+            "Arcane Focus Ring",
+            "Rapier",
+        ),
+        3: (
+            "Masterwork Longsword",
+            "Scale Mail",
+            "Runed Ward Charm",
+            "Greater Focus Draught",
+            "Duelist Rapier",
+        ),
+    }
 
     def __init__(
         self,
@@ -564,6 +749,186 @@ class GameService:
 
         return projected
 
+    @classmethod
+    def _phase_for_hour(cls, hour: int) -> str:
+        normalized = int(hour) % 24
+        if normalized < 5:
+            return "Midnight"
+        if normalized < 11:
+            return "Morning"
+        if normalized < 17:
+            return "Afternoon"
+        if normalized < 20:
+            return "Dusk"
+        return "Night"
+
+    @classmethod
+    def _weather_label_for_world(cls, world: World | None) -> str:
+        if world is None:
+            return "Unknown"
+        turn = max(0, int(getattr(world, "current_turn", 0) or 0))
+        weather_slot = turn // 6
+        threat = max(0, int(getattr(world, "threat_level", 0) or 0))
+        seed = derive_seed(
+            namespace="world.weather",
+            context={
+                "world_id": int(getattr(world, "id", 0) or 0),
+                "world_seed": int(getattr(world, "rng_seed", 0) or 0),
+                "weather_slot": int(weather_slot),
+                "threat_level": int(threat),
+            },
+        )
+        rng = random.Random(seed)
+        roll = min(100, max(1, int(rng.randint(1, 100)) + min(10, threat * 2)))
+        for threshold, label in cls._WORLD_WEATHER_BANDS:
+            if roll <= int(threshold):
+                return str(label)
+        return "Clear"
+
+    @classmethod
+    def _world_immersion_state(cls, world: World | None) -> dict[str, object]:
+        if world is None:
+            return {
+                "day": 1,
+                "hour": 0,
+                "phase": "Midnight",
+                "weather": "Unknown",
+                "time_label": "Day 1, Midnight (00:00)",
+            }
+        turn = max(0, int(getattr(world, "current_turn", 0) or 0))
+        day = int(turn // 24) + 1
+        hour = int(turn % 24)
+        phase = cls._phase_for_hour(hour)
+        weather = cls._weather_label_for_world(world)
+        return {
+            "day": day,
+            "hour": hour,
+            "phase": phase,
+            "weather": weather,
+            "time_label": f"Day {day}, {phase} ({hour:02d}:00)",
+        }
+
+    @staticmethod
+    def _weather_risk_shift(weather_label: str) -> int:
+        weather = str(weather_label or "").strip().lower()
+        if weather == "blizzard":
+            return 12
+        if weather == "storm":
+            return 8
+        if weather == "rain":
+            return 4
+        if weather == "fog":
+            return 2
+        return 0
+
+    @classmethod
+    def _npc_schedule_snapshot(cls, world: World | None, npc_id: str) -> dict[str, object]:
+        immersion = cls._world_immersion_state(world)
+        phase = str(immersion.get("phase", "")).strip().lower()
+        turn = int(getattr(world, "current_turn", 0) or 0) if world is not None else 0
+        profile = dict(cls._NPC_ROUTINES.get(str(npc_id), {}))
+        if phase in {"night", "midnight"} and turn > 0:
+            location = str(profile.get(phase, profile.get("night", "Town")) or "Town")
+            available = not bool(profile.get("closed", False))
+        else:
+            location = str(profile.get("day", "Town"))
+            available = True
+        return {
+            "phase": str(immersion.get("phase", "")),
+            "time_label": str(immersion.get("time_label", "")),
+            "location": location,
+            "available": bool(available),
+        }
+
+    @staticmethod
+    def _codex_state(character: Character) -> dict[str, dict[str, object]]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        raw = flags.setdefault("codex_entries", {})
+        if not isinstance(raw, dict):
+            raw = {}
+            flags["codex_entries"] = raw
+        normalized: dict[str, dict[str, object]] = {}
+        for key, value in raw.items():
+            if not isinstance(value, dict):
+                continue
+            entry_id = str(key or "").strip().lower()
+            if not entry_id:
+                continue
+            normalized[entry_id] = dict(value)
+        flags["codex_entries"] = normalized
+        return normalized
+
+    def _record_codex_entry(
+        self,
+        character: Character,
+        *,
+        entry_id: str,
+        category: str,
+        title: str,
+        body: str,
+        world_turn: int,
+        increment_discoveries: bool = False,
+    ) -> None:
+        state = self._codex_state(character)
+        key = str(entry_id or "").strip().lower()
+        if not key:
+            return
+        row = state.get(key, {})
+        raw_discoveries = row.get("discoveries", 0)
+        if isinstance(raw_discoveries, (int, float, str, bool)):
+            try:
+                discoveries = int(raw_discoveries)
+            except (TypeError, ValueError):
+                discoveries = 0
+        else:
+            discoveries = 0
+        if increment_discoveries:
+            discoveries += 1
+        row.update(
+            {
+                "category": str(category or "Lore"),
+                "title": str(title or key.replace("_", " ").title()),
+                "body": str(body or ""),
+                "discoveries": max(1, discoveries) if increment_discoveries else max(1, discoveries or 1),
+                "updated_turn": int(world_turn),
+            }
+        )
+        state[key] = row
+
+    def get_codex_entries_intent(self, character_id: int) -> list[str]:
+        character = self._require_character(character_id)
+        entries = self._codex_state(character)
+        if not entries:
+            return ["No codex entries yet.", "Discover enemies, clues, and relics to expand your field notes."]
+        ordered = sorted(entries.items(), key=lambda item: (str(item[1].get("category", "")), str(item[1].get("title", item[0]))))
+        lines: list[str] = []
+        for _entry_id, row in ordered:
+            category = str(row.get("category", "Lore") or "Lore")
+            title = str(row.get("title", "Unknown") or "Unknown")
+            raw_discoveries = row.get("discoveries", 1)
+            if isinstance(raw_discoveries, (int, float, str, bool)):
+                try:
+                    discoveries = int(raw_discoveries)
+                except (TypeError, ValueError):
+                    discoveries = 1
+            else:
+                discoveries = 1
+            detail = str(row.get("body", "") or "")
+            if category.lower() == "bestiary":
+                if discoveries <= 1:
+                    tier = "Unknown"
+                elif discoveries == 2:
+                    tier = "Observed"
+                else:
+                    tier = "Known"
+                lines.append(f"- [{category}] {title} — {tier} (notes {discoveries}): {detail}")
+            else:
+                lines.append(f"- [{category}] {title} (notes {discoveries}): {detail}")
+        return lines
+
     def rest(self, character_id: int) -> tuple[Character, Optional[World]]:
         character = self._require_character(character_id)
         heal_amount = rest_heal_amount(character.hp_max)
@@ -575,6 +940,14 @@ class GameService:
 
         if self.atomic_state_persistor and self.world_repo:
             world = self.advance_world(ticks=1, persist=False)
+            if world is not None:
+                self._decay_faction_heat(
+                    character,
+                    amount=self._FACTION_HEAT_REST_DECAY_AMOUNT,
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                    reason="rest",
+                    interval_turns=0,
+                )
             if world is None:
                 self.character_repo.save(character)
             else:
@@ -582,11 +955,194 @@ class GameService:
         else:
             self.character_repo.save(character)
             world = self.advance_world(ticks=1)
+            if world is not None:
+                if self._decay_faction_heat(
+                    character,
+                    amount=self._FACTION_HEAT_REST_DECAY_AMOUNT,
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                    reason="rest",
+                    interval_turns=0,
+                ):
+                    self.character_repo.save(character)
         return character, world
+
+    def short_rest_intent(self, character_id: int) -> ActionResult:
+        character = self._require_character(character_id)
+        heal_cap = int(rest_heal_amount(int(getattr(character, "hp_max", 1) or 1)))
+        heal_amount = max(1, int(round(float(heal_cap) * float(self._SHORT_REST_HEAL_RATIO))))
+        character.hp_current = min(int(getattr(character, "hp_max", 1) or 1), int(getattr(character, "hp_current", 1) or 1) + heal_amount)
+        if hasattr(character, "spell_slots_max"):
+            max_slots = int(getattr(character, "spell_slots_max", 0) or 0)
+            current_slots = int(getattr(character, "spell_slots_current", 0) or 0)
+            character.spell_slots_current = min(max_slots, current_slots + int(self._SHORT_REST_MAX_SPELL_RECOVERY))
+        self._recover_party_runtime_state(character, context="travel")
+
+        world_after = self.advance_world(ticks=1) if self.world_repo else None
+        if world_after is not None:
+            if self._decay_faction_heat(
+                character,
+                amount=1,
+                world_turn=int(getattr(world_after, "current_turn", 0) or 0),
+                reason="short_rest",
+                interval_turns=0,
+            ):
+                self.character_repo.save(character)
+        else:
+            self.character_repo.save(character)
+        if world_after is None:
+            self.character_repo.save(character)
+
+        return ActionResult(
+            messages=[
+                f"Short rest: +{heal_amount} HP recovered.",
+                "You catch your breath and regain limited focus.",
+            ],
+            game_over=False,
+        )
+
+    def long_rest_intent(self, character_id: int) -> ActionResult:
+        self.rest(character_id)
+        return ActionResult(messages=["Long rest complete. You rest and feel restored."], game_over=False)
 
     def rest_intent(self, character_id: int) -> ActionResult:
         self.rest(character_id)
         return ActionResult(messages=["You rest and feel restored."], game_over=False)
+
+    def get_camp_activity_options_intent(self, character_id: int) -> list[tuple[str, str]]:
+        character = self._require_character(character_id)
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        if self._current_location_type(character, location) != "wilderness":
+            return []
+        options: list[tuple[str, str]] = []
+        for activity_id in ("forage", "repair", "watch"):
+            row = self._CAMP_ACTIVITY_DEFS.get(activity_id, {})
+            options.append((activity_id, str(row.get("label", activity_id.title()))))
+        return options
+
+    def _campfire_reflection_line(self, character: Character, world: World | None, weather_label: str) -> str:
+        consequence_hint = "the road ahead"
+        if world is not None:
+            recent = [line for line in self._recent_consequence_messages(world) if str(line).strip()]
+            if recent:
+                consequence_hint = str(recent[-1]).strip().rstrip(".")
+        return f"By the campfire, {character.name} reflects on {consequence_hint} under {str(weather_label).lower()} skies."
+
+    def submit_camp_activity_intent(self, character_id: int, activity_id: str) -> ActionResult:
+        character = self._require_character(character_id)
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        if self._current_location_type(character, location) != "wilderness":
+            return ActionResult(messages=["Camp activities can only be performed in the wilderness."], game_over=False)
+
+        key = str(activity_id or "").strip().lower()
+        activity = self._CAMP_ACTIVITY_DEFS.get(key)
+        if not isinstance(activity, dict):
+            return ActionResult(messages=["Unknown camp activity."], game_over=False)
+        if not self._consume_inventory_item(character, "Sturdy Rations"):
+            return ActionResult(messages=["You need Sturdy Rations to set camp safely."], game_over=False)
+
+        world_before = self.world_repo.load_default() if self.world_repo else None
+        world_turn = int(getattr(world_before, "current_turn", 0) or 0) if world_before is not None else 0
+        immersion = self._world_immersion_state(world_before)
+        weather_label = str(immersion.get("weather", "Unknown"))
+
+        heal_cap = int(rest_heal_amount(int(getattr(character, "hp_max", 1) or 1)))
+        heal_ratio = float(activity.get("heal_ratio", 1.0) or 1.0)
+        heal_amount = max(1, int(round(heal_cap * heal_ratio)))
+        before_hp = int(getattr(character, "hp_current", 0) or 0)
+        character.hp_current = min(int(getattr(character, "hp_max", 1) or 1), before_hp + heal_amount)
+        character.alive = True
+        if hasattr(character, "spell_slots_max"):
+            max_slots = int(getattr(character, "spell_slots_max", 0) or 0)
+            current_slots = int(getattr(character, "spell_slots_current", 0) or 0)
+            if key == "watch":
+                character.spell_slots_current = min(max_slots, current_slots + 1)
+            else:
+                character.spell_slots_current = max_slots
+
+        ambush_seed = derive_seed(
+            namespace="camp.ambush",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "world_turn": int(world_turn),
+                "activity": str(key),
+                "location_id": int(getattr(character, "location_id", 0) or 0),
+                "weather": weather_label,
+            },
+        )
+        ambush_rng = random.Random(ambush_seed)
+        risk = 20 + int(activity.get("risk_shift", 0) or 0) + self._weather_risk_shift(weather_label)
+        risk = max(4, min(85, int(risk)))
+        ambush_roll = int(ambush_rng.randint(1, 100))
+        threat_delta = 0
+
+        activity_messages = [str(activity.get("summary", "You make camp."))]
+        if key == "forage":
+            forage_seed = derive_seed(
+                namespace="camp.forage",
+                context={
+                    "character_id": int(getattr(character, "id", 0) or 0),
+                    "world_turn": int(world_turn),
+                    "weather": weather_label,
+                },
+            )
+            forage_rng = random.Random(forage_seed)
+            if forage_rng.randint(1, 100) <= 60:
+                item = ["Healing Herbs", "Antitoxin", "Sturdy Rations"][forage_rng.randint(0, 2)]
+                character.inventory.append(item)
+                activity_messages.append(f"Foraging yields {item}.")
+            else:
+                activity_messages.append("Foraging turns up little beyond damp brush.")
+        elif key == "repair":
+            unlocks = self._interaction_unlocks(character)
+            unlocks["camp_repair_ready"] = True
+            activity_messages.append("Your kit is tightened and battle-ready for the next engagement.")
+
+        if ambush_roll <= risk:
+            max_safe_loss = max(0, int(getattr(character, "hp_current", 1) or 1) - 1)
+            hp_loss = min(max_safe_loss, max(1, int(getattr(character, "hp_max", 1) or 1) // 12))
+            if hp_loss > 0:
+                character.hp_current = max(1, int(getattr(character, "hp_current", 1) or 1) - hp_loss)
+            activity_messages.append("Night movement in the dark forces a skirmish at camp's edge.")
+            threat_delta = 1
+        else:
+            activity_messages.append("The night passes without incident.")
+
+        world_after = None
+        if self.world_repo:
+            if self.atomic_state_persistor:
+                world_after = self.advance_world(ticks=1, persist=False)
+                if world_after is not None:
+                    if threat_delta > 0 and hasattr(world_after, "threat_level"):
+                        world_after.threat_level = max(0, int(getattr(world_after, "threat_level", 0) or 0) + int(threat_delta))
+                    self._decay_faction_heat(
+                        character,
+                        amount=1,
+                        world_turn=int(getattr(world_after, "current_turn", 0) or 0),
+                        reason="camp",
+                        interval_turns=0,
+                    )
+                    self.atomic_state_persistor(character, world_after)
+                else:
+                    self.character_repo.save(character)
+            else:
+                self.character_repo.save(character)
+                world_after = self.advance_world(ticks=1)
+                if world_after is not None and threat_delta > 0 and hasattr(world_after, "threat_level"):
+                    world_after.threat_level = max(0, int(getattr(world_after, "threat_level", 0) or 0) + int(threat_delta))
+                    self.world_repo.save(world_after)
+                if world_after is not None and self._decay_faction_heat(
+                    character,
+                    amount=1,
+                    world_turn=int(getattr(world_after, "current_turn", 0) or 0),
+                    reason="camp",
+                    interval_turns=0,
+                ):
+                    self.character_repo.save(character)
+        else:
+            self.character_repo.save(character)
+
+        activity_messages.append(self._campfire_reflection_line(character, world_after or world_before, weather_label))
+        return ActionResult(messages=activity_messages, game_over=False)
 
     def advance_world(self, ticks: int = 1, persist: bool = True):
         if not self.world_repo:
@@ -625,6 +1181,9 @@ class GameService:
             base_max_enemies=2,
             base_faction_bias=faction_bias,
         )
+        heated_faction, heat_score = self._dominant_faction_heat(character)
+        if heated_faction and heat_score >= 6:
+            effective_faction_bias = heated_faction
 
         plan = self.encounter_service.generate_plan(
             location_id=character.location_id or 0,
@@ -634,6 +1193,13 @@ class GameService:
             max_enemies=effective_max_enemies,
             location_biome=str(getattr(location, "biome", "wilderness") or "wilderness"),
             world_flags=self._world_flag_projection(world),
+        )
+        self._apply_faction_encounter_package(
+            plan,
+            faction_bias=effective_faction_bias,
+            character_id=int(getattr(character, "id", 0) or 0),
+            world_turn=int(getattr(world, "current_turn", 0) or 0),
+            location_id=int(getattr(character, "location_id", 0) or 0),
         )
 
         self.advance_world(ticks=1)
@@ -687,9 +1253,34 @@ class GameService:
         dex = int(attrs.get("dexterity", attrs.get("agility", 10)) or 10)
         wis = int(attrs.get("wisdom", 10) or 10)
         skill_mod = max((dex - 10) // 2, (wis - 10) // 2)
-        dc = 12 + min(4, len(hazard_names))
+        hazard_text = " ".join(hazard_names).lower()
+        biome_text = str(getattr(location, "biome", "wilderness") if location else "wilderness").lower()
+
+        utility_bonus = 0
+        utility_note = ""
+        if self._inventory_has_item(character, "Climbing Kit") and any(token in hazard_text for token in ("cliff", "rock", "slope", "ruin", "wall", "mountain")):
+            self._consume_inventory_item(character, "Climbing Kit")
+            utility_bonus += 2
+            utility_note = " You deploy a Climbing Kit for safer footing."
+        elif self._inventory_has_item(character, "Rope") and any(token in hazard_text for token in ("chasm", "ravine", "bridge", "drop", "cliff")):
+            self._consume_inventory_item(character, "Rope")
+            utility_bonus += 2
+            utility_note = " A rope line stabilizes your crossing."
+        elif self._inventory_has_item(character, "Torch") and any(token in hazard_text for token in ("dark", "fog", "crypt", "cave", "tunnel", "night")):
+            self._consume_inventory_item(character, "Torch")
+            utility_bonus += 2
+            utility_note = " Torchlight reveals safer routes through the hazard."
+        elif self._inventory_has_item(character, "Antitoxin") and (
+            any(token in hazard_text for token in ("poison", "toxic", "spore", "venom", "bog", "swamp"))
+            or any(token in biome_text for token in ("swamp", "marsh", "bog"))
+        ):
+            self._consume_inventory_item(character, "Antitoxin")
+            utility_bonus += 2
+            utility_note = " Antitoxin blunts the worst of the fumes."
+        dc = 12 + min(4, len(hazard_names)) + self._biome_explore_hazard_dc_shift(biome_text)
+        dc = max(8, min(20, int(dc)))
         roll = rng.randint(1, 20)
-        total = roll + skill_mod
+        total = roll + skill_mod + utility_bonus
         lead_hazard = hazard_names[0]
 
         def _environment_suffix(event_kind: str) -> str:
@@ -707,7 +1298,7 @@ class GameService:
             return f" {line}" if str(line).strip() else ""
 
         if total >= dc:
-            return f"You navigate {lead_hazard} safely ({total} vs DC {dc}).{_environment_suffix('hazard_success')}".strip(), False
+            return f"You navigate {lead_hazard} safely ({total} vs DC {dc}).{utility_note}{_environment_suffix('hazard_success')}".strip(), False
 
         hp_loss_cap = max(0, int(getattr(character, "hp_current", 1)) - 1)
         hp_loss = min(hp_loss_cap, max(1, int(getattr(character, "hp_max", 1)) // 14))
@@ -753,9 +1344,34 @@ class GameService:
         if forced_retreat:
             return (
                 f"{lead_hazard} disrupts your route (-{hp_loss} HP). "
-                f"You withdraw before combat.{_environment_suffix('hazard_failed')}"
+                f"You withdraw before combat.{utility_note}{_environment_suffix('hazard_failed')}"
             ).strip(), True
-        return f"{lead_hazard} strains your advance (-{hp_loss} HP).{_environment_suffix('hazard_failed')}".strip(), False
+        return f"{lead_hazard} strains your advance (-{hp_loss} HP).{utility_note}{_environment_suffix('hazard_failed')}".strip(), False
+
+    @staticmethod
+    def _inventory_has_item(character: Character, item_name: str) -> bool:
+        inventory = list(getattr(character, "inventory", []) or [])
+        return str(item_name) in [str(row) for row in inventory]
+
+    @staticmethod
+    def _consume_inventory_item(character: Character, item_name: str) -> bool:
+        inventory = list(getattr(character, "inventory", []) or [])
+        target = str(item_name)
+        for index, value in enumerate(inventory):
+            if str(value) == target:
+                del inventory[index]
+                character.inventory = inventory
+                return True
+        return False
+
+    @classmethod
+    def _loot_tier_for_level(cls, monster_level: int) -> int:
+        level = max(1, int(monster_level or 1))
+        if level >= 6:
+            return 3
+        if level >= 3:
+            return 2
+        return 1
 
     def get_player_view(self, player_id: int) -> str:
         world = self._require_world()
@@ -792,13 +1408,15 @@ class GameService:
         )
         rng = random.Random(seed)
         roll = rng.randint(1, 100)
+        biome_name = str(getattr(location, "biome", "") if location else "")
+        adjusted_roll = max(1, min(100, roll + self._biome_explore_event_roll_shift(biome_name)))
 
         flags = getattr(character, "flags", None)
         if not isinstance(flags, dict):
             flags = {}
             character.flags = flags
 
-        if roll <= 40:
+        if adjusted_roll <= 40:
             message = "You discover old trail marks that reveal safer routes ahead."
             event_kind = "discovery"
             self._append_consequence(
@@ -808,7 +1426,7 @@ class GameService:
                 severity="minor",
                 turn=int(getattr(world, "current_turn", 0)),
             )
-        elif roll <= 75:
+        elif adjusted_roll <= 75:
             gold_gain = 2 + rng.randint(1, 5)
             cache_item = self._EXPLORE_CACHE_ITEMS[rng.randrange(len(self._EXPLORE_CACHE_ITEMS))]
             character.money = int(getattr(character, "money", 0)) + gold_gain
@@ -851,12 +1469,276 @@ class GameService:
             location_name=str(getattr(location, "name", "unknown") if location else "unknown"),
             world_threat=int(getattr(world, "threat_level", 0) or 0),
         )
+        arc_message = self._advance_companion_arc(
+            character,
+            channel="explore",
+            world_turn=int(getattr(world, "current_turn", 0) or 0),
+            base_delta=1 if event_kind in {"discovery", "cache"} else 0,
+        )
         if lead_message:
             message = f"{message} {lead_message}".strip()
+        if arc_message:
+            message = f"{message} {arc_message}".strip()
         self.character_repo.save(character)
         if self.world_repo:
             self.world_repo.save(world)
         return message
+
+    @classmethod
+    def _load_reference_world_dataset_cached(cls):
+        project_root = Path(__file__).resolve().parents[4]
+        reference_dir = project_root / "reference_"
+        cache_key = str(reference_dir)
+        cached = cls._REFERENCE_WORLD_DATASET_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            dataset = load_reference_world_dataset(reference_dir)
+        except Exception:
+            dataset = None
+        cls._REFERENCE_WORLD_DATASET_CACHE[cache_key] = dataset
+        return dataset
+
+    @classmethod
+    def _load_default_biome_severity_index(cls) -> dict[str, int]:
+        project_root = Path(__file__).resolve().parents[4]
+        defaults_path = project_root / cls._DEFAULT_BIOME_SEVERITY_FILE
+        cache_key = str(defaults_path)
+        cached = cls._BIOME_SEVERITY_DEFAULT_CACHE.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+
+        merged = dict(cls._DEFAULT_BIOME_SEVERITY_INDEX)
+        try:
+            with defaults_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                for key, value in payload.items():
+                    slug = cls._biome_slug(str(key or ""))
+                    if not slug:
+                        continue
+                    try:
+                        merged[slug] = max(0, min(100, int(value)))
+                    except (TypeError, ValueError):
+                        continue
+        except Exception:
+            pass
+
+        cls._BIOME_SEVERITY_DEFAULT_CACHE[cache_key] = dict(merged)
+        return dict(merged)
+
+    @classmethod
+    def get_reference_world_dataset_intent(cls) -> dict[str, object]:
+        dataset = cls._load_reference_world_dataset_cached()
+        default_index = cls._load_default_biome_severity_index()
+        if dataset is None:
+            return {
+                "available": False,
+                "source_files": {},
+                "biome_severity_index": default_index,
+            }
+        dataset_index = dict(getattr(dataset, "biome_severity_index", {}) or {})
+        merged_index = dict(default_index)
+        merged_index.update(dataset_index)
+        return {
+            "available": True,
+            "source_files": dict(getattr(dataset, "source_files", {}) or {}),
+            "biome_severity_index": merged_index,
+        }
+
+    @staticmethod
+    def _biome_slug(value: str) -> str:
+        cleaned = str(value or "").strip().lower().replace("-", " ")
+        return "_".join(part for part in cleaned.split() if part)
+
+    @classmethod
+    def _biome_severity_score(cls, biome_name: str) -> int:
+        dataset = cls._load_reference_world_dataset_cached()
+        index = cls._load_default_biome_severity_index()
+        if dataset is not None:
+            index.update(dict(getattr(dataset, "biome_severity_index", {}) or {}))
+        if not index:
+            return 50
+
+        slug = cls._biome_slug(biome_name)
+        if not slug:
+            return 50
+        if slug in index:
+            return max(0, min(100, int(index[slug] or 0)))
+
+        tokens = [token for token in slug.split("_") if token]
+        if not tokens:
+            return 50
+        scores: list[int] = []
+        for key, value in index.items():
+            key_text = str(key or "").lower()
+            if any(token in key_text for token in tokens):
+                try:
+                    scores.append(int(value))
+                except (TypeError, ValueError):
+                    continue
+        if not scores:
+            return 50
+        mean_score = int(round(sum(scores) / float(len(scores))))
+        return max(0, min(100, mean_score))
+
+    @classmethod
+    def _biome_travel_risk_shift(cls, biome_name: str) -> int:
+        centered = cls._biome_severity_score(biome_name) - 50
+        return max(-6, min(6, int(round(centered / 8.0))))
+
+    @classmethod
+    def _biome_explore_hazard_dc_shift(cls, biome_name: str) -> int:
+        centered = cls._biome_severity_score(biome_name) - 50
+        return max(-2, min(2, int(round(centered / 20.0))))
+
+    @classmethod
+    def _biome_explore_event_roll_shift(cls, biome_name: str) -> int:
+        centered = cls._biome_severity_score(biome_name) - 50
+        return max(-10, min(10, int(round(centered / 5.0))))
+
+    def wilderness_action_intent(self, character_id: int, action_id: str) -> ActionResult:
+        character = self._require_character(character_id)
+        world = self._require_world()
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+
+        action_key = str(action_id or "").strip().lower()
+        action_defs = {
+            "scout": {"ability": "wisdom", "skill": "Survival", "dc": 12},
+            "investigate": {"ability": "intelligence", "skill": "Investigation", "dc": 13},
+            "forage": {"ability": "wisdom", "skill": "Nature", "dc": 11},
+            "sneak": {"ability": "dexterity", "skill": "Stealth", "dc": 12},
+        }
+        payload = action_defs.get(action_key)
+        if payload is None:
+            return ActionResult(messages=["Unknown wilderness action."], game_over=False)
+
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        nonce_map = flags.setdefault("wilderness_action_nonce", {})
+        if not isinstance(nonce_map, dict):
+            nonce_map = {}
+            flags["wilderness_action_nonce"] = nonce_map
+
+        nonce_key = f"{action_key}:{int(getattr(world, 'current_turn', 0) or 0)}:{int(getattr(character, 'location_id', 0) or 0)}"
+        nonce = int(nonce_map.get(nonce_key, 0) or 0) + 1
+        nonce_map[nonce_key] = nonce
+
+        ability_key = str(payload.get("ability", "wisdom"))
+        attrs = getattr(character, "attributes", {}) or {}
+        score = int(attrs.get(ability_key, 10) or 10)
+        modifier = self._ability_mod(score)
+        dc = int(payload.get("dc", 12) or 12)
+
+        seed = derive_seed(
+            namespace="wilderness.skill_action",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "action": action_key,
+                "world_turn": int(getattr(world, "current_turn", 0) or 0),
+                "location_id": int(getattr(character, "location_id", 0) or 0),
+                "location_name": str(getattr(location, "name", "unknown") if location else "unknown"),
+                "nonce": int(nonce),
+            },
+        )
+        rng = random.Random(seed)
+        roll = rng.randint(1, 20)
+        total = roll + modifier
+        success = total >= dc
+
+        skill_name = str(payload.get("skill", "Check"))
+        messages = [f"{skill_name} check: d20 ({roll}) + {modifier} = {total} vs DC {dc}."]
+
+        if action_key == "scout":
+            if success:
+                if hasattr(world, "threat_level"):
+                    world.threat_level = max(0, int(getattr(world, "threat_level", 0) or 0) - 1)
+                messages.append("You identify safer approach lines and lower local pressure.")
+            else:
+                messages.append("The trails blur together; you gain no tactical advantage.")
+
+        elif action_key == "investigate":
+            if success:
+                findings = ["Old Coin Pouch", "Torch", "Rope", "Scout Notes"]
+                found = findings[int(seed) % len(findings)]
+                character.inventory.append(found)
+                biome_key = str(getattr(location, "biome", "wilderness") if location else "wilderness").strip().lower()
+                biome_lines = self._INVESTIGATE_BIOME_LORE.get(biome_key) or self._INVESTIGATE_BIOME_LORE.get("wilderness", ())
+                location_factions = list(getattr(location, "factions", []) or []) if location is not None else []
+                local_faction = str(location_factions[0]).strip().lower() if location_factions else ""
+                faction_line = self._INVESTIGATE_FACTION_LORE.get(local_faction, "")
+                lore_seed = derive_seed(
+                    namespace="wilderness.investigate.lore",
+                    context={
+                        "character_id": int(getattr(character, "id", 0) or 0),
+                        "world_turn": int(getattr(world, "current_turn", 0) or 0),
+                        "location_id": int(getattr(character, "location_id", 0) or 0),
+                        "biome": biome_key,
+                        "faction": local_faction or "none",
+                    },
+                )
+                lore_line = ""
+                if biome_lines:
+                    lore_line = str(biome_lines[int(lore_seed) % len(biome_lines)])
+                if faction_line:
+                    lore_line = f"{lore_line} {faction_line}".strip()
+
+                messages.append(f"You uncover {found} while searching the area.")
+                if lore_line:
+                    messages.append(lore_line)
+                self._record_codex_entry(
+                    character,
+                    entry_id=f"lore:investigate:{int(getattr(character, 'location_id', 0) or 0)}",
+                    category="Lore",
+                    title="Field Investigation Notes",
+                    body=(
+                        f"Recovered {found}. "
+                        f"Biome: {biome_key or 'unknown'}. "
+                        f"Local faction: {(local_faction or 'unaligned').replace('_', ' ')}. "
+                        f"{lore_line}".strip()
+                    ),
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                    increment_discoveries=True,
+                )
+            else:
+                messages.append("Your search turns up scraps and false leads.")
+
+        elif action_key == "forage":
+            if success:
+                heal = max(1, rng.randint(1, 4) + max(0, modifier))
+                character.hp_current = min(int(getattr(character, "hp_max", 1) or 1), int(getattr(character, "hp_current", 1) or 1) + heal)
+                if rng.randint(1, 100) <= 35:
+                    character.inventory.append("Sturdy Rations")
+                    messages.append(f"You recover {heal} HP and gather Sturdy Rations.")
+                else:
+                    messages.append(f"You recover {heal} HP from edible finds and clean water.")
+            else:
+                messages.append("Foraging fails to yield anything safe to consume.")
+
+        elif action_key == "sneak":
+            if success:
+                flags["next_explore_surprise"] = "player"
+                messages.append("You advance quietly; your next encounter starts with surprise.")
+            else:
+                messages.append("You snap a branch and lose the element of stealth.")
+
+        self.character_repo.save(character)
+        if self.world_repo:
+            self.world_repo.save(world)
+        return ActionResult(messages=messages, game_over=False)
+
+    def consume_next_explore_surprise_intent(self, character_id: int) -> str | None:
+        character = self._require_character(character_id)
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            return None
+        value = str(flags.pop("next_explore_surprise", "") or "").strip().lower()
+        if value not in {"player", "enemy", "none"}:
+            value = ""
+        self.character_repo.save(character)
+        return value or None
 
     def _apply_explore_no_combat_fallback(self, character: Character, enemies: list[Entity]) -> str:
         world = self._require_world()
@@ -874,13 +1756,39 @@ class GameService:
         rng = random.Random(seed)
         roll = rng.randint(1, 100)
 
+        encounter_mode = "snare"
+        if roll > 66:
+            encounter_mode = "poison"
+        elif roll > 33:
+            encounter_mode = "dark"
+
+        utility_item = ""
+        utility_note = ""
+        if encounter_mode == "snare" and self._inventory_has_item(character, "Rope"):
+            self._consume_inventory_item(character, "Rope")
+            utility_item = "Rope"
+            utility_note = " You throw a rope line and avoid the worst of the pursuit."
+        elif encounter_mode == "dark" and self._inventory_has_item(character, "Torch"):
+            self._consume_inventory_item(character, "Torch")
+            utility_item = "Torch"
+            utility_note = " Torchlight keeps the route visible during the withdrawal."
+        elif encounter_mode == "poison" and self._inventory_has_item(character, "Antitoxin"):
+            self._consume_inventory_item(character, "Antitoxin")
+            utility_item = "Antitoxin"
+            utility_note = " Antitoxin blunts tainted cuts and fumes while retreating."
+
+        threat_delta = 1
+        if utility_item:
+            threat_delta = max(0, threat_delta - 1)
         if hasattr(world, "threat_level"):
-            world.threat_level = max(0, int(world.threat_level) + 1)
+            world.threat_level = max(0, int(world.threat_level) + int(threat_delta))
 
         hp_loss = 0
         if roll <= 60:
             max_safe_loss = max(0, int(getattr(character, "hp_current", 1)) - 1)
             hp_loss = min(max_safe_loss, max(1, int(getattr(character, "hp_max", 1)) // 12))
+            if utility_item:
+                hp_loss = max(0, int(hp_loss) - 1)
             if hp_loss > 0:
                 character.hp_current = max(1, int(character.hp_current) - int(hp_loss))
             message = (
@@ -890,6 +1798,8 @@ class GameService:
             )
         else:
             message = "You mark hostile movement and avoid direct combat; local danger rises."
+        if utility_note:
+            message = f"{message}{utility_note}".strip()
 
         flags = getattr(character, "flags", None)
         if not isinstance(flags, dict):
@@ -900,6 +1810,8 @@ class GameService:
             "turn": int(getattr(world, "current_turn", 0)),
             "seed": int(seed),
             "enemy_count": len(enemies),
+            "mode": encounter_mode,
+            "utility_item": utility_item,
         }
 
         self._append_consequence(
@@ -936,6 +1848,7 @@ class GameService:
     def get_game_loop_view(self, character_id: int) -> GameLoopView:
         character = self._require_character(character_id)
         world_state = self.world_repo.load_default() if self.world_repo else None
+        immersion = self._world_immersion_state(world_state)
         return GameLoopView(
             character_id=character.id or 0,
             name=character.name,
@@ -946,6 +1859,8 @@ class GameService:
             hp_max=character.hp_max,
             world_turn=getattr(world_state, "current_turn", None),
             threat_level=getattr(world_state, "threat_level", None),
+            time_label=str(immersion.get("time_label", "")),
+            weather_label=str(immersion.get("weather", "Unknown")),
         )
 
     def get_character_sheet_intent(self, character_id: int) -> CharacterSheetView:
@@ -958,6 +1873,7 @@ class GameService:
         else:
             next_level_xp = xp_required_for_level(level + 1)
             xp_to_next = max(0, int(next_level_xp) - xp)
+        pressure_summary, pressure_lines = self._faction_pressure_display(character)
         return CharacterSheetView(
             character_id=int(character.id or 0),
             name=character.name,
@@ -970,6 +1886,8 @@ class GameService:
             xp_to_next_level=int(xp_to_next),
             hp_current=int(character.hp_current),
             hp_max=int(character.hp_max),
+            pressure_summary=pressure_summary,
+            pressure_lines=pressure_lines,
         )
 
     def get_level_up_pending_intent(self, character_id: int) -> LevelUpPendingView | None:
@@ -1125,12 +2043,11 @@ class GameService:
                 prep_profile=prep_profile,
             )
             risk_descriptor = self._travel_risk_descriptor(location=location, risk_hint=risk_hint)
-            preview = f"{location_type.title()} • {biome} • Lv {recommended_level} • Days {road_days} • Risk {risk_descriptor}"
-            flavour_hint = self._location_flavour_hint(location)
-            if flavour_hint:
-                preview = f"{preview} • {flavour_hint}"
-            if prep_summary:
-                preview = f"{preview} • Prep {prep_summary}"
+            risk_width = int(self._TRAVEL_PREVIEW_RISK_WIDTH)
+            risk_label = str(risk_descriptor or "")[:risk_width]
+            level_label = f"Lv {recommended_level}"
+            days_label = f"{road_days}d"
+            preview = f"{level_label:<6} • {days_label:<3} • {risk_label:<{risk_width}}"
             destinations.append(
                 TravelDestinationView(
                     location_id=int(location.id),
@@ -1157,7 +2074,28 @@ class GameService:
         if discovered:
             return self._settlement_display_name(world, destination)
         direction = self._get_direction(source, destination)
-        return f"Unknown Settlement to the {direction}"
+        direction_label = self._direction_compact_label(direction)
+        destination_type = "Town" if self._is_town_location(destination) else "Wilderness"
+        return f"{direction_label} {destination_type}"
+
+    @staticmethod
+    def _direction_compact_label(direction: str) -> str:
+        normalized = str(direction or "").strip().lower().replace("_", "-").replace(" ", "-")
+        mapping = {
+            "north": "Northern",
+            "south": "Southern",
+            "east": "Eastern",
+            "west": "Western",
+            "north-east": "North-East",
+            "northeast": "North-East",
+            "north-west": "North-West",
+            "northwest": "North-West",
+            "south-east": "South-East",
+            "southeast": "South-East",
+            "south-west": "South-West",
+            "southwest": "South-West",
+        }
+        return mapping.get(normalized, str(direction or "Unknown").title())
 
     @staticmethod
     def _discovered_locations(character: Character, current_location: Location | None) -> set[int]:
@@ -1344,8 +2282,12 @@ class GameService:
         rng = random.Random(seed)
         roll = rng.randint(1, 100)
         pressure = max(0, int(threat_level)) + max(0, int(recommended_level) - 1)
+        character = self._require_character(character_id)
+        pressure += self._faction_heat_pressure(character)
+        location = self.location_repo.get(int(location_id)) if self.location_repo else None
+        biome_shift = self._biome_travel_risk_shift(str(getattr(location, "biome", "") or ""))
         mode_shift = {"road": 0, "stealth": -8, "caravan": -12}.get(mode, 0)
-        score = roll + pressure + mode_shift + max(-30, min(10, prep_risk_shift))
+        score = roll + pressure + mode_shift + max(-30, min(10, prep_risk_shift)) + biome_shift
 
         if score <= 40:
             return "Low"
@@ -1415,13 +2357,35 @@ class GameService:
                     destination_name,
                     mode,
                     prep_profile=prep_profile,
+                    destination_biome=str(getattr(target_location, "biome", "") or ""),
                 )
                 if travel_event_message:
                     log_messages.append(travel_event_message)
             else:
                 log_messages.append(self._travel_day_quiet_message(day=day, estimated_days=estimated_days, travel_mode=mode))
+
+            active_world = self.world_repo.load_default() if self.world_repo else None
+            immersion = self._world_immersion_state(active_world)
+            weather_label = str(immersion.get("weather", "Unknown"))
+            if weather_label in {"Rain", "Storm", "Blizzard", "Fog"}:
+                log_messages.append(f"Weather: {weather_label} slows the march and complicates scouting.")
+            if weather_label == "Blizzard" and not self._inventory_has_item(character, "Sturdy Rations"):
+                max_safe_loss = max(0, int(getattr(character, "hp_current", 1)) - 1)
+                hp_loss = min(max_safe_loss, 1)
+                if hp_loss > 0:
+                    character.hp_current = max(1, int(getattr(character, "hp_current", 1)) - hp_loss)
+                    log_messages.append("Without winter provisions, the blizzard strips 1 HP from exposure.")
+
             self.character_repo.save(character)
-            self.advance_world(ticks=1)
+            world_after_tick = self.advance_world(ticks=1)
+            if world_after_tick is not None and self._decay_faction_heat(
+                character,
+                amount=self._FACTION_HEAT_TRAVEL_DECAY_AMOUNT,
+                world_turn=int(getattr(world_after_tick, "current_turn", 0) or 0),
+                reason="travel",
+                interval_turns=self._FACTION_HEAT_TRAVEL_DECAY_INTERVAL,
+            ):
+                self.character_repo.save(character)
 
         if target_location is not None:
             character.location_id = target_location.id
@@ -1505,6 +2469,7 @@ class GameService:
         destination_name: str | None,
         travel_mode: str = "road",
         prep_profile: dict | None = None,
+        destination_biome: str | None = None,
     ) -> str:
         if not self.world_repo:
             return ""
@@ -1522,12 +2487,18 @@ class GameService:
                 "location_id": int(getattr(character, "location_id", 0) or 0),
                 "travel_mode": mode,
                 "travel_prep": prep_id,
+                "destination_biome": str(destination_biome or ""),
             },
         )
         rng = random.Random(seed)
         roll = rng.randint(1, 100)
         mode_shift = {"road": 0, "stealth": -8, "caravan": -12}.get(mode, 0)
-        adjusted_roll = max(1, min(100, roll + mode_shift + max(-20, min(8, prep_roll_shift))))
+        heat_pressure = self._faction_heat_pressure(character)
+        biome_shift = self._biome_travel_risk_shift(str(destination_biome or ""))
+        adjusted_roll = max(
+            1,
+            min(100, roll + mode_shift + heat_pressure + max(-20, min(8, prep_roll_shift)) + biome_shift),
+        )
 
         if adjusted_roll <= 35:
             message = "The road is clear and you keep good pace."
@@ -1563,6 +2534,10 @@ class GameService:
             message = f"You keep to quieter paths. {message}"
         elif mode == "caravan":
             message = f"You move with a guarded caravan. {message}"
+
+        heated_faction, heat_score = self._dominant_faction_heat(character)
+        if heated_faction and heat_score >= 6:
+            message = f"{message} Scouts tied to {heated_faction.replace('_', ' ')} shadow your route."
 
         self._append_consequence(
             world,
@@ -1769,6 +2744,7 @@ class GameService:
         location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
         location_name = self._settlement_display_name(world, location)
         district_tag, landmark_tag = self._town_layer_tags(world=world, location=location)
+        immersion = self._world_immersion_state(world)
         prep_summary = self._travel_prep_summary(self._active_travel_prep_profile(character))
         npcs = []
         for npc in self._TOWN_NPCS:
@@ -1777,7 +2753,7 @@ class GameService:
                 to_town_npc_view(
                     npc_id=npc["id"],
                     name=npc["name"],
-                    role=npc["role"],
+                    role=str(npc["role"]),
                     temperament=npc["temperament"],
                     relationship=disposition,
                 )
@@ -1785,6 +2761,14 @@ class GameService:
         story_lines = self._active_story_seed_town_lines(world)
         memory_lines = self._recent_story_memory_town_lines(world)
         recent_consequences = self._recent_consequence_messages(world)
+        phase = str(immersion.get("phase", ""))
+        if phase in {"Midnight", "Night"}:
+            recent_consequences = [f"Night routine: most merchants close shutters after {phase.lower()}."] + list(recent_consequences)
+        elif phase == "Dusk":
+            recent_consequences = ["Dusk routine: taverns crowd while traders prepare to close."] + list(recent_consequences)
+        if int(getattr(world, "threat_level", 0) or 0) >= 4:
+            recent_consequences = ["Tension response: shopkeepers board windows and whisper about flashpoints."] + list(recent_consequences)
+        pressure_summary, pressure_lines = self._faction_pressure_display(character)
         return to_town_view(
             day=getattr(world, "current_turn", None),
             threat_level=getattr(world, "threat_level", None),
@@ -1794,20 +2778,112 @@ class GameService:
             district_tag=district_tag,
             landmark_tag=landmark_tag,
             active_prep_summary=prep_summary,
+            pressure_summary=pressure_summary,
+            pressure_lines=pressure_lines,
+            time_label=str(immersion.get("time_label", "")),
+            weather_label=str(immersion.get("weather", "Unknown")),
+        )
+
+    def get_pressure_relief_targets_intent(self, character_id: int) -> list[tuple[str, int]]:
+        character = self._require_character(character_id)
+        state = self._faction_heat_state(character)
+        if not state:
+            return []
+        ordered = sorted(state.items(), key=lambda item: (-int(item[1]), str(item[0])))
+        return [(str(faction_id), int(score)) for faction_id, score in ordered]
+
+    def submit_pressure_relief_intent(self, character_id: int, faction_id: str | None = None) -> ActionResult:
+        character = self._require_character(character_id)
+        state = self._faction_heat_state(character)
+        if not state:
+            return ActionResult(messages=["No faction pressure needs attention right now."], game_over=False)
+
+        normalized_faction = str(faction_id or "").strip().lower()
+        if normalized_faction and normalized_faction not in state:
+            return ActionResult(messages=["That faction is not currently applying pressure."], game_over=False)
+        if not normalized_faction:
+            normalized_faction, _ = self._dominant_faction_heat(character)
+            if not normalized_faction:
+                return ActionResult(messages=["No faction pressure needs attention right now."], game_over=False)
+
+        current_heat = int(state.get(normalized_faction, 0) or 0)
+        if current_heat <= 0:
+            return ActionResult(messages=["That faction's pressure is already calm."], game_over=False)
+
+        relief_cost = int(self._FACTION_HEAT_RELIEF_COST)
+        if int(getattr(character, "money", 0) or 0) < relief_cost:
+            return ActionResult(messages=[f"You need {relief_cost} gold to lay low and cool tensions."], game_over=False)
+
+        character.money = max(0, int(getattr(character, "money", 0) or 0) - relief_cost)
+        self._adjust_faction_heat(character, faction_id=normalized_faction, delta=-int(self._FACTION_HEAT_RELIEF_AMOUNT))
+        updated_state = self._faction_heat_state(character)
+        next_heat = int(updated_state.get(normalized_faction, 0) or 0)
+        heat_delta = int(next_heat - current_heat)
+
+        world_after = None
+        if self.world_repo:
+            if self.atomic_state_persistor:
+                world_after = self.advance_world(ticks=1, persist=False)
+            else:
+                world_after = self.advance_world(ticks=1)
+        world_turn = int(getattr(world_after, "current_turn", 0) or 0)
+        if world_turn <= 0 and self.world_repo:
+            world_turn = int(getattr(self._require_world(), "current_turn", 0) or 0)
+
+        self._record_faction_heat_event(
+            character,
+            world_turn=world_turn,
+            reason="relief",
+            delta_by_faction={normalized_faction: heat_delta},
+        )
+        arc_message = self._advance_companion_arc(
+            character,
+            channel="faction",
+            world_turn=int(world_turn),
+            base_delta=2,
+        )
+
+        if self.atomic_state_persistor and self.world_repo and world_after is not None:
+            self.atomic_state_persistor(character, world_after)
+        else:
+            self.character_repo.save(character)
+
+        faction_label = normalized_faction.replace("_", " ").title()
+        return ActionResult(
+            messages=[
+                f"You lay low around {faction_label} contacts.",
+                f"Heat: {current_heat} → {next_heat}.",
+                f"Spent {relief_cost} gold and one day passes quietly.",
+            ] + ([arc_message] if arc_message else []),
+            game_over=False,
         )
 
     def get_npc_interaction_intent(self, character_id: int, npc_id: str) -> NpcInteractionView:
         character = self._require_character(character_id)
         world = self._require_world()
         npc = self._find_town_npc(npc_id)
+        schedule = self._npc_schedule_snapshot(world, str(npc["id"]))
         disposition = self._get_npc_disposition(world, npc["id"])
         greeting = self._npc_greeting(npc_name=npc["name"], temperament=npc["temperament"], disposition=disposition)
+        if not bool(schedule.get("available", True)):
+            phase_label = str(schedule.get("phase", "Night") or "Night")
+            location_name = str(schedule.get("location", "town") or "town")
+            greeting = f"{npc['name']} is off duty during {phase_label.lower()} and can only be found near {location_name}."
+            return NpcInteractionView(
+                npc_id=npc["id"],
+                npc_name=npc["name"],
+                role=npc["role"],
+                temperament=npc["temperament"],
+                relationship=disposition,
+                greeting=greeting,
+                approaches=[],
+            )
         memory_hint = self._story_memory_dialogue_hint(world, npc_id=npc["id"])
         if memory_hint:
             greeting = f"{greeting} {memory_hint}"
+        if int(getattr(world, "threat_level", 0) or 0) >= 4:
+            greeting = f"{greeting} The unrest has everyone speaking in lower voices."
         approaches = ["Friendly", "Direct", "Intimidate"]
-        if npc["id"] in {"broker_silas", "innkeeper_mara"}:
-            approaches.append("Ask About Companions")
         if npc["id"] == "broker_silas" and self._has_interaction_unlock(character, "intel_leverage"):
             approaches.append("Leverage Intel")
         if npc["id"] == "captain_ren" and self._has_interaction_unlock(character, "captain_favor"):
@@ -1830,11 +2906,26 @@ class GameService:
     def get_shop_view_intent(self, character_id: int) -> ShopView:
         character = self._require_character(character_id)
         price_modifier = self._town_price_modifier(character_id)
+        world = self.world_repo.load_default() if self.world_repo else None
+        immersion = self._world_immersion_state(world)
+        phase = str(immersion.get("phase", ""))
+        weather = str(immersion.get("weather", "Unknown"))
+        world_turn = int(getattr(world, "current_turn", 0) or 0) if world is not None else 0
+        after_hours = phase in {"Midnight", "Night"} and world_turn > 0
+        if after_hours:
+            price_modifier += 2
         standing_label = "neutral"
         if price_modifier < 0:
             standing_label = "friendly discount"
         elif price_modifier > 0:
             standing_label = "unfriendly surcharge"
+        heated_faction, heated_score = self._dominant_faction_heat(character)
+        if price_modifier > 0 and heated_faction and heated_score >= 6:
+            standing_label = f"{standing_label} ({heated_faction.replace('_', ' ')} pressure)"
+        if after_hours:
+            standing_label = f"{standing_label}; after-hours premium ({phase.lower()})"
+        if weather in {"Storm", "Blizzard"}:
+            standing_label = f"{standing_label}; weather scarcity"
 
         dynamic_rows: list[dict] = []
         loader = getattr(self.character_repo, "list_shop_items", None)
@@ -1848,14 +2939,20 @@ class GameService:
 
         items = []
         merged_rows = list(self._SHOP_ITEMS) + dynamic_rows
+        after_hours_essentials = {"sturdy_rations", "torch", "rope", "healing_herbs", "antitoxin"}
         emitted: set[str] = set()
         for row in merged_rows:
             item_id = str(row.get("id", "")).strip()
             if not item_id or item_id in emitted:
                 continue
+            if after_hours and item_id not in after_hours_essentials:
+                continue
             emitted.add(item_id)
             base_price = int(row.get("base_price", 1))
-            price = self._bounded_price(base_price, price_modifier)
+            row_modifier = int(price_modifier)
+            if weather in {"Storm", "Blizzard"} and str(item_id) in {"sturdy_rations", "torch", "antitoxin"}:
+                row_modifier += 1
+            price = self._bounded_price(base_price, row_modifier)
             availability_note = ""
             can_buy = character.money >= price
 
@@ -1878,6 +2975,8 @@ class GameService:
                 )
             )
 
+        if after_hours and not items:
+            standing_label = f"{standing_label}; shutters closed until morning"
         return to_shop_view(gold=character.money, price_modifier_label=standing_label, items=items)
 
     def buy_shop_item_intent(self, character_id: int, item_id: str) -> ActionResult:
@@ -2189,9 +3288,6 @@ class GameService:
         selection = templates[: max(2, min(4, base_count))]
 
         items: list[RumourItemView] = []
-        lead_rumour = self._companion_lead_rumour_item(character)
-        if lead_rumour is not None:
-            items.append(lead_rumour)
         seed_item = self._active_story_seed_rumour(world)
         if seed_item is not None:
             items.append(seed_item)
@@ -2556,13 +3652,27 @@ class GameService:
         character = self._require_character(character_id)
         world = self._require_world()
         npc = self._find_town_npc(npc_id)
+        schedule = self._npc_schedule_snapshot(world, str(npc["id"]))
+        if not bool(schedule.get("available", True)):
+            location_name = str(schedule.get("location", "town") or "town")
+            relationship = self._get_npc_disposition(world, npc["id"])
+            return SocialOutcomeView(
+                npc_id=npc["id"],
+                npc_name=npc["name"],
+                approach="unavailable",
+                success=False,
+                roll_total=0,
+                target_dc=0,
+                relationship_before=relationship,
+                relationship_after=relationship,
+                messages=[f"{npc['name']} is off duty right now. Try again near {location_name} during daytime."],
+            )
 
         normalized_approach = (approach or "").strip().lower()
         if normalized_approach not in {
             "friendly",
             "direct",
             "intimidate",
-            "ask about companions",
             "leverage intel",
             "call in favor",
             "invoke faction",
@@ -2579,8 +3689,6 @@ class GameService:
             normalized_approach = "direct"
         dominant_faction, dominant_score = self._dominant_faction_standing(character_id)
         if normalized_approach == "invoke faction" and (not dominant_faction or dominant_score < 10):
-            normalized_approach = "direct"
-        if normalized_approach == "ask about companions" and npc["id"] not in {"broker_silas", "innkeeper_mara"}:
             normalized_approach = "direct"
 
         bribe_cost = 8
@@ -2605,18 +3713,21 @@ class GameService:
         }[normalized_approach]
         score = int(getattr(character, "attributes", {}).get(skill_attr, 10))
         modifier = (score - 10) // 2
+        npc_affinity = self._NPC_FACTION_AFFINITY.get(str(npc["id"]))
+        heat_state = self._faction_heat_state(character)
+        npc_heat = int(heat_state.get(npc_affinity, 0)) if npc_affinity else 0
+        npc_heat_dc_penalty = min(2, max(0, npc_heat // 7))
 
         dc = 12 + max(0, int(npc["aggression"]) - 4) - max(0, int(npc["openness"]) - 4)
         dc += 2 if disposition_before <= -50 else 0
         dc -= 1 if disposition_before >= 50 else 0
+        dc += npc_heat_dc_penalty
         if normalized_approach == "leverage intel" and npc["id"] == "broker_silas":
             dc -= 2
         if normalized_approach == "call in favor" and npc["id"] == "captain_ren":
             dc -= 3
         if normalized_approach == "invoke faction":
             dc -= 2 + max(0, (dominant_score - 10) // 10)
-        if normalized_approach == "ask about companions":
-            dc -= 1
         if normalized_approach == "bribe":
             dc -= 4
         dc = max(8, min(18, dc))
@@ -2655,6 +3766,17 @@ class GameService:
             delta = 10 if success else -2
         disposition_after = max(-100, min(100, disposition_before + delta))
         self._set_npc_disposition(world, npc["id"], disposition_after)
+        if npc_affinity:
+            heat_shift = 0
+            if not success and normalized_approach in {"intimidate", "invoke faction"}:
+                heat_shift = 2
+            elif not success:
+                heat_shift = 1
+            elif success and normalized_approach in {"friendly", "call in favor", "bribe"}:
+                heat_shift = -1
+            if heat_shift != 0:
+                self._adjust_faction_heat(character, faction_id=npc_affinity, delta=heat_shift)
+                self.character_repo.save(character)
         self._append_npc_memory(
             world,
             npc_id=npc["id"],
@@ -2713,18 +3835,30 @@ class GameService:
         else:
             story_messages = []
 
-        if success and normalized_approach == "ask about companions":
-            current_location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
-            lead_message = self._roll_companion_lead_discovery(
-                character,
-                world_turn=int(getattr(world, "current_turn", 0)),
-                context_key="social",
-                location_name=str(getattr(current_location, "name", "town") if current_location else "town"),
-                world_threat=int(getattr(world, "threat_level", 0) or 0),
-            )
-            if lead_message:
-                story_messages.append(lead_message)
-                self.character_repo.save(character)
+        if success:
+            mapped_companion_id = str(self._NPC_COMPANION_MAP.get(str(npc.get("id", "")), "")).strip().lower()
+            if mapped_companion_id and mapped_companion_id in self._COMPANION_TEMPLATES:
+                unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+                if mapped_companion_id not in unlocked_ids:
+                    unlocked_ids.add(mapped_companion_id)
+                    self._save_unlocked_companion_ids(character, unlocked_ids)
+                    self._ensure_companion_arc_rows(character, unlocked_ids)
+                    companion_name = str(
+                        self._COMPANION_TEMPLATES.get(mapped_companion_id, {}).get(
+                            "name", mapped_companion_id.replace("_", " ").title()
+                        )
+                    )
+                    story_messages.append(f"{companion_name} is willing to join your roster.")
+                    self.character_repo.save(character)
+
+        arc_message = self._advance_companion_arc(
+            character,
+            channel="social",
+            world_turn=int(world_turn),
+            base_delta=1 if success else 0,
+        )
+        if arc_message:
+            story_messages.append(arc_message)
 
         if self.world_repo:
             self.world_repo.save(world)
@@ -2753,6 +3887,11 @@ class GameService:
                 f"Check: d20 + {modifier} = {roll_total} vs DC {dc}",
                 f"Relationship: {disposition_before} → {disposition_after}",
             ]
+            + (
+                [f"Pressure: {npc_affinity.replace('_', ' ')} heat {npc_heat} (+{npc_heat_dc_penalty} DC)."]
+                if npc_affinity and npc_heat_dc_penalty > 0
+                else []
+            )
             + ([approach_note] if approach_note else [])
             + story_messages,
         )
@@ -2886,6 +4025,47 @@ class GameService:
             return ExploreView(has_encounter=False, message="You find nothing of interest today.")
         return ExploreView(has_encounter=True, message="Danger stirs nearby.", enemies=enemies)
 
+    def _apply_faction_encounter_package(
+        self,
+        plan: EncounterPlan,
+        *,
+        faction_bias: str | None,
+        character_id: int,
+        world_turn: int,
+        location_id: int,
+    ) -> None:
+        faction_id = str(faction_bias or "").strip().lower()
+        if not faction_id:
+            return
+        package = self._FACTION_ENCOUNTER_PACKAGES.get(faction_id)
+        if not isinstance(package, dict):
+            return
+        hazard_name = str(package.get("hazard", "") or "").strip()
+        if not hazard_name:
+            return
+
+        existing_hazards = [str(item).strip().lower() for item in list(getattr(plan, "hazards", []) or []) if str(item).strip()]
+        if hazard_name.lower() in existing_hazards:
+            return
+
+        seed = derive_seed(
+            namespace="encounter.faction_package",
+            context={
+                "character_id": int(character_id),
+                "world_turn": int(world_turn),
+                "location_id": int(location_id),
+                "faction": faction_id,
+                "enemy_count": len(list(getattr(plan, "enemies", []) or [])),
+                "hazard_count": len(existing_hazards),
+            },
+        )
+        roll = int(seed) % 100
+        threshold = 85 if not existing_hazards else 65
+        if roll >= threshold:
+            return
+
+        plan.hazards = [*list(getattr(plan, "hazards", []) or []), hazard_name]
+
     def save_character_state(self, character: Character) -> None:
         self.character_repo.save(character)
 
@@ -2954,13 +4134,48 @@ class GameService:
             game_over=False,
         )
 
-    def encounter_intro_intent(self, enemy: Entity) -> str:
+    def encounter_intro_intent(self, enemy: Entity, character_id: int | None = None) -> str:
         try:
             intro = self.encounter_intro_builder(enemy)
         except Exception:
             intro = random_intro(enemy)
         text = (intro or "").strip()
-        return text or random_intro(enemy)
+        message = text or random_intro(enemy)
+        if character_id is None:
+            return message
+        character = self.character_repo.get(int(character_id)) if self.character_repo else None
+        if character is None:
+            return message
+        hint = self._codex_bestiary_hint(character, enemy)
+        if not hint:
+            return message
+        return f"{message} {hint}".strip()
+
+    def _codex_bestiary_hint(self, character: Character, enemy: Entity) -> str:
+        codex = self._codex_state(character)
+        enemy_name = str(getattr(enemy, "name", "") or "").strip().lower().replace(" ", "_")
+        if not enemy_name:
+            return ""
+        key = f"bestiary:{enemy_name}"
+        row = codex.get(key)
+        if not isinstance(row, dict):
+            return "Codex: Unknown target profile."
+        raw_discoveries = row.get("discoveries", 0)
+        if isinstance(raw_discoveries, (int, float, str, bool)):
+            try:
+                discoveries = int(raw_discoveries)
+            except (TypeError, ValueError):
+                discoveries = 0
+        else:
+            discoveries = 0
+        if discoveries <= 1:
+            return "Codex: Unknown profile — collect more encounters."
+        if discoveries == 2:
+            ac = int(getattr(enemy, "armour_class", 10) or 10)
+            return f"Codex: Observed profile — estimated armor around {ac}."
+        level = int(getattr(enemy, "level", 1) or 1)
+        faction = str(getattr(enemy, "faction_id", "unaffiliated") or "unaffiliated").replace("_", " ")
+        return f"Codex: Known profile — level {level}, commonly tied to {faction}."
 
     def combat_player_stats_intent(self, player: Character) -> dict:
         if not self.combat_service:
@@ -3016,6 +4231,8 @@ class GameService:
         if self.world_repo:
             world = self.world_repo.load_default()
             world_turn = getattr(world, "current_turn", 0) if world else 0
+        else:
+            world = None
 
         scene_ctx = scene or {}
         party_allies = [player, *self._active_party_companions(player)]
@@ -3051,6 +4268,18 @@ class GameService:
         )
         if lead is not None and isinstance(getattr(lead, "flags", None), dict):
             lead.flags["party_runtime_state"] = dict((getattr(player, "flags", {}) or {}).get("party_runtime_state", {}))
+        if world is not None:
+            enemy_factions = [str(getattr(row, "faction_id", "") or "").strip().lower() for row in list(enemies or []) if str(getattr(row, "faction_id", "") or "").strip()]
+            if self._apply_post_combat_morale_consequence(
+                world=world,
+                character_id=int(getattr(player, "id", 0) or 0),
+                world_turn=int(world_turn),
+                allies_won=bool(getattr(result, "allies_won", False)),
+                fled=bool(getattr(result, "fled", False)),
+                enemy_factions=enemy_factions,
+                context_key="party",
+            ) and self.world_repo:
+                self.world_repo.save(world)
         return result
 
     def _unlocked_companion_ids(self, character: Character, *, persist_defaults: bool = False) -> set[str]:
@@ -3067,11 +4296,7 @@ class GameService:
                 if str(value or "").strip().lower() in self._COMPANION_TEMPLATES
             }
 
-        defaults = {
-            companion_id
-            for companion_id, template in self._COMPANION_TEMPLATES.items()
-            if bool(template.get("default_unlocked", False))
-        }
+        defaults: set[str] = set()
         active_party = flags.get("active_party", [])
         if isinstance(active_party, list):
             defaults.update(
@@ -3095,6 +4320,281 @@ class GameService:
             for companion_id in self._COMPANION_TEMPLATES
             if companion_id in unlocked_ids
         ]
+
+    @staticmethod
+    def _companion_arc_state(character: Character) -> dict[str, dict[str, int | str]]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        raw = flags.setdefault("companion_arcs", {})
+        if not isinstance(raw, dict):
+            raw = {}
+            flags["companion_arcs"] = raw
+        normalized: dict[str, dict[str, int | str]] = {}
+        for key, value in raw.items():
+            companion_id = str(key or "").strip().lower()
+            if not companion_id or not isinstance(value, dict):
+                continue
+            try:
+                progress = int(value.get("progress", 0) or 0)
+            except Exception:
+                progress = 0
+            try:
+                trust = int(value.get("trust", 0) or 0)
+            except Exception:
+                trust = 0
+            normalized[companion_id] = {
+                "progress": progress,
+                "trust": trust,
+                "stage": str(value.get("stage", "unknown") or "unknown"),
+            }
+        flags["companion_arcs"] = normalized
+        return normalized
+
+    @staticmethod
+    def _companion_arc_history(character: Character) -> list[dict]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        rows = flags.setdefault("companion_arc_history", [])
+        if not isinstance(rows, list):
+            rows = []
+            flags["companion_arc_history"] = rows
+        return rows
+
+    @classmethod
+    def _companion_arc_stage(cls, progress: int) -> str:
+        value = max(0, min(cls._COMPANION_ARC_MAX, int(progress)))
+        if value >= 75:
+            return "bonded"
+        if value >= 45:
+            return "tested"
+        if value >= 20:
+            return "warming"
+        return "intro"
+
+    def _ensure_companion_arc_rows(self, character: Character, unlocked_ids: set[str]) -> None:
+        arcs = self._companion_arc_state(character)
+        for companion_id in unlocked_ids:
+            template = self._COMPANION_TEMPLATES.get(companion_id, {})
+            if bool(template.get("default_unlocked", False)):
+                continue
+            if companion_id not in arcs:
+                arcs[companion_id] = {
+                    "progress": 5,
+                    "trust": 5,
+                    "stage": "intro",
+                }
+
+    def _record_companion_arc_event(
+        self,
+        character: Character,
+        *,
+        companion_id: str,
+        world_turn: int,
+        channel: str,
+        delta: int,
+    ) -> None:
+        rows = self._companion_arc_history(character)
+        rows.append(
+            {
+                "companion_id": str(companion_id),
+                "turn": int(world_turn),
+                "channel": str(channel),
+                "delta": int(delta),
+            }
+        )
+        if len(rows) > self._COMPANION_ARC_HISTORY_MAX:
+            del rows[:-self._COMPANION_ARC_HISTORY_MAX]
+
+    def _advance_companion_arc(
+        self,
+        character: Character,
+        *,
+        channel: str,
+        world_turn: int,
+        base_delta: int,
+    ) -> str:
+        delta_value = int(base_delta)
+        if delta_value == 0:
+            return ""
+        unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+        self._ensure_companion_arc_rows(character, unlocked_ids)
+        arcs = self._companion_arc_state(character)
+        candidates = [companion_id for companion_id in sorted(arcs.keys()) if companion_id in unlocked_ids]
+        if not candidates:
+            return ""
+
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        nonce_map = flags.setdefault("companion_arc_nonce", {})
+        if not isinstance(nonce_map, dict):
+            nonce_map = {}
+            flags["companion_arc_nonce"] = nonce_map
+        nonce_key = f"{str(channel)}:{int(world_turn)}"
+        nonce = int(nonce_map.get(nonce_key, 0) or 0) + 1
+        nonce_map[nonce_key] = nonce
+
+        seed = derive_seed(
+            namespace="companion.arc.progress",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "channel": str(channel),
+                "world_turn": int(world_turn),
+                "nonce": int(nonce),
+                "candidates": tuple(candidates),
+            },
+        )
+        target_id = candidates[int(seed) % len(candidates)]
+        row = arcs.get(target_id, {})
+        current_progress = int(row.get("progress", 0) or 0)
+        current_trust = int(row.get("trust", 0) or 0)
+        next_progress = max(0, min(self._COMPANION_ARC_MAX, current_progress + delta_value))
+        trust_shift = 1 if delta_value > 0 else -1
+        next_trust = max(0, min(self._COMPANION_ARC_MAX, current_trust + trust_shift))
+        stage = self._companion_arc_stage(next_progress)
+        arcs[target_id] = {
+            "progress": next_progress,
+            "trust": next_trust,
+            "stage": stage,
+        }
+        self._record_companion_arc_event(
+            character,
+            companion_id=target_id,
+            world_turn=int(world_turn),
+            channel=str(channel),
+            delta=int(next_progress - current_progress),
+        )
+
+        name = str(self._COMPANION_TEMPLATES.get(target_id, {}).get("name", target_id.replace("_", " ").title()))
+        if next_progress == current_progress:
+            return ""
+        direction = "deepens" if next_progress > current_progress else "frays"
+        return f"{name} bond {direction} ({current_progress} -> {next_progress})."
+
+    def _companion_arc_lines(self, character: Character) -> list[str]:
+        unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+        arcs = self._companion_arc_state(character)
+        outcomes = self._companion_arc_outcomes(character)
+        rare_ids = [companion_id for companion_id in sorted(arcs.keys()) if companion_id in unlocked_ids]
+        lines: list[str] = []
+        for companion_id in rare_ids[:4]:
+            row = arcs.get(companion_id, {})
+            name = str(self._COMPANION_TEMPLATES.get(companion_id, {}).get("name", companion_id.replace("_", " ").title()))
+            outcome = str(outcomes.get(companion_id, "") or "").strip().lower()
+            if outcome == "oath":
+                outcome_label = "Oathbound"
+            elif outcome == "distance":
+                outcome_label = "Distant"
+            elif str(row.get("stage", "")).strip().lower() == "bonded":
+                outcome_label = "Choice Available"
+            else:
+                outcome_label = "Unresolved"
+            lines.append(
+                f"- {name}: Arc {int(row.get('progress', 0) or 0)}/100, Trust {int(row.get('trust', 0) or 0)}, Stage {str(row.get('stage', 'intro')).title()}, Outcome {outcome_label}"
+            )
+        return lines
+
+    @staticmethod
+    def _companion_arc_outcomes(character: Character) -> dict[str, str]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        raw = flags.setdefault("companion_arc_outcomes", {})
+        if not isinstance(raw, dict):
+            raw = {}
+            flags["companion_arc_outcomes"] = raw
+        normalized: dict[str, str] = {}
+        for key, value in raw.items():
+            companion_id = str(key or "").strip().lower()
+            outcome = str(value or "").strip().lower()
+            if not companion_id:
+                continue
+            if outcome in {"oath", "distance"}:
+                normalized[companion_id] = outcome
+        flags["companion_arc_outcomes"] = normalized
+        return normalized
+
+    def get_companion_arc_choices_intent(self, character_id: int) -> list[tuple[str, str]]:
+        character = self._require_character(character_id)
+        unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+        self._ensure_companion_arc_rows(character, unlocked_ids)
+        arcs = self._companion_arc_state(character)
+        outcomes = self._companion_arc_outcomes(character)
+        choices: list[tuple[str, str]] = []
+        for companion_id in sorted(unlocked_ids):
+            row = arcs.get(companion_id)
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("stage", "")).strip().lower() != "bonded":
+                continue
+            if str(outcomes.get(companion_id, "")).strip().lower() in {"oath", "distance"}:
+                continue
+            name = str(self._COMPANION_TEMPLATES.get(companion_id, {}).get("name", companion_id.replace("_", " ").title()))
+            choices.append((companion_id, name))
+        return choices
+
+    def submit_companion_arc_choice_intent(self, character_id: int, companion_id: str, choice: str) -> ActionResult:
+        character = self._require_character(character_id)
+        normalized_companion = str(companion_id or "").strip().lower()
+        normalized_choice = str(choice or "").strip().lower()
+        if normalized_choice not in {"oath", "distance"}:
+            return ActionResult(messages=["Unknown arc choice."], game_over=False)
+
+        choice_candidates = {key for key, _label in self.get_companion_arc_choices_intent(character_id)}
+        if normalized_companion not in choice_candidates:
+            return ActionResult(messages=["No unresolved arc choice is available for that companion."], game_over=False)
+
+        arcs = self._companion_arc_state(character)
+        outcomes = self._companion_arc_outcomes(character)
+        if normalized_companion in outcomes:
+            return ActionResult(messages=["This arc choice is already locked in."], game_over=False)
+
+        row = arcs.get(normalized_companion, {})
+        current_trust = int(row.get("trust", 0) or 0)
+        if normalized_choice == "oath":
+            next_trust = min(self._COMPANION_ARC_MAX, current_trust + 5)
+            outcome_text = "Oathbound"
+            outcome_note = "Their loyalty hardens into a formal oath."
+        else:
+            next_trust = max(0, current_trust - 4)
+            outcome_text = "Distant"
+            outcome_note = "They keep their distance, focused on survival over sentiment."
+
+        row["trust"] = int(next_trust)
+        row["stage"] = "bonded"
+        arcs[normalized_companion] = row
+        outcomes[normalized_companion] = normalized_choice
+
+        interaction_unlocks = self._interaction_unlocks(character)
+        interaction_unlocks[f"companion_arc:{normalized_companion}:{normalized_choice}"] = True
+
+        world_turn = 0
+        if self.world_repo:
+            world = self.world_repo.load_default()
+            world_turn = int(getattr(world, "current_turn", 0) or 0) if world is not None else 0
+        self._record_companion_arc_event(
+            character,
+            companion_id=normalized_companion,
+            world_turn=int(world_turn),
+            channel="choice",
+            delta=0,
+        )
+
+        self.character_repo.save(character)
+        name = str(self._COMPANION_TEMPLATES.get(normalized_companion, {}).get("name", normalized_companion.replace("_", " ").title()))
+        return ActionResult(
+            messages=[
+                f"Arc choice locked: {name} becomes {outcome_text}.",
+                outcome_note,
+            ],
+            game_over=False,
+        )
 
     def _companion_lead_ids(self, character: Character) -> set[str]:
         flags = getattr(character, "flags", None)
@@ -3177,6 +4677,22 @@ class GameService:
         location_name: str,
         world_threat: int = 0,
     ) -> str:
+        _ = character
+        _ = world_turn
+        _ = context_key
+        _ = location_name
+        _ = world_threat
+        return ""
+
+    def _roll_companion_lead_discovery_legacy(
+        self,
+        character: Character,
+        *,
+        world_turn: int,
+        context_key: str,
+        location_name: str,
+        world_threat: int = 0,
+    ) -> str:
         unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
         lead_ids = self._companion_lead_ids(character)
         candidates = [
@@ -3225,8 +4741,13 @@ class GameService:
         return f"A rare lead surfaces: you hear {name} was seen nearby."
 
     def get_companion_leads_intent(self, character_id: int) -> list[str]:
+        _ = self._require_character(character_id)
+        return []
+
+    def get_companion_leads_intent_legacy(self, character_id: int) -> list[str]:
         character = self._require_character(character_id)
         unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
+        self._ensure_companion_arc_rows(character, unlocked_ids)
         lead_ids = self._companion_lead_ids(character)
         flags = getattr(character, "flags", None)
         history = []
@@ -3254,6 +4775,12 @@ class GameService:
             else:
                 state = "Unknown"
             lines.append(f"- {name}: {state}")
+
+        arc_lines = self._companion_arc_lines(character)
+        if arc_lines:
+            lines.append("")
+            lines.append("Arc Progress:")
+            lines.extend(arc_lines)
 
         if history:
             lines.append("")
@@ -3335,7 +4862,8 @@ class GameService:
         blockers: list[str] = []
 
         lead_ids = self._companion_lead_ids(character)
-        if not bool(template.get("default_unlocked", False)) and companion_id not in lead_ids:
+        requires_lead = companion_id in {"npc_vael", "npc_seraphine", "npc_kaelen", "npc_mirelle"}
+        if requires_lead and companion_id not in lead_ids:
             blockers.append("No lead yet. Keep exploring and traveling to uncover rare companions.")
 
         req_reputation = template.get("req_reputation", {})
@@ -3410,6 +4938,7 @@ class GameService:
 
         unlocked_ids.add(normalized)
         self._save_unlocked_companion_ids(character, unlocked_ids)
+        self._ensure_companion_arc_rows(character, unlocked_ids)
         self.character_repo.save(character)
         name = str(template.get("name", normalized.replace("_", " ").title()))
         return ActionResult(messages=[f"{name} joins your roster."], game_over=False)
@@ -3659,12 +5188,12 @@ class GameService:
             and str(value or "").strip().lower() in self._COMPANION_TEMPLATES
         }
         unlocked_ids = self._unlocked_companion_ids(character)
-        standings = self.faction_standings_intent(character_id)
         lane_overrides = self._party_lane_overrides(character)
         runtime_state = self._party_runtime_state(character)
 
         rows: list[dict[str, str | bool]] = []
-        for companion_id, template in self._COMPANION_TEMPLATES.items():
+        for companion_id in sorted(unlocked_ids):
+            template = self._COMPANION_TEMPLATES.get(companion_id, {})
             display_name = str(template.get("name", companion_id.replace("_", " ").title()))
             payload = runtime_state.get(companion_id, {}) if isinstance(runtime_state, dict) else {}
             hp_max = max(1, int((payload.get("hp_max") if isinstance(payload, dict) else 0) or int(template.get("hp_max", 12) or 12)))
@@ -3674,20 +5203,6 @@ class GameService:
             slots_current = int((payload.get("spell_slots_current") if isinstance(payload, dict) else slots_max) or slots_max)
             slots_current = max(0, min(slots_max, slots_current))
             lane = lane_overrides.get(companion_id, "auto")
-            unlocked = companion_id in unlocked_ids
-            blockers = []
-            if not unlocked:
-                blockers = self._companion_recruitment_blockers(
-                    character_id=character_id,
-                    companion_id=companion_id,
-                    character=character,
-                    unlocked_ids=unlocked_ids,
-                    standings=standings,
-                )
-            recruitable = unlocked or not blockers
-            gate_note = ""
-            if not unlocked:
-                gate_note = "Eligible for recruitment." if recruitable else " ".join(blockers)
 
             status = f"HP {hp_current}/{hp_max}"
             if slots_max > 0:
@@ -3696,10 +5211,10 @@ class GameService:
                 {
                     "companion_id": companion_id,
                     "name": display_name,
-                    "active": companion_id in active_ids and unlocked,
-                    "unlocked": unlocked,
-                    "recruitable": recruitable,
-                    "gate_note": gate_note,
+                    "active": companion_id in active_ids,
+                    "unlocked": True,
+                    "recruitable": True,
+                    "gate_note": "",
                     "lane": lane,
                     "status": status,
                 }
@@ -3795,7 +5310,21 @@ class GameService:
         )
         sneak_ready = "Yes" if getattr(player, "class_name", "") == "rogue" else "—"
         is_dodging = bool(getattr(player, "flags", {}).get("dodging"))
-        conditions = "Dodging" if is_dodging else "—"
+        conditions_list: list[str] = []
+        if is_dodging:
+            conditions_list.append("Dodging")
+        raw_statuses = getattr(player, "flags", {}).get("combat_statuses", [])
+        if isinstance(raw_statuses, list):
+            for row in raw_statuses:
+                if not isinstance(row, dict):
+                    continue
+                key = str(row.get("id", "") or "").strip().lower()
+                rounds = int(row.get("rounds", 0) or 0)
+                if not key or rounds <= 0:
+                    continue
+                label = key.replace("_", " ").title()
+                conditions_list.append(f"{label}({rounds})")
+        conditions = " | ".join(conditions_list) if conditions_list else "—"
 
         scene = scene_ctx or {}
         scene_view = to_combat_scene_view(
@@ -3963,6 +5492,64 @@ class GameService:
             elif utility_roll == 1:
                 loot_items.append("Whetstone")
 
+            tier = self._loot_tier_for_level(int(getattr(monster, "level", 1) or 1))
+            tier_candidates = list(self._TIERED_LOOT_TABLE.get(tier, ()))
+            if tier_candidates:
+                tier_seed = derive_seed(
+                    namespace="loot.tiered_item",
+                    context={
+                        "character_id": int(getattr(character, "id", 0) or 0),
+                        "monster_id": int(getattr(monster, "id", 0) or 0),
+                        "monster_level": int(getattr(monster, "level", 1) or 1),
+                        "tier": int(tier),
+                        "world_turn": world_turn,
+                    },
+                )
+                tier_roll = int(tier_seed) % 100
+                if tier_roll < 38:
+                    selected_index = int(tier_seed // 100) % len(tier_candidates)
+                    selected_item = str(tier_candidates[selected_index])
+                    if selected_item and selected_item not in loot_items:
+                        loot_items.append(selected_item)
+
+        money_gain, loot_items = self._apply_faction_reward_tilt(
+            character,
+            monster,
+            money_gain=money_gain,
+            loot_items=loot_items,
+            world_turn=world_turn,
+        )
+
+        monster_name = str(getattr(monster, "name", "Unknown Foe") or "Unknown Foe")
+        codex_key = f"bestiary:{monster_name.strip().lower().replace(' ', '_')}"
+        codex = self._codex_state(character)
+        prior = codex.get(codex_key, {}) if isinstance(codex.get(codex_key, {}), dict) else {}
+        raw_previous_notes = prior.get("discoveries", 0)
+        if isinstance(raw_previous_notes, (int, float, str, bool)):
+            try:
+                previous_notes = int(raw_previous_notes)
+            except (TypeError, ValueError):
+                previous_notes = 0
+        else:
+            previous_notes = 0
+        current_notes = previous_notes + 1
+        if current_notes == 1:
+            body = "First contact logged. Threat profile still uncertain."
+        elif current_notes == 2:
+            body = f"Repeated encounter confirms level {int(getattr(monster, 'level', 1) or 1)} combat profile."
+        else:
+            faction_text = str(getattr(monster, "faction_id", "unknown") or "unknown").replace("_", " ")
+            body = f"Field notes expanded. Likely operating alongside {faction_text} elements."
+        self._record_codex_entry(
+            character,
+            entry_id=codex_key,
+            category="Bestiary",
+            title=monster_name,
+            body=body,
+            world_turn=int(world_turn),
+            increment_discoveries=True,
+        )
+
         character.xp += xp_gain
         character.money += money_gain
         progression_messages = self._apply_level_progression(character)
@@ -3981,6 +5568,41 @@ class GameService:
                 if world is not None:
                     self.world_repo.save(world)
         return RewardOutcomeView(xp_gain=xp_gain, money_gain=money_gain, loot_items=loot_items)
+
+    def _apply_faction_reward_tilt(
+        self,
+        character: Character,
+        monster: Entity,
+        *,
+        money_gain: int,
+        loot_items: list[str],
+        world_turn: int,
+    ) -> tuple[int, list[str]]:
+        faction_id = str(getattr(monster, "faction_id", "") or "").strip().lower()
+        if not faction_id:
+            return int(money_gain), list(loot_items)
+        package = self._FACTION_ENCOUNTER_PACKAGES.get(faction_id)
+        if not isinstance(package, dict):
+            return int(money_gain), list(loot_items)
+
+        next_money = int(money_gain) + max(0, int(package.get("money_bonus", 0) or 0))
+        next_loot = list(loot_items)
+        bonus_item = str(package.get("bonus_item", "") or "").strip()
+        if not bonus_item:
+            return next_money, next_loot
+
+        seed = derive_seed(
+            namespace="loot.faction_tilt",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "monster_id": int(getattr(monster, "id", 0) or 0),
+                "monster_faction": faction_id,
+                "world_turn": int(world_turn),
+            },
+        )
+        if int(seed) % 100 < 35 and bonus_item not in next_loot:
+            next_loot.append(bonus_item)
+        return next_money, next_loot
 
     @staticmethod
     def _set_progression_messages(character: Character, messages: list[str]) -> None:
@@ -4023,6 +5645,193 @@ class GameService:
             best_id = str(faction_id)
             best_score = normalized_score
         return best_id, best_score
+
+    @classmethod
+    def _faction_heat_state(cls, character: Character) -> dict[str, int]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        raw = flags.setdefault("faction_heat", {})
+        if not isinstance(raw, dict):
+            raw = {}
+            flags["faction_heat"] = raw
+        normalized: dict[str, int] = {}
+        for key, value in raw.items():
+            faction_id = str(key or "").strip().lower()
+            if not faction_id:
+                continue
+            try:
+                score = int(value)
+            except Exception:
+                score = 0
+            bounded = max(0, min(cls._FACTION_HEAT_MAX, score))
+            if bounded > 0:
+                normalized[faction_id] = bounded
+        flags["faction_heat"] = dict(normalized)
+        return normalized
+
+    @staticmethod
+    def _faction_heat_meta_state(character: Character) -> dict[str, object]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        meta = flags.setdefault("faction_heat_meta", {})
+        if not isinstance(meta, dict):
+            meta = {}
+            flags["faction_heat_meta"] = meta
+        return meta
+
+    @classmethod
+    def _record_faction_heat_event(
+        cls,
+        character: Character,
+        *,
+        world_turn: int,
+        reason: str,
+        delta_by_faction: dict[str, int],
+    ) -> None:
+        if not delta_by_faction:
+            return
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        history = flags.setdefault("faction_heat_log", [])
+        if not isinstance(history, list):
+            history = []
+            flags["faction_heat_log"] = history
+        history.append(
+            {
+                "turn": int(world_turn),
+                "reason": str(reason or "unknown"),
+                "delta": {str(key): int(value) for key, value in delta_by_faction.items()},
+            }
+        )
+        if len(history) > cls._FACTION_HEAT_LOG_MAX:
+            del history[:-cls._FACTION_HEAT_LOG_MAX]
+
+    @classmethod
+    def _adjust_faction_heat(cls, character: Character, faction_id: str | None, delta: int) -> None:
+        normalized_faction = str(faction_id or "").strip().lower()
+        if not normalized_faction:
+            return
+        state = cls._faction_heat_state(character)
+        current = int(state.get(normalized_faction, 0) or 0)
+        next_value = max(0, min(cls._FACTION_HEAT_MAX, current + int(delta)))
+        if next_value <= 0:
+            state.pop(normalized_faction, None)
+        else:
+            state[normalized_faction] = next_value
+        flags = getattr(character, "flags", None)
+        if isinstance(flags, dict):
+            flags["faction_heat"] = dict(state)
+
+    @classmethod
+    def _decay_faction_heat(
+        cls,
+        character: Character,
+        *,
+        amount: int,
+        world_turn: int,
+        reason: str,
+        interval_turns: int = 0,
+    ) -> bool:
+        decay_amount = max(0, int(amount))
+        if decay_amount <= 0:
+            return False
+        state = cls._faction_heat_state(character)
+        if not state:
+            return False
+
+        meta = cls._faction_heat_meta_state(character)
+        interval = max(0, int(interval_turns))
+        if interval > 0:
+            raw_prior_turn = meta.get("last_decay_turn", -10_000)
+            if isinstance(raw_prior_turn, int):
+                prior_turn = int(raw_prior_turn)
+            elif isinstance(raw_prior_turn, str):
+                try:
+                    prior_turn = int(raw_prior_turn)
+                except Exception:
+                    prior_turn = -10_000
+            else:
+                prior_turn = -10_000
+            if int(world_turn) - prior_turn < interval:
+                return False
+
+        deltas: dict[str, int] = {}
+        for faction_id, current in list(state.items()):
+            next_value = max(0, int(current) - decay_amount)
+            change = next_value - int(current)
+            if change == 0:
+                continue
+            deltas[str(faction_id)] = int(change)
+            if next_value <= 0:
+                state.pop(faction_id, None)
+            else:
+                state[faction_id] = int(next_value)
+
+        if not deltas:
+            return False
+
+        flags = getattr(character, "flags", None)
+        if isinstance(flags, dict):
+            flags["faction_heat"] = dict(state)
+        meta["last_decay_turn"] = int(world_turn)
+        cls._record_faction_heat_event(
+            character,
+            world_turn=int(world_turn),
+            reason=str(reason or "decay"),
+            delta_by_faction=deltas,
+        )
+        return True
+
+    @classmethod
+    def _faction_heat_pressure(cls, character: Character) -> int:
+        state = cls._faction_heat_state(character)
+        if not state:
+            return 0
+        peak = max(int(value) for value in state.values())
+        return max(0, min(10, peak // 2))
+
+    @staticmethod
+    def _faction_heat_band(score: int) -> str:
+        value = int(score)
+        if value >= 15:
+            return "Severe"
+        if value >= 10:
+            return "High"
+        if value >= 6:
+            return "Moderate"
+        return "Low"
+
+    @classmethod
+    def _faction_pressure_display(cls, character: Character) -> tuple[str, list[str]]:
+        state = cls._faction_heat_state(character)
+        if not state:
+            return "Pressure: Stable", []
+        ordered = sorted(state.items(), key=lambda item: (-int(item[1]), str(item[0])))
+        top_faction, top_score = ordered[0]
+        pressure = cls._faction_heat_pressure(character)
+        summary = (
+            f"Pressure: {cls._faction_heat_band(int(top_score))} "
+            f"({str(top_faction).replace('_', ' ')} heat {int(top_score)}, +{int(pressure)} risk)"
+        )
+        lines = [
+            f"{str(faction_id).replace('_', ' ').title()}: {int(score)} ({cls._faction_heat_band(int(score))})"
+            for faction_id, score in ordered[:3]
+        ]
+        return summary, lines
+
+    @classmethod
+    def _dominant_faction_heat(cls, character: Character) -> tuple[str | None, int]:
+        state = cls._faction_heat_state(character)
+        if not state:
+            return None, 0
+        faction_id, score = max(state.items(), key=lambda item: (int(item[1]), item[0]))
+        return str(faction_id), int(score)
 
     def _apply_level_progression(self, character: Character) -> list[str]:
         return self.progression_service.apply_level_progression(character)
@@ -4194,6 +6003,67 @@ class GameService:
         )
         if len(rows) > 20:
             del rows[:-20]
+
+    @staticmethod
+    def _world_combat_consequence_state(world) -> dict:
+        if not getattr(world, "flags", None):
+            world.flags = {}
+        rows = world.flags.setdefault("combat_consequence_state", {})
+        if not isinstance(rows, dict):
+            rows = {}
+            world.flags["combat_consequence_state"] = rows
+        return rows
+
+    def _apply_post_combat_morale_consequence(
+        self,
+        *,
+        world,
+        character_id: int,
+        world_turn: int,
+        allies_won: bool,
+        fled: bool,
+        enemy_factions: list[str],
+        context_key: str,
+    ) -> bool:
+        if not allies_won or fled:
+            return False
+        normalized_factions = sorted({str(item or "").strip().lower() for item in enemy_factions if str(item or "").strip()})
+        if not normalized_factions:
+            return False
+
+        state = self._world_combat_consequence_state(world)
+        lock_key = f"last_turn:character:{int(character_id)}"
+        if int(state.get(lock_key, -10_000) or -10_000) == int(world_turn):
+            return False
+
+        dominant_faction = normalized_factions[0]
+        seed = derive_seed(
+            namespace="combat.morale_consequence",
+            context={
+                "character_id": int(character_id),
+                "world_turn": int(world_turn),
+                "enemy_factions": tuple(normalized_factions),
+                "context": str(context_key or "unknown"),
+            },
+        )
+        roll = int(seed) % 100
+        if roll >= 35:
+            return False
+
+        if hasattr(world, "threat_level"):
+            world.threat_level = max(0, int(getattr(world, "threat_level", 0) or 0) - 1)
+        self._append_consequence(
+            world,
+            kind="combat_morale_break",
+            message=(
+                f"{dominant_faction.replace('_', ' ').title()} lines waver after your victory; "
+                "local patrol pressure eases."
+            ),
+            severity="minor",
+            turn=int(world_turn),
+        )
+        state[lock_key] = int(world_turn)
+        return True
 
     def _recent_consequence_messages(self, world, limit: int = 3) -> list[str]:
         rows = self._world_consequences(world)
@@ -4923,15 +6793,15 @@ class GameService:
         return max(floor, min(ceiling, int(base_price) + int(modifier)))
 
     def _town_price_modifier(self, character_id: int) -> int:
+        character = self._require_character(character_id)
         standings = self.faction_standings_intent(character_id)
-        if not standings:
-            return 0
-        best = max(int(score) for score in standings.values())
+        best = max(int(score) for score in standings.values()) if standings else 0
+        heat_penalty = max(0, self._faction_heat_pressure(character))
         if 5 <= best < 10:
-            return -1
+            return max(-1, -1 + heat_penalty)
         if -10 < best <= -5:
-            return 1
-        return calculate_price_modifier(best)
+            return 1 + heat_penalty
+        return calculate_price_modifier(best) + heat_penalty
 
     @staticmethod
     def _interaction_unlocks(character: Character) -> dict:
@@ -5427,6 +7297,15 @@ class GameService:
 
             if combat_result.player_won or int(getattr(combat_result.enemy, "hp_current", 0) or 0) <= 0:
                 reward = self.apply_encounter_reward_intent(character, monster)
+                self._apply_post_combat_morale_consequence(
+                    world=world,
+                    character_id=int(getattr(character, "id", 0) or 0),
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                    allies_won=True,
+                    fled=False,
+                    enemy_factions=[str(getattr(monster, "faction_id", "") or "").strip().lower()],
+                    context_key="explore",
+                )
                 faction_note = f" for the {monster.faction_id}" if monster.faction_id else ""
                 if self.progression and getattr(self.progression, "event_bus", None):
                     self.progression.event_bus.publish(

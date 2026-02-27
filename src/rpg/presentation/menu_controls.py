@@ -21,6 +21,7 @@ _CONSOLE = Console() if Console is not None else None
 _KEY_REPEAT_DEBOUNCE_SECONDS = 0.08
 _INITIAL_ENTER_GUARD_SECONDS = 0.18
 _ENTER_AFTER_NAV_GUARD_SECONDS = 0.14
+_ENTER_AFTER_NOISE_GUARD_SECONDS = 0.22
 
 
 def _decorate_title(title: str) -> str:
@@ -81,7 +82,10 @@ def read_key():
         return _read_key_windows()
 
     # Basic fallback: rely on blocking stdin
-    return sys.stdin.readline().strip()
+    line = sys.stdin.readline()
+    if line == "":
+        return None
+    return line.strip()
 
 
 def normalize_menu_key(key):
@@ -130,6 +134,7 @@ def arrow_menu(
     )
     selected = 0
     last_nav_at = 0.0
+    last_noise_at = 0.0
     menu_opened_at = time.monotonic()
     has_navigation_input = False
 
@@ -163,6 +168,14 @@ def arrow_menu(
             has_navigation_input = True
             return (current + 1) % len(options)
         return None
+
+    def _register_noise(key: str | None, raw_key, now: float) -> None:
+        nonlocal last_noise_at
+        if key in {"UP", "DOWN", "LEFT", "RIGHT", "ENTER", "ESC"}:
+            return
+        if raw_key in (None, "", "ENTER"):
+            return
+        last_noise_at = now
 
     def _build_rich_panel(index: int):
         body_lines: list[str] = []
@@ -199,8 +212,11 @@ def arrow_menu(
                         selected = next_selected
                         live.update(_build_rich_panel(selected), refresh=True)
                     continue
+                _register_noise(key, raw_key, now)
                 if key == "ENTER":
                     if msvcrt is not None and raw_key == "ENTER" and (now - last_nav_at) < _ENTER_AFTER_NAV_GUARD_SECONDS:
+                        continue
+                    if (now - last_noise_at) < _ENTER_AFTER_NOISE_GUARD_SECONDS:
                         continue
                     if _is_guarded_initial_enter(key, raw_key, now):
                         continue
@@ -234,8 +250,11 @@ def arrow_menu(
         if next_selected is not None:
             selected = next_selected
             continue
+        _register_noise(key, raw_key, now)
         if key == "ENTER":
             if msvcrt is not None and raw_key == "ENTER" and (now - last_nav_at) < _ENTER_AFTER_NAV_GUARD_SECONDS:
+                continue
+            if (now - last_noise_at) < _ENTER_AFTER_NOISE_GUARD_SECONDS:
                 continue
             if _is_guarded_initial_enter(key, raw_key, now):
                 continue

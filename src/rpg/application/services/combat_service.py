@@ -39,6 +39,12 @@ class PartyCombatResult:
     fled: bool = False
 
 
+PartyTargetSelection = int | tuple[str, int] | None
+LegacyPartyTargetSelector = Callable[[Character, List[Entity], int, dict], Optional[int]]
+ExtendedPartyTargetSelector = Callable[[Character, List[Character], List[Entity], int, dict, str], PartyTargetSelection]
+PartyTargetSelector = LegacyPartyTargetSelector | ExtendedPartyTargetSelector
+
+
 def ability_mod(score: int | None) -> int:
     return ability_modifier(score)
 
@@ -205,11 +211,150 @@ class CombatService:
         "dart",
         "finesse",
     )
+    _STATUS_LABELS: Dict[str, str] = {
+        "poisoned": "Poisoned",
+        "burning": "Burning",
+        "blessed": "Blessed",
+        "stunned": "Stunned",
+    }
+    _STATUS_ATTACK_ROLL_SHIFT: Dict[str, int] = {
+        "poisoned": -2,
+        "blessed": 2,
+    }
 
     @staticmethod
     def _ability_scores(player: Character):
         attrs: Dict[str, int] = getattr(player, "attributes", {}) or {}
         return ability_scores_from_mapping(attrs)
+
+    def _actor_statuses(self, actor) -> List[Dict[str, int | str]]:
+        if isinstance(actor, Character):
+            flags = getattr(actor, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                actor.flags = flags
+            raw = flags.setdefault("combat_statuses", [])
+            if not isinstance(raw, list):
+                raw = []
+                flags["combat_statuses"] = raw
+            return [row for row in raw if isinstance(row, dict) and str(row.get("id", "")).strip()]
+
+        raw = getattr(actor, "_combat_statuses", None)
+        if not isinstance(raw, list):
+            raw = []
+            setattr(actor, "_combat_statuses", raw)
+        return [row for row in raw if isinstance(row, dict) and str(row.get("id", "")).strip()]
+
+    def _set_actor_statuses(self, actor, statuses: List[Dict[str, int | str]]) -> None:
+        normalized = [
+            {
+                "id": str(row.get("id", "")).strip().lower(),
+                "rounds": max(0, int(row.get("rounds", 0) or 0)),
+                "potency": max(1, int(row.get("potency", 1) or 1)),
+            }
+            for row in statuses
+            if str(row.get("id", "")).strip()
+        ]
+        if isinstance(actor, Character):
+            flags = getattr(actor, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                actor.flags = flags
+            flags["combat_statuses"] = normalized
+            return
+        setattr(actor, "_combat_statuses", normalized)
+
+    def _has_status(self, actor, status_id: str) -> bool:
+        key = str(status_id or "").strip().lower()
+        return any(str(row.get("id", "")).strip().lower() == key and int(row.get("rounds", 0) or 0) > 0 for row in self._actor_statuses(actor))
+
+    def _apply_status(
+        self,
+        *,
+        actor,
+        status_id: str,
+        rounds: int,
+        log: List[CombatLogEntry],
+        potency: int = 1,
+        source_name: str = "Effect",
+    ) -> None:
+        key = str(status_id or "").strip().lower()
+        if key not in self._STATUS_LABELS:
+            return
+        next_rounds = max(1, int(rounds or 1))
+        next_potency = max(1, int(potency or 1))
+        statuses = self._actor_statuses(actor)
+        existing = next((row for row in statuses if str(row.get("id", "")).strip().lower() == key), None)
+        if existing is not None:
+            existing["rounds"] = max(int(existing.get("rounds", 0) or 0), next_rounds)
+            existing["potency"] = max(int(existing.get("potency", 1) or 1), next_potency)
+        else:
+            statuses.append({"id": key, "rounds": next_rounds, "potency": next_potency})
+            self._log(log, f"{source_name}: {getattr(actor, 'name', 'Target')} is now {self._STATUS_LABELS[key]} ({next_rounds} rounds).", level="compact")
+        self._set_actor_statuses(actor, statuses)
+
+    def _status_attack_roll_shift(self, actor) -> int:
+        shift = 0
+        for row in self._actor_statuses(actor):
+            key = str(row.get("id", "")).strip().lower()
+            rounds = int(row.get("rounds", 0) or 0)
+            potency = max(1, int(row.get("potency", 1) or 1))
+            if rounds <= 0:
+                continue
+            shift += int(self._STATUS_ATTACK_ROLL_SHIFT.get(key, 0)) * potency
+        return int(shift)
+
+    def _apply_start_turn_statuses(self, actor, log: List[CombatLogEntry]) -> None:
+        statuses = self._actor_statuses(actor)
+        hp_now = int(getattr(actor, "hp_current", 0) or 0)
+        hp_max = int(getattr(actor, "hp_max", hp_now) or hp_now)
+        for row in statuses:
+            if hp_now <= 0:
+                break
+            key = str(row.get("id", "")).strip().lower()
+            rounds = int(row.get("rounds", 0) or 0)
+            potency = max(1, int(row.get("potency", 1) or 1))
+            if rounds <= 0:
+                continue
+            if key == "burning":
+                damage = sum(roll_die("d4", rng=self.rng) for _ in range(potency))
+                hp_now = max(0, hp_now - damage)
+                self._log(log, f"{getattr(actor, 'name', 'Target')} burns for {damage} damage ({hp_now}/{hp_max}).", level="compact")
+            elif key == "poisoned":
+                damage = max(1, potency)
+                hp_now = max(0, hp_now - damage)
+                self._log(log, f"{getattr(actor, 'name', 'Target')} suffers {damage} poison damage ({hp_now}/{hp_max}).", level="compact")
+        actor.hp_current = hp_now
+
+    def _tick_actor_statuses_end_turn(self, actor, log: List[CombatLogEntry]) -> None:
+        statuses = self._actor_statuses(actor)
+        remaining: List[Dict[str, int | str]] = []
+        for row in statuses:
+            key = str(row.get("id", "")).strip().lower()
+            rounds = int(row.get("rounds", 0) or 0)
+            potency = max(1, int(row.get("potency", 1) or 1))
+            if rounds <= 0:
+                continue
+            rounds -= 1
+            if rounds <= 0:
+                label = self._STATUS_LABELS.get(key, key.title())
+                self._log(log, f"{getattr(actor, 'name', 'Target')} is no longer {label}.", level="normal")
+                continue
+            remaining.append({"id": key, "rounds": rounds, "potency": potency})
+        self._set_actor_statuses(actor, remaining)
+
+    def _apply_spell_status_effects(self, *, caster: Character, target, definition, log: List[CombatLogEntry]) -> None:
+        damage_type = str(getattr(definition, "damage_type", "") or "").strip().lower()
+        if int(getattr(target, "hp_current", 0) or 0) <= 0:
+            return
+        if damage_type == "fire" and self.rng.randint(1, 100) <= 35:
+            self._apply_status(actor=target, status_id="burning", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"))
+        elif damage_type == "healing":
+            self._apply_status(actor=target, status_id="blessed", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"))
+        elif damage_type == "psychic" and self.rng.randint(1, 100) <= 20:
+            self._apply_status(actor=target, status_id="stunned", rounds=1, potency=1, log=log, source_name=getattr(caster, "name", "Spell"))
+        elif damage_type in {"poison", "acid", "necrotic"} and self.rng.randint(1, 100) <= 30:
+            self._apply_status(actor=target, status_id="poisoned", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"))
 
     def _primary_attack_mod(self, player: Character) -> int:
         scores = self._ability_scores(player)
@@ -620,6 +765,7 @@ class CombatService:
         fled = False
         distance = (scene or {}).get("distance", "close")
         terrain = (scene or {}).get("terrain", "open")
+        weather = str((scene or {}).get("weather", "") or "")
         flavour_tracker: dict[str, bool] = {}
         while player_hp > 0 and foe.hp_current > 0:
             if player.class_name == "rogue":
@@ -629,6 +775,15 @@ class CombatService:
             round_flavour_used = False
             for actor in turn_order:
                 if actor == "player":
+                    player.hp_current = int(player_hp)
+                    self._apply_start_turn_statuses(player, log)
+                    player_hp = int(getattr(player, "hp_current", player_hp) or player_hp)
+                    if player_hp <= 0:
+                        break
+                    if self._has_status(player, "stunned"):
+                        self._log(log, f"{player.name} is stunned and loses the turn.", level="compact")
+                        self._tick_actor_statuses_end_turn(player, log)
+                        continue
                     advantage_state = "advantage" if player_has_opening and round_no == 1 else None
                     options = ["Attack", "Dash", "Dodge", "Use Item", "Flee"]
                     has_magic = (getattr(player, "spell_slots_current", 0) > 0) or bool(getattr(player, "cantrips", []))
@@ -657,8 +812,11 @@ class CombatService:
                             enemy=foe,
                             round_number=round_no,
                         )
+                        weather_shift = self._weather_attack_shift(weather=weather, attacker=player, action="attack")
+                        if weather_shift:
+                            self._log(log, f"Weather pressure ({weather}) applies {weather_shift} to your strike.", level="compact")
                         hit, is_crit, _, _ = self._attack_roll(
-                            roll_attack_bonus,
+                            roll_attack_bonus + self._status_attack_roll_shift(player) + int(weather_shift),
                             prof,
                             attack_mod,
                             foe.armour_class,
@@ -702,7 +860,13 @@ class CombatService:
                         )
 
                     elif action == "Cast Spell":
+                        weather_shift = self._weather_attack_shift(weather=weather, attacker=player, action="cast_spell")
+                        if weather_shift:
+                            self._log(log, f"Weather pressure ({weather}) disrupts casting aim ({weather_shift} to hit).", level="compact")
+                        player.flags["combat_weather_shift"] = int(weather_shift)
                         self._resolve_spell_cast(player, foe, action_payload, mental_mod, prof, log)
+                        player.flags.pop("combat_weather_shift", None)
+                        player_hp = int(getattr(player, "hp_current", player_hp) or player_hp)
                         self._add_mechanical_flavour(
                             log,
                             actor="player",
@@ -727,6 +891,14 @@ class CombatService:
                             preferred_item=action_payload,
                             whetstone_bonus=whetstone_bonus,
                         )
+                        player.hp_current = int(player_hp)
+
+                    elif action == "Dash":
+                        if distance == "far":
+                            distance = "mid"
+                        elif distance == "mid":
+                            distance = "close"
+                        self._log(log, f"You dash forward. Distance is now {distance}.", level="compact")
 
                     elif action == "Flee":
                         flee_roll = self.rng.randint(1, 20) + attack_mod
@@ -736,6 +908,7 @@ class CombatService:
                             player.flags.pop("dodging", None)
                             player.flags.pop("temp_ac_bonus", None)
                             player.flags.pop("shield_rounds", None)
+                            player.flags.pop("combat_statuses", None)
                             if "rage_rounds" in player.flags:
                                 player.flags["rage_rounds"] = 0
                             player.hp_current = player_hp
@@ -744,14 +917,16 @@ class CombatService:
                         else:
                             self._log(log, "You fail to escape.", level="compact")
 
-                    elif action == "Dash":
-                        if distance == "far":
-                            distance = "mid"
-                        elif distance == "mid":
-                            distance = "close"
-                        self._log(log, f"You dash forward. Distance is now {distance}.", level="compact")
+                    self._tick_actor_statuses_end_turn(player, log)
 
                 else:  # enemy turn
+                    self._apply_start_turn_statuses(foe, log)
+                    if int(getattr(foe, "hp_current", 0) or 0) <= 0:
+                        break
+                    if self._has_status(foe, "stunned"):
+                        self._log(log, f"{foe.name} is stunned and loses the turn.", level="compact")
+                        self._tick_actor_statuses_end_turn(foe, log)
+                        continue
                     if not round_flavour_used:
                         self._add_flavour(log, flavour_tracker, f"intent_{round_no}", self._intent_flavour(intent))
                         round_flavour_used = True
@@ -777,8 +952,9 @@ class CombatService:
                         self._log(log, f"{foe.name} fights recklessly, leaving openings.", level="compact")
 
                     advantage_state = "disadvantage" if player_dodge else enemy_advantage
+                    weather_shift = self._weather_attack_shift(weather=weather, attacker=foe, action=enemy_action)
                     hit, is_crit, _, _ = self._attack_roll(
-                        foe.attack_bonus,
+                        int(getattr(foe, "attack_bonus", 0) or 0) + self._status_attack_roll_shift(foe) + int(weather_shift),
                         0,
                         0,
                         target_ac,
@@ -807,6 +983,7 @@ class CombatService:
                         terrain=terrain,
                         round_no=round_no,
                     )
+                    self._tick_actor_statuses_end_turn(foe, log)
 
             player_dodge = False
             player.flags.pop("dodging", None)
@@ -822,6 +999,7 @@ class CombatService:
                 player.flags.pop("dodging", None)
                 player.flags.pop("temp_ac_bonus", None)
                 player.flags.pop("shield_rounds", None)
+                player.flags.pop("combat_statuses", None)
                 if "rage_rounds" in player.flags:
                     player.flags["rage_rounds"] = 0
                 player.hp_current = player_hp
@@ -838,6 +1016,7 @@ class CombatService:
         player.flags.pop("dodging", None)
         player.flags.pop("temp_ac_bonus", None)
         player.flags.pop("shield_rounds", None)
+        player.flags.pop("combat_statuses", None)
         if "rage_rounds" in player.flags:
             player.flags["rage_rounds"] = 0
 
@@ -854,7 +1033,7 @@ class CombatService:
         enemies: List[Entity],
         choose_action: Callable[[List[str], Character, Entity, int, dict], tuple[str, Optional[str]] | str],
         scene: Optional[dict] = None,
-        choose_target: Optional[Callable[[Character, List[Entity], int, dict], Optional[int]]] = None,
+        choose_target: Optional[PartyTargetSelector] = None,
         evaluate_ai_action: Optional[Callable[[object, List[object], List[object], int, dict], tuple[str, Optional[str]] | str]] = None,
     ) -> PartyCombatResult:
         log: List[CombatLogEntry] = []
@@ -892,6 +1071,7 @@ class CombatService:
 
         terrain = str((scene or {}).get("terrain", "open"))
         distance = str((scene or {}).get("distance", "close"))
+        weather = str((scene or {}).get("weather", "") or "")
         surprise = (scene or {}).get("surprise")
         player_actor_id = int(getattr(active_allies[0], "id", 0) or 0)
 
@@ -956,6 +1136,13 @@ class CombatService:
 
                 if side == "ally":
                     actor_character = actor
+                    self._apply_start_turn_statuses(actor_character, log)
+                    if int(getattr(actor_character, "hp_current", 0) or 0) <= 0:
+                        continue
+                    if self._has_status(actor_character, "stunned"):
+                        self._log(log, f"{actor_character.name} is stunned and loses the turn.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
+                        continue
                     is_player_actor = int(getattr(actor_character, "id", 0) or 0) == player_actor_id
                     if is_player_actor:
                         preview_targets = self._combat_target_pool(attacker=actor_character, opponents=living_enemies, action="Attack")
@@ -1025,14 +1212,16 @@ class CombatService:
                                 terrain=terrain,
                                 attacker=actor_character,
                                 action="cast_spell",
-                            ),
+                            ) + self._weather_attack_shift(weather=weather, attacker=actor_character, action="cast_spell"),
                             log=log,
                         )
+                        self._tick_actor_statuses_end_turn(actor_character, log)
                         continue
 
                     if str(action) == "Use Item":
                         hp_after, _ = self._resolve_use_item(actor_character, int(getattr(actor_character, "hp_current", 1) or 1), log, preferred_item=action_payload, whetstone_bonus=0)
                         actor_character.hp_current = hp_after
+                        self._tick_actor_statuses_end_turn(actor_character, log)
                         continue
 
                     if str(action) == "Dash":
@@ -1041,8 +1230,10 @@ class CombatService:
                             check_total = self.rng.randint(1, 20) + dex_mod
                             if check_total < 12:
                                 self._log(log, f"{actor_character.name} slips on treacherous ground and loses momentum.", level="compact")
+                                self._tick_actor_statuses_end_turn(actor_character, log)
                                 continue
                         self._log(log, f"{actor_character.name} repositions.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
                         continue
 
                     if str(action) == "Dodge":
@@ -1051,8 +1242,10 @@ class CombatService:
                             check_total = self.rng.randint(1, 20) + dex_mod
                             if check_total < 12:
                                 self._log(log, f"{actor_character.name} stumbles while dodging and loses the turn.", level="compact")
+                                self._tick_actor_statuses_end_turn(actor_character, log)
                                 continue
                         self._log(log, f"{actor_character.name} braces defensively.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
                         continue
 
                     derived = self.derive_player_stats(actor_character)
@@ -1061,6 +1254,7 @@ class CombatService:
                         attacker=actor_character,
                         action="attack",
                     )
+                    weather_attack_shift = self._weather_attack_shift(weather=weather, attacker=actor_character, action="attack")
                     target_key = self._combat_actor_key(target)
                     actor_key = self._combat_actor_key(actor_character)
                     engaged = round_engagements.setdefault(target_key, set())
@@ -1070,8 +1264,10 @@ class CombatService:
                         self._log(log, f"{actor_character.name} flanks {target.name}.", level="compact")
                     if terrain_attack_shift:
                         self._log(log, f"Dense cover disrupts line of sight ({terrain_attack_shift} to hit).", level="compact")
+                    if weather_attack_shift:
+                        self._log(log, f"Weather pressure ({weather}) applies {weather_attack_shift} to hit.", level="compact")
                     hit, is_crit, _, _ = self._attack_roll(
-                        int(terrain_attack_shift),
+                        int(terrain_attack_shift) + int(weather_attack_shift) + self._status_attack_roll_shift(actor_character),
                         int(derived.get("proficiency", 2)),
                         int(derived.get("weapon_mod", 0)),
                         int(getattr(target, "armour_class", 10) or 10),
@@ -1093,9 +1289,17 @@ class CombatService:
                             dmg += 2
                         target.hp_current = max(0, int(getattr(target, "hp_current", 0) or 0) - dmg)
                         self._log(log, f"{actor_character.name} hits {target.name} for {dmg} damage ({target.hp_current}/{target.hp_max}).", level="compact")
+                    self._tick_actor_statuses_end_turn(actor_character, log)
                     continue
 
                 enemy_actor = actor
+                self._apply_start_turn_statuses(enemy_actor, log)
+                if int(getattr(enemy_actor, "hp_current", 0) or 0) <= 0:
+                    continue
+                if self._has_status(enemy_actor, "stunned"):
+                    self._log(log, f"{enemy_actor.name} is stunned and loses the turn.", level="compact")
+                    self._tick_actor_statuses_end_turn(enemy_actor, log)
+                    continue
                 targets = [a for a in active_allies if int(getattr(a, "hp_current", 0) or 0) > 0]
                 if not targets:
                     break
@@ -1119,8 +1323,12 @@ class CombatService:
                     attacker=enemy_actor,
                     action=enemy_action,
                 )
+                weather_enemy_shift = self._weather_attack_shift(weather=weather, attacker=enemy_actor, action=enemy_action)
                 hit, is_crit, _, _ = self._attack_roll(
-                    int(getattr(enemy_actor, "attack_bonus", 0) or 0) + int(enemy_attack_shift),
+                    int(getattr(enemy_actor, "attack_bonus", 0) or 0)
+                    + int(enemy_attack_shift)
+                    + int(weather_enemy_shift)
+                    + self._status_attack_roll_shift(enemy_actor),
                     0,
                     0,
                     int(target_ac),
@@ -1141,6 +1349,7 @@ class CombatService:
                     self._log(log, f"{enemy_actor.name} hits {target.name} for {dmg} damage ({target.hp_current}/{target.hp_max}).", level="compact")
                 else:
                     self._log(log, f"{enemy_actor.name} misses {target.name}.", level="compact")
+                self._tick_actor_statuses_end_turn(enemy_actor, log)
 
             if fled:
                 break
@@ -1153,6 +1362,15 @@ class CombatService:
             if xp_gain > 0:
                 lead.xp = int(getattr(lead, "xp", 0) or 0) + int(xp_gain)
                 self._log(log, f"Party victory. {lead.name} gains +{xp_gain} XP.", level="compact")
+        for ally in active_allies:
+            if isinstance(getattr(ally, "flags", None), dict):
+                ally.flags.pop("combat_statuses", None)
+        for enemy in active_enemies:
+            try:
+                if hasattr(enemy, "_combat_statuses"):
+                    delattr(enemy, "_combat_statuses")
+            except Exception:
+                pass
         return PartyCombatResult(
             allies=active_allies,
             enemies=active_enemies,
@@ -1244,6 +1462,24 @@ class CombatService:
         if self._is_melee_actor(attacker):
             return 0
         return -2
+
+    def _weather_attack_shift(self, *, weather: str, attacker, action: str) -> int:
+        normalized_weather = str(weather or "").strip().lower()
+        if not normalized_weather:
+            return 0
+
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in {"attack", "cast_spell", "reckless"}:
+            return 0
+
+        is_melee = self._is_melee_actor(attacker)
+        if normalized_weather == "rain":
+            return -1 if not is_melee else 0
+        if normalized_weather in {"fog", "storm"}:
+            return -2 if not is_melee else -1
+        if normalized_weather == "blizzard":
+            return -3 if not is_melee else -2
+        return 0
 
     def _is_heavy_armor_user(self, actor: Character) -> bool:
         equipment = self._equipment_state(actor)
@@ -1451,6 +1687,7 @@ class CombatService:
             if is_crit:
                 dmg += _roll_dice_expr(dice_expr, ability_mod=0, rng=self.rng)
             _apply_damage(dmg, definition.damage_type)
+            self._apply_spell_status_effects(caster=caster, target=target, definition=definition, log=log)
             return
 
         if definition.resolution == "save":
@@ -1461,6 +1698,7 @@ class CombatService:
                 return
             dmg = _roll_dice_expr(definition.damage_dice or "1d6", ability_mod=int(spell_mod), rng=self.rng)
             _apply_damage(dmg, definition.damage_type)
+            self._apply_spell_status_effects(caster=caster, target=target, definition=definition, log=log)
             return
 
         dmg = _roll_dice_expr(definition.damage_dice or "1d4", ability_mod=int(spell_mod), rng=self.rng)
@@ -1471,6 +1709,7 @@ class CombatService:
             self._log(log, f"A shimmering barrier grants {caster.name} +{bonus} AC until next turn.", level="compact")
             return
         _apply_damage(dmg, definition.damage_type)
+        self._apply_spell_status_effects(caster=caster, target=target, definition=definition, log=log)
 
     def list_usable_items(self, player: Character) -> List[str]:
         inventory = list(getattr(player, "inventory", []) or [])
@@ -1580,6 +1819,7 @@ class CombatService:
         spell_attack_bonus = prof + spell_mod
         spell_dc = 8 + prof + spell_mod
         foe_ac = getattr(foe, "armour_class", 10)
+        weather_shift = int(getattr(player, "flags", {}).get("combat_weather_shift", 0) or 0)
 
         def _foe_save_mod(ability: Optional[str]) -> int:
             # Simple approximation; entities currently do not have saves
@@ -1594,8 +1834,10 @@ class CombatService:
                 self._log(log, f"The spell hits {foe.name} for {amount} {damage_type or 'damage'} ({foe.hp_current}/{foe.hp_max}).", level="compact")
 
         if definition.resolution == "spell_attack":
+            if weather_shift:
+                self._log(log, f"Weather pressure applies {weather_shift} to spell accuracy.", level="compact")
             hit, is_crit, _, _ = self._attack_roll(
-                0,
+                weather_shift,
                 prof,
                 spell_mod,
                 foe_ac,
@@ -1610,6 +1852,7 @@ class CombatService:
                 if is_crit:
                     dmg += _roll_dice_expr(dice_expr, ability_mod=0, rng=self.rng)
                 _apply_damage(dmg, definition.damage_type)
+                self._apply_spell_status_effects(caster=player, target=foe, definition=definition, log=log)
             else:
                 self._log(log, "Your spell fizzles past the enemy.", level="compact")
         elif definition.resolution == "save":
@@ -1621,10 +1864,12 @@ class CombatService:
                 return
             dmg = _roll_dice_expr(definition.damage_dice or "1d6", ability_mod=spell_mod, rng=self.rng)
             _apply_damage(dmg, definition.damage_type)
+            self._apply_spell_status_effects(caster=player, target=foe, definition=definition, log=log)
         else:  # auto
             dmg = _roll_dice_expr(definition.damage_dice or "1d4", ability_mod=spell_mod, rng=self.rng)
             if definition.damage_type == "healing":
                 _apply_damage(dmg, "healing")
+                self._apply_spell_status_effects(caster=player, target=player, definition=definition, log=log)
             elif definition.slug == "shield":
                 bonus = 5
                 player.flags["temp_ac_bonus"] = bonus
@@ -1632,6 +1877,7 @@ class CombatService:
                 self._log(log, f"A shimmering barrier grants +{bonus} AC until your next turn.", level="compact")
             else:
                 _apply_damage(dmg, definition.damage_type)
+                self._apply_spell_status_effects(caster=player, target=foe, definition=definition, log=log)
 
     def _player_attack(self, player: Character, foe: Entity, log: List[CombatLogEntry]) -> None:
         roll = self.rng.randint(1, 20)

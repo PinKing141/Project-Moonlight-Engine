@@ -212,6 +212,25 @@ class PartyInitiativeQueueTests(unittest.TestCase):
 
         self.assertTrue(any("Dense cover" in row.text for row in result.log))
 
+    def test_weather_penalty_applies_for_ranged_attacker(self) -> None:
+        service = CombatService(verbosity="compact")
+        service.set_seed(12)
+
+        player = Character(id=1, name="Ari", class_name="wizard", hp_current=20, hp_max=20)
+        player.attributes["dexterity"] = 14
+        player.attributes["intelligence"] = 16
+
+        enemies = [
+            Entity(id=702, name="Raider", level=1, hp=10, hp_current=10, hp_max=10, armour_class=12, attack_bonus=0, damage_die="d4"),
+        ]
+
+        def choose_action(options, _player, _enemy, _round_no, _scene):
+            return "Attack" if "Attack" in options else options[0]
+
+        result = service.fight_party_turn_based([player], enemies, choose_action, scene={"terrain": "open", "weather": "fog"})
+
+        self.assertTrue(any("Weather pressure" in row.text for row in result.log))
+
     def test_mountain_dash_can_fail_and_consume_turn(self) -> None:
         service = CombatService(verbosity="compact")
         service.set_seed(1)

@@ -1,0 +1,13 @@
+{
+  "temperate_deciduous_forest": 36,
+  "grassland": 32,
+  "steppe": 42,
+  "savanna": 45,
+  "taiga": 50,
+  "tundra": 64,
+  "desert": 78,
+  "marsh": 70,
+  "swamp": 74,
+  "mountain": 68,
+  "glacier": 92
+}

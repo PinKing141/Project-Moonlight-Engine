@@ -82,6 +82,9 @@ class CharacterCreationService:
     def list_races(self) -> List[Race]:
         return list(self.races)
 
+    def list_playable_races(self) -> List[Race]:
+        return [race for race in self.races if bool(getattr(race, "playable", True))]
+
     def list_backgrounds(self) -> List[Background]:
         return list(self.backgrounds)
 
@@ -109,7 +112,7 @@ class CharacterCreationService:
 
     def race_option_labels(self) -> List[str]:
         labels: List[str] = []
-        for race in self.list_races():
+        for race in self.list_playable_races():
             labels.append(
                 f"{race.name:<12} | {self._format_bonus_line(race.bonuses):<18} | "
                 f"Speed {race.speed:<2} | {self._format_trait_summary(race.traits)}"
@@ -202,6 +205,8 @@ class CharacterCreationService:
             ability_scores = self.standard_array_for_class(chosen)
 
         effective_race = self._compose_race_with_subrace(race, subrace)
+        if effective_race is not None and not bool(getattr(effective_race, "playable", True)):
+            raise ValueError("Selected race is not playable.")
 
         starting_equipment = self.starting_equipment.get(
             chosen.slug, self.starting_equipment.get("_default", [])
@@ -288,15 +293,32 @@ class CharacterCreationService:
 
     @staticmethod
     def _default_races() -> List[Race]:
-        return [
-            Race(name="Human", bonuses={key: 1 for key in ABILITY_ORDER}, speed=30, traits=["Versatile", "Adaptive"]),
-            Race(name="Elf", bonuses={"DEX": 2, "INT": 1}, speed=30, traits=["Keen Senses", "Fey Ancestry"]),
-            Race(name="Dwarf", bonuses={"CON": 2, "WIS": 1}, speed=25, traits=["Darkvision", "Stonecunning"]),
-            Race(name="Halfling", bonuses={"DEX": 2, "CHA": 1}, speed=25, traits=["Lucky", "Brave"]),
-            Race(name="Half-Orc", bonuses={"STR": 2, "CON": 1}, speed=30, traits=["Relentless Endurance", "Savage Attacks"]),
-            Race(name="Tiefling", bonuses={"CHA": 2, "INT": 1}, speed=30, traits=["Darkvision", "Hellish Resistance"]),
-            Race(name="Dragonborn", bonuses={"STR": 2, "CHA": 1}, speed=30, traits=["Scaled Resilience", "Ancestral Breath"]),
+        playable = [
+            Race(name="Human", bonuses={key: 1 for key in ABILITY_ORDER}, speed=30, traits=["Versatile", "Adaptive"], playable=True),
+            Race(name="Elf", bonuses={"DEX": 2, "INT": 1}, speed=30, traits=["Keen Senses", "Fey Ancestry"], playable=True),
+            Race(name="Half-Elf", bonuses={"CHA": 2, "DEX": 1, "WIS": 1}, speed=30, traits=["Fey Ancestry", "Skill Versatility"], playable=True),
+            Race(name="Dwarf", bonuses={"CON": 2, "WIS": 1}, speed=25, traits=["Darkvision", "Stonecunning"], playable=True),
+            Race(name="Halfling", bonuses={"DEX": 2, "CHA": 1}, speed=25, traits=["Lucky", "Brave"], playable=True),
+            Race(name="Half-Orc", bonuses={"STR": 2, "CON": 1}, speed=30, traits=["Relentless Endurance", "Savage Attacks"], playable=True),
+            Race(name="Orc", bonuses={"STR": 2, "CON": 1}, speed=30, traits=["Aggressive", "Powerful Build"], playable=True),
+            Race(name="Tiefling", bonuses={"CHA": 2, "INT": 1}, speed=30, traits=["Darkvision", "Hellish Resistance"], playable=True),
+            Race(name="Dragonborn", bonuses={"STR": 2, "CHA": 1}, speed=30, traits=["Scaled Resilience", "Ancestral Breath"], playable=True),
         ]
+
+        non_playable = [
+            Race(name="Aarakocra", bonuses={"DEX": 2, "WIS": 1}, speed=50, traits=["Flight", "Talons"], playable=False),
+            Race(name="Genasi", bonuses={"CON": 2}, speed=30, traits=["Elemental Heritage"], playable=False),
+            Race(name="Gnome", bonuses={"INT": 2}, speed=25, traits=["Gnome Cunning"], playable=False),
+            Race(name="Goblin", bonuses={"DEX": 2, "CON": 1}, speed=30, traits=["Nimble Escape"], playable=False),
+            Race(name="Hobgoblin", bonuses={"CON": 2, "INT": 1}, speed=30, traits=["Martial Training"], playable=False),
+            Race(name="Kobold", bonuses={"DEX": 2}, speed=30, traits=["Pack Tactics"], playable=False),
+            Race(name="Bugbear", bonuses={"STR": 2, "DEX": 1}, speed=30, traits=["Long-Limbed"], playable=False),
+            Race(name="Giant", bonuses={"STR": 3, "CON": 2}, speed=40, traits=["Massive Frame"], playable=False),
+            Race(name="Goliath", bonuses={"STR": 2, "CON": 1}, speed=30, traits=["Stone's Endurance"], playable=False),
+            Race(name="Dark Elf", bonuses={"DEX": 2, "CHA": 1}, speed=30, traits=["Superior Darkvision", "Sunlight Sensitivity"], playable=False),
+        ]
+
+        return [*playable, *non_playable]
 
     def _load_races(self, open5e_client) -> List[Race]:
         defaults = self._default_races()
@@ -312,9 +334,16 @@ class CharacterCreationService:
         seen = {race.name.lower() for race in defaults}
         merged: List[Race] = list(defaults)
         for race in remote:
-            if race.name.lower() not in seen:
+            key = race.name.lower()
+            if key in seen:
+                for idx, existing in enumerate(merged):
+                    if existing.name.lower() != key:
+                        continue
+                    merged[idx] = race
+                    break
+            else:
                 merged.append(race)
-                seen.add(race.name.lower())
+                seen.add(key)
         return merged
 
     def _default_creation_reference(self) -> Dict[str, List[str]]:
@@ -422,6 +451,7 @@ class CharacterCreationService:
             bonuses=merged_bonuses,
             speed=max(0, int(race.speed) + int(subrace.speed_bonus)),
             traits=merged_traits,
+            playable=bool(getattr(race, "playable", True)),
         )
 
     @staticmethod

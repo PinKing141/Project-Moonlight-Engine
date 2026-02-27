@@ -211,6 +211,40 @@ class FeaturePipelineTests(unittest.TestCase):
         self.assertNotIn("temp_ac_bonus", result.player.flags)
         self.assertNotIn("shield_rounds", result.player.flags)
 
+    def test_status_burning_ticks_and_expires(self) -> None:
+        service = CombatService(verbosity="compact")
+        service.set_seed(4)
+        hero = Character(id=71, name="Rhea", class_name="fighter", hp_current=20, hp_max=20)
+        log = []
+
+        service._apply_status(actor=hero, status_id="burning", rounds=1, potency=1, log=log, source_name="Test")
+        service._apply_start_turn_statuses(hero, log)
+        service._tick_actor_statuses_end_turn(hero, log)
+
+        self.assertLess(hero.hp_current, 20)
+        self.assertFalse(service._has_status(hero, "burning"))
+
+    def test_stunned_actor_loses_turn_in_party_combat(self) -> None:
+        service = CombatService(verbosity="compact")
+        service.set_seed(9)
+
+        stunned_ally = Character(id=81, name="Ari", class_name="fighter", hp_current=18, hp_max=18)
+        stunned_ally.flags = {"combat_statuses": [{"id": "stunned", "rounds": 1, "potency": 1}]}
+        stunned_ally.attributes["strength"] = 18
+
+        enemy = Entity(id=82, name="Bandit", level=1, hp=12, hp_current=12, hp_max=12, armour_class=10, attack_bonus=0, damage_die="d4")
+
+        action_calls = {"count": 0}
+
+        def choose_action(options, _player, _enemy, _round_no, _scene):
+            action_calls["count"] += 1
+            return "Attack" if "Attack" in options else options[0]
+
+        result = service.fight_party_turn_based([stunned_ally], [enemy], choose_action)
+
+        self.assertTrue(any("stunned and loses the turn" in row.text.lower() for row in result.log))
+        self.assertNotIn("combat_statuses", getattr(result.allies[0], "flags", {}))
+
 
 if __name__ == "__main__":
     unittest.main()
