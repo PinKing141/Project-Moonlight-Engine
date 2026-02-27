@@ -37,9 +37,12 @@ class TowerSpellFilteringTests(unittest.TestCase):
         event_bus = EventBus()
         world_repo = InMemoryWorldRepository(seed=31)
         character = Character(id=900, name="Ilya", class_name="wizard", location_id=1)
+        character_id = character.id
+        if character_id is None:
+            raise AssertionError("Expected character.id to be assigned")
         character.known_spells = ["Fire Bolt", "Magic Missile", "Ray of Frost"]
         character.spell_slots_current = 2
-        character_repo = InMemoryCharacterRepository({character.id: character})
+        character_repo = InMemoryCharacterRepository({int(character_id): character})
         entity_repo = InMemoryEntityRepository([])
         location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
         progression = WorldProgression(world_repo, entity_repo, event_bus)

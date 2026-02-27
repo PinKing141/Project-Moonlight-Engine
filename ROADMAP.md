@@ -468,6 +468,270 @@ Prepare stable, documented, testable release of CLI RPG core.
 
 ---
 
+## Phase 9 — Gameplay Depth Pass (Faction Pressure + World Feedback)
+
+### Phase Goal
+Turn current faction pressure systems into a full gameplay loop with visible player feedback and controllable outcomes.
+
+### Status
+`In Progress`
+
+### Completed Baseline (already done)
+- Soft pressure hooks exist in travel, encounter bias, social checks, and town pricing.
+- Rare companion discovery/recruit loop is active and globally discoverable.
+
+#### `P9-T01` Faction Heat Lifecycle
+- **Status:** `Not Started`
+- **Objective:** Add decay/cooldown and bounded escalation rules so pressure is dynamic, not one-way.
+- **Acceptance Criteria:**
+  - Heat decays under defined conditions (rest/travel/turn windows).
+  - Heat increase/decrease events are deterministic and logged in state.
+  - No unbounded permanent pressure growth in normal play.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `tests/test_game_logic.py`
+
+#### `P9-T02` Pressure Visibility in CLI
+- **Status:** `Not Started`
+- **Objective:** Surface faction heat and pressure impact in character/town views.
+- **Acceptance Criteria:**
+  - Player can see top heat factions + severity band.
+  - Shop/social/travel messages indicate pressure source when modifiers apply.
+  - No direct presentation repository reads.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `src/rpg/presentation/game_loop.py`
+  - `tests/unit/test_town_social_flow.py`
+
+#### `P9-T03` Pressure Relief Actions
+- **Status:** `Not Started`
+- **Objective:** Add at least one explicit action that reduces targeted faction heat.
+- **Acceptance Criteria:**
+  - Relief action is deterministic, costs resources/time, and persists.
+  - Action is exposed through existing app intents.
+  - Test coverage verifies both success and no-op/failure branch.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `src/rpg/presentation/game_loop.py`
+  - `tests/test_game_logic.py`
+
+### Phase 9 Exit Gates
+- [ ] Heat system has both escalation and decay.
+- [ ] Pressure is visible to player at decision points.
+- [ ] At least one reliable pressure-relief loop exists.
+
+---
+
+## Phase 10 — Encounter & Consequence Variety
+
+### Phase Goal
+Increase tactical and narrative variety using existing deterministic combat/explore architecture.
+
+### Status
+`Not Started`
+
+### Combined Plan: Reference World Data + Cataclysm
+
+#### `P12-T00` World Dataset Ingestion Contract
+- **Status:** `Not Started`
+- **Objective:** Normalize `reference_` CSV snapshots into deterministic world-data caches consumed by cataclysm and core loop logic.
+- **Acceptance Criteria:**
+  - Loader parses and normalizes: states, provinces, burgs, biomes, relations, military, rivers, routes, religions, markers.
+  - Matrix-style relation CSV (blank first header cell) is supported with stable key mapping.
+  - Unit normalization is applied for `%`, area, and numeric metrics to avoid runtime string arithmetic.
+  - Loader outputs deterministic structures keyed by canonical slugs/ids and test fixtures validate parse parity.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `src/rpg/application/services/world_progression.py`
+  - `src/rpg/infrastructure/` (new loader module)
+  - `tests/unit/` (new loader tests)
+
+#### `P12-T00.1` Biome Severity Index + World Pressure Baseline
+- **Status:** `Not Started`
+- **Objective:** Derive a deterministic biome/world pressure baseline from `Habitability`, `Population`, and `Area` for travel, encounters, and cataclysm spread.
+- **Acceptance Criteria:**
+  - A bounded biome severity index is generated per biome and used by explore/travel risk models.
+  - Cataclysm spread/escalation reads biome severity (e.g., low-habitability/high-isolation areas behave differently from dense temperate cores).
+  - Existing non-calamity behavior remains stable when no cataclysm is active.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `src/rpg/application/services/world_progression.py`
+  - `tests/test_game_logic.py`
+
+#### `P10-T01` Faction-Specific Encounter Modifiers
+- **Status:** `Not Started`
+- **Objective:** Add faction flavor packages (ambush style, preferred hazards, reward tilt).
+- **Acceptance Criteria:**
+  - Encounter generation changes by faction in measurable ways.
+  - Behavior remains seed-deterministic for same context.
+  - Regression tests preserve baseline encounter stability.
+
+#### `P10-T02` Mid-Combat Consequence Hooks
+- **Status:** `Not Started`
+- **Objective:** Add bounded combat consequences (e.g., morale break, reinforcements, retreat bargaining).
+- **Acceptance Criteria:**
+  - Hooks trigger through app/combat service only.
+  - No presentation-side combat logic.
+  - Tests cover trigger and non-trigger cases.
+
+#### `P10-T03` Utility Item Decision Depth
+- **Status:** `Not Started`
+- **Objective:** Expand context-sensitive utility consumption and counterplay prompts.
+- **Acceptance Criteria:**
+  - At least three hazards/encounter situations have clear utility counters.
+  - Item consumption and outcomes are persisted and test-covered.
+
+### Phase 10 Exit Gates
+- [ ] Encounter variety is observable across factions/biomes.
+- [ ] Consequence hooks are deterministic and bounded.
+- [ ] Utility counterplay feels meaningful and test-backed.
+
+---
+
+## Phase 11 — Companion and Personal Arc Layer
+
+### Phase Goal
+Move companions from recruitment system to progression arcs with meaningful campaign outcomes.
+
+### Status
+`Not Started`
+
+#### `P11-T01` Companion Arc State Model
+- **Status:** `Not Started`
+- **Objective:** Add lightweight arc progress state per companion (beats, trust, conflict).
+- **Acceptance Criteria:**
+  - Arc state persists in character/world flags with bounded growth.
+  - Arc updates are intent-driven and deterministic.
+
+#### `P11-T02` Arc Event Triggers
+- **Status:** `Not Started`
+- **Objective:** Trigger companion beats from exploration, social outcomes, and faction pressure.
+- **Acceptance Criteria:**
+  - At least one trigger path per channel (explore/social/faction).
+  - Trigger outcomes include gameplay impact (minor bonus/penalty/unlock).
+
+#### `P11-T03` Arc Payoff and Lock-In Choices
+- **Status:** `Not Started`
+- **Objective:** Add late-arc choice points with mutually exclusive outcomes.
+- **Acceptance Criteria:**
+  - Choice outcomes are persisted and reflected in available intents.
+  - Tests verify branching and lock-in behavior.
+
+### Phase 11 Exit Gates
+- [ ] Companion arcs have start/mid/payoff structure.
+- [ ] Player choices create visible branch consequences.
+- [ ] Arc systems pass determinism + persistence checks.
+
+---
+
+## Phase 12 — Procedural Cataclysm Engine (Epoch Threats)
+
+### Phase Goal
+Enable deterministic, emergent world-ending threats (Demon King, Tyrant, Plague) that can arise in any run and pressure all major gameplay loops.
+
+### Status
+`Not Started`
+
+#### `P12-T01` Cataclysm State Contract
+- **Status:** `Not Started`
+- **Objective:** Add canonical world-level cataclysm state schema and DTO exposure.
+- **Acceptance Criteria:**
+  - `world.flags["cataclysm_state"]` stores `active`, `kind`, `phase`, `progress`, `seed`, `started_turn`, `last_advance_turn`.
+  - State values are bounded and normalized on read/write.
+  - Loop/town header DTOs can surface cataclysm summary fields without presentation-side world parsing.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `src/rpg/application/dtos.py`
+  - `src/rpg/application/mappers/game_service_mapper.py`
+  - `tests/test_game_logic.py`
+
+#### `P12-T02` Deterministic Trigger + Seed Selection
+- **Status:** `Not Started`
+- **Objective:** Trigger cataclysm seeding when narrative tension overflows for a bounded turn window.
+- **Acceptance Criteria:**
+  - `StoryDirector` adds `_check_cataclysm_threshold` in tick cycle.
+  - Trigger only occurs when tension is max and sustained for configured turns.
+  - Threat kind selection is deterministic via `derive_seed("world.cataclysm", ...)`.
+- **Files (expected):**
+  - `src/rpg/application/services/story_director.py`
+  - `src/rpg/application/services/seed_policy.py`
+  - `tests/unit/test_story_director.py`
+
+#### `P12-T03` Doomsday Clock Escalation
+- **Status:** `Not Started`
+- **Objective:** Advance cataclysm phases deterministically across world turns.
+- **Acceptance Criteria:**
+  - Phase model supports Whispers → Grip Tightens → Map Shrinks → Ruin.
+  - Advancement cadence is deterministic for identical world state.
+  - Progression can be slowed/rolled back by explicit anti-cataclysm actions.
+- **Files (expected):**
+  - `src/rpg/application/services/world_progression.py`
+  - `src/rpg/application/services/story_director.py`
+  - `tests/unit/test_story_director.py`
+  - `tests/unit/test_event_bus_progression.py`
+
+#### `P12-T04` Systemic World Pressure Effects
+- **Status:** `Not Started`
+- **Objective:** Apply cataclysm phase modifiers to core loops without presentation logic leakage.
+- **Acceptance Criteria:**
+  - `explore_intent` applies threat-specific encounter bias by phase.
+  - `rest_intent` and camp/rest systems apply corruption penalties where specified.
+  - Town economy and destination behavior respond to active phase/kind.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `tests/test_game_logic.py`
+  - `tests/unit/test_town_social_flow.py`
+
+#### `P12-T05` Cataclysm Pushback Objectives
+- **Status:** `Not Started`
+- **Objective:** Replace normal quest pressure with generated anti-cataclysm objectives.
+- **Acceptance Criteria:**
+  - Quest Board surfaces cataclysm bounties while active.
+  - At least one alliance-gated objective requires high multi-faction standing.
+  - Completing pushback objectives reduces cataclysm progress deterministically.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `src/rpg/application/services/quest_service.py`
+  - `tests/unit/test_quest_arc_flow.py`
+  - `tests/test_game_logic.py`
+
+#### `P12-T06` Apex Resolution + World-Fell Failure
+- **Status:** `Not Started`
+- **Objective:** Add deterministic end states for cataclysm victory/defeat.
+- **Acceptance Criteria:**
+  - Final clash can be spawned by reducing progress to threshold or finishing generated apex objective.
+  - Ruin phase can trigger non-standard fail state: "Game Over — The World Fell".
+  - End-state flags persist and are surfaced in session-quality reporting.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `src/rpg/application/services/narrative_quality_batch.py`
+  - `src/rpg/presentation/game_loop.py`
+  - `tests/test_game_logic.py`
+  - `tests/unit/test_narrative_quality_report.py`
+
+#### `P12-T07` Cataclysm UX Signaling
+- **Status:** `Not Started`
+- **Objective:** Keep player-facing warnings persistent and explicit during escalation.
+- **Acceptance Criteria:**
+  - Loop header shows active doomsday warning with kind/phase/progress.
+  - Rumour Board and town consequences visibly reflect current cataclysm phase.
+  - No direct repository/domain reads are introduced in presentation.
+- **Files (expected):**
+  - `src/rpg/presentation/game_loop.py`
+  - `src/rpg/presentation/main_menu.py`
+  - `tests/e2e/test_cli_flow.py`
+
+### Phase 12 Exit Gates
+- [ ] Reference world dataset loader is deterministic and schema-validated.
+- [ ] Biome severity baseline is wired to travel/explore and cataclysm spread rules.
+- [ ] Cataclysm trigger + threat selection is deterministic.
+- [ ] All four escalation phases produce visible systemic gameplay changes.
+- [ ] Player pushback can measurably reduce or resolve active cataclysm.
+- [ ] Ruin failure path is distinct, persisted, and reported.
+- [ ] Regression tests confirm normal runs remain unchanged when no cataclysm is active.
+
+---
+
 ## 6) Backlog (Not In Active Phase)
 
 > Add items here with candidate IDs. Do not implement backlog items during active phase unless approved and re-scoped.
@@ -482,6 +746,9 @@ Prepare stable, documented, testable release of CLI RPG core.
 
 ## 7) Change Log for This Roadmap
 
+- **2026-02-27:** Expanded `Phase 12` into a combined execution track by adding `P12-T00` and `P12-T00.1` for `reference_` world-data ingestion/normalization and biome severity baseline wiring ahead of cataclysm escalation tasks.
+- **2026-02-27:** Added `Phase 12 — Procedural Cataclysm Engine` (`P12-T01`..`P12-T07`) with deterministic trigger/escalation contracts, systemic pressure hooks, pushback objectives, and explicit world-fell resolution gates.
+- **2026-02-27:** Added forward execution phases `P9`–`P11` for gameplay depth, encounter/consequence variety, and companion arc progression; marked `P9` as active phase with explicit exit gates.
 - **2026-02-24:** Initial tracked roadmap created with task IDs, per-phase exit gates, and done evidence fields.
 - **2026-02-24:** Phase 3 closed: completed live MySQL clean-install and incremental-upgrade migration verification; updated P3-T03 to `Done` and all Phase 3 exit gates to checked.
 - **2026-02-24:** Phase 4 started; completed `P4-T01` with event-driven faction influence updates and focused test coverage.

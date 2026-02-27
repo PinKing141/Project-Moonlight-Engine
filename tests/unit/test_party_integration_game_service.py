@@ -21,10 +21,17 @@ from rpg.infrastructure.db.inmemory.repos import (
 
 
 class PartyIntegrationGameServiceTests(unittest.TestCase):
+    @staticmethod
+    def _character_id(character: Character) -> int:
+        character_id = character.id
+        if character_id is None:
+            raise AssertionError("Expected character.id to be assigned")
+        return int(character_id)
+
     def _build_service(self, character: Character, faction_repo=None) -> GameService:
         event_bus = EventBus()
         world_repo = InMemoryWorldRepository(seed=101)
-        character_repo = InMemoryCharacterRepository({int(character.id or 0): character})
+        character_repo = InMemoryCharacterRepository({self._character_id(character): character})
         entity_repo = InMemoryEntityRepository([])
         location_repo = InMemoryLocationRepository({1: Location(id=1, name="Field")})
         progression = WorldProgression(world_repo, entity_repo, event_bus)
@@ -90,7 +97,8 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
             _ = evaluate_ai_action
             _ = scene
             elara = next((row for row in allies if row.name == "Elara"), None)
-            self.assertIsNotNone(elara)
+            if elara is None:
+                self.fail("Expected Elara in ally party")
             captured_inputs.append((int(elara.hp_current), int(elara.spell_slots_current)))
 
             elara.hp_current = max(0, int(elara.hp_current) - 3)
@@ -134,10 +142,13 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
             },
         }
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        service.rest(player.id)
+        service.rest(player_id)
 
-        saved = service.character_repo.get(player.id)
+        saved = service.character_repo.get(player_id)
+        if saved is None:
+            self.fail("Expected saved player after rest")
         state = saved.flags.get("party_runtime_state", {}).get("npc_elara", {})
         self.assertEqual(10, state.get("hp_current"))
         self.assertEqual(1, state.get("spell_slots_current"))
@@ -156,10 +167,11 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
                 }
             },
         }
+        player_id = self._character_id(player)
 
         event_bus = EventBus()
         world_repo = InMemoryWorldRepository(seed=101)
-        character_repo = InMemoryCharacterRepository({int(player.id or 0): player})
+        character_repo = InMemoryCharacterRepository({player_id: player})
         entity_repo = InMemoryEntityRepository([])
         location_repo = InMemoryLocationRepository(
             {
@@ -176,9 +188,11 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
             progression=progression,
         )
 
-        service.travel_intent(player.id, destination_id=2, travel_mode="road")
+        service.travel_intent(player_id, destination_id=2, travel_mode="road")
 
-        saved = service.character_repo.get(player.id)
+        saved = service.character_repo.get(player_id)
+        if saved is None:
+            self.fail("Expected saved player after travel")
         state = saved.flags.get("party_runtime_state", {}).get("npc_silas", {})
         self.assertEqual(10, state.get("hp_current"))
 
@@ -192,8 +206,9 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
             },
         }
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        lines = service.get_party_status_intent(player.id)
+        lines = service.get_party_status_intent(player_id)
 
         self.assertEqual(2, len(lines))
         self.assertTrue(any("Silas: HP 9/16" in line for line in lines))
@@ -201,29 +216,37 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
 
     def test_set_party_companion_active_adds_and_removes_member(self) -> None:
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
-        player.flags = {}
+        player.flags = {"unlocked_companions": ["npc_silas"]}
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        add_result = service.set_party_companion_active_intent(player.id, "npc_silas", True)
+        add_result = service.set_party_companion_active_intent(player_id, "npc_silas", True)
         self.assertIn("joined", " ".join(add_result.messages).lower())
 
-        saved = service.character_repo.get(player.id)
+        saved = service.character_repo.get(player_id)
+        if saved is None:
+            self.fail("Expected saved player after adding companion")
         self.assertIn("npc_silas", saved.flags.get("active_party", []))
 
-        remove_result = service.set_party_companion_active_intent(player.id, "npc_silas", False)
+        remove_result = service.set_party_companion_active_intent(player_id, "npc_silas", False)
         self.assertIn("left", " ".join(remove_result.messages).lower())
-        saved = service.character_repo.get(player.id)
+        saved = service.character_repo.get(player_id)
+        if saved is None:
+            self.fail("Expected saved player after removing companion")
         self.assertNotIn("npc_silas", saved.flags.get("active_party", []))
 
     def test_set_party_companion_lane_override_applies_to_loaded_companion(self) -> None:
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
         player.flags = {"active_party": ["npc_silas"]}
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        lane_result = service.set_party_companion_lane_intent(player.id, "npc_silas", "rearguard")
+        lane_result = service.set_party_companion_lane_intent(player_id, "npc_silas", "rearguard")
         self.assertIn("rearguard", " ".join(lane_result.messages).lower())
 
-        saved = service.character_repo.get(player.id)
+        saved = service.character_repo.get(player_id)
+        if saved is None:
+            self.fail("Expected saved player after lane change")
         self.assertEqual("rearguard", saved.flags.get("party_lane_overrides", {}).get("npc_silas"))
 
         companions = service._active_party_companions(saved)
@@ -237,6 +260,7 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
             "unlocked_companions": ["npc_silas", "npc_elara", "captain_ren", "npc_lyra"],
         }
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
         templates = dict(service._COMPANION_TEMPLATES)
         templates["npc_lyra"] = {
@@ -249,13 +273,15 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
         }
 
         with mock.patch.object(service, "_COMPANION_TEMPLATES", templates):
-            blocked = service.set_party_companion_active_intent(player.id, "npc_lyra", True)
+            blocked = service.set_party_companion_active_intent(player_id, "npc_lyra", True)
             self.assertIn("party is full", " ".join(blocked.messages).lower())
 
-            saved = service.character_repo.get(player.id)
+            saved = service.character_repo.get(player_id)
+            if saved is None:
+                self.fail("Expected saved player while party remains full")
             self.assertNotIn("npc_lyra", saved.flags.get("active_party", []))
 
-            active_count, cap = service.get_party_capacity_intent(player.id)
+            active_count, cap = service.get_party_capacity_intent(player_id)
             self.assertEqual(3, active_count)
             self.assertEqual(3, cap)
 
@@ -263,8 +289,9 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
         player.flags = {"unlocked_companions": ["npc_silas"]}
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        result = service.recruit_companion_intent(player.id, "npc_vael")
+        result = service.recruit_companion_intent(player_id, "npc_vael")
 
         merged = " ".join(result.messages).lower()
         self.assertIn("not ready to join", merged)
@@ -274,19 +301,23 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
         player.flags = {"unlocked_companions": ["npc_silas"], "companion_leads": ["npc_vael"]}
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        result = service.recruit_companion_intent(player.id, "npc_vael")
+        result = service.recruit_companion_intent(player_id, "npc_vael")
         self.assertIn("joins your roster", " ".join(result.messages).lower())
 
-        saved = service.character_repo.get(player.id)
+        saved = service.character_repo.get(player_id)
+        if saved is None:
+            self.fail("Expected saved player after recruit")
         self.assertIn("npc_vael", saved.flags.get("unlocked_companions", []))
 
     def test_recruit_companion_blocked_by_mutual_exclusive_rival(self) -> None:
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
         player.flags = {"unlocked_companions": ["npc_silas", "npc_seraphine"], "companion_leads": ["npc_vael"]}
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        result = service.recruit_companion_intent(player.id, "npc_vael")
+        result = service.recruit_companion_intent(player_id, "npc_vael")
 
         merged = " ".join(result.messages).lower()
         self.assertIn("not ready to join", merged)
@@ -299,8 +330,9 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
             "companion_leads": ["npc_mirelle"],
         }
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        result = service.recruit_companion_intent(player.id, "npc_mirelle")
+        result = service.recruit_companion_intent(player_id, "npc_mirelle")
 
         merged = " ".join(result.messages).lower()
         self.assertIn("campaign recruit cap reached", merged)
@@ -309,35 +341,39 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
         player.flags = {"unlocked_companions": ["npc_silas"]}
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        result = service.set_party_companion_active_intent(player.id, "npc_vael", True)
+        result = service.set_party_companion_active_intent(player_id, "npc_vael", True)
 
         self.assertIn("not recruited", " ".join(result.messages).lower())
 
-    def test_npc_interaction_offers_ask_about_companions_for_tavern_contacts(self) -> None:
+    def test_npc_interaction_hides_ask_about_companions_option(self) -> None:
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
         player.flags = {}
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        interaction = service.get_npc_interaction_intent(player.id, "broker_silas")
+        interaction = service.get_npc_interaction_intent(player_id, "broker_silas")
 
         approaches = {entry.lower() for entry in interaction.approaches}
-        self.assertIn("ask about companions", approaches)
+        self.assertNotIn("ask about companions", approaches)
 
-    def test_travel_event_can_discover_rare_companion_lead(self) -> None:
+    def test_successful_social_interaction_unlocks_mapped_companion(self) -> None:
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
-        player.flags = {"unlocked_companions": ["npc_silas", "npc_elara", "captain_ren"]}
+        player.flags = {"unlocked_companions": []}
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        with mock.patch.object(service, "_companion_lead_discovery_chance", return_value=100):
-            message = service._apply_travel_event(player, "town", "Village of Brindle", "road")
+        with mock.patch("random.Random.randint", return_value=20):
+            outcome = service.submit_social_approach_intent(player_id, "broker_silas", "friendly")
 
-        self.assertIn("rare lead surfaces", message.lower())
-        saved = service.character_repo.get(player.id)
-        leads = set(saved.flags.get("companion_leads", []))
-        self.assertTrue({"npc_vael", "npc_seraphine", "npc_kaelen", "npc_mirelle"}.intersection(leads))
+        self.assertIn("willing to join your roster", " ".join(outcome.messages).lower())
+        saved = service.character_repo.get(player_id)
+        if saved is None:
+            self.fail("Expected saved player after social unlock")
+        self.assertIn("npc_silas", set(saved.flags.get("unlocked_companions", [])))
 
-    def test_companion_leads_intent_includes_registry_and_recent_history(self) -> None:
+    def test_companion_leads_intent_returns_empty_when_disabled(self) -> None:
         player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
         player.flags = {
             "unlocked_companions": ["npc_silas", "npc_elara", "captain_ren", "npc_vael"],
@@ -352,13 +388,25 @@ class PartyIntegrationGameServiceTests(unittest.TestCase):
             ],
         }
         service = self._build_service(player)
+        player_id = self._character_id(player)
 
-        lines = service.get_companion_leads_intent(player.id)
-        joined = "\n".join(lines)
-        self.assertIn("Rare companions recruited: 1/3", joined)
-        self.assertIn("Vael: Recruited", joined)
-        self.assertIn("Seraphine: Lead Acquired", joined)
-        self.assertIn("Day 12", joined)
+        lines = service.get_companion_leads_intent(player_id)
+        self.assertEqual([], lines)
+
+    def test_recruit_companion_initializes_arc_state(self) -> None:
+        player = Character(id=1, name="Ari", class_name="fighter", location_id=1)
+        player.flags = {"unlocked_companions": ["npc_silas"], "companion_leads": ["npc_vael"]}
+        service = self._build_service(player)
+        player_id = self._character_id(player)
+
+        service.recruit_companion_intent(player_id, "npc_vael")
+
+        saved = service.character_repo.get(player_id)
+        if saved is None:
+            self.fail("Expected saved player after recruit")
+        arcs = dict(saved.flags.get("companion_arcs", {}))
+        self.assertIn("npc_vael", arcs)
+        self.assertGreaterEqual(int(dict(arcs["npc_vael"]).get("progress", 0)), 5)
 
 
 if __name__ == "__main__":

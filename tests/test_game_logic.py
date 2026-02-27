@@ -10,6 +10,7 @@ from rpg.application.services.event_bus import EventBus
 from rpg.application.services.game_service import GameService
 from rpg.application.services.world_progression import WorldProgression
 from rpg.application.services.combat_service import CombatResult
+from rpg.application.dtos import EncounterPlan
 from rpg.domain.events import MonsterSlain
 from rpg.domain.models.character import Character
 from rpg.domain.models.entity import Entity
@@ -222,6 +223,128 @@ class GameServiceTests(unittest.TestCase):
         saved = character_repo.get(character.id)
         self.assertIn("Focus Potion", saved.inventory)
 
+    def test_apply_encounter_reward_intent_can_drop_tiered_item(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=8)
+        world = world_repo.load_default()
+        world.current_turn = 5
+        world_repo.save(world)
+
+        character = Character(id=6, name="Kara", location_id=1, xp=0, money=0)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        monster = Entity(id=12, name="Mercenary", level=4)
+        entity_repo = InMemoryEntityRepository([monster])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Road")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", side_effect=[2, 101]):
+            reward = service.apply_encounter_reward_intent(character, monster)
+
+        self.assertIn("Antitoxin", reward.loot_items)
+        saved = character_repo.get(character.id)
+        self.assertIn("Antitoxin", saved.inventory)
+
+    def test_shop_view_includes_new_utility_items(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=3)
+        character = Character(id=21, name="Lio", location_id=1, money=120)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        shop = service.get_shop_view_intent(character.id)
+        names = {item.name for item in shop.items}
+        self.assertIn("Torch", names)
+        self.assertIn("Rope", names)
+        self.assertIn("Climbing Kit", names)
+        self.assertIn("Antitoxin", names)
+
+    def test_hazard_resolution_consumes_matching_utility_item(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=4)
+        character = Character(id=31, name="Nia", location_id=1, hp_current=12, hp_max=12)
+        character.inventory = ["Torch"]
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Cavern Mouth", biome="wilderness")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        plan = EncounterPlan(enemies=[], hazards=["Dark Cave"])
+        message, _ = service._resolve_explore_hazard(character, plan)
+
+        self.assertNotIn("Torch", character.inventory)
+        self.assertIn("Torchlight", message)
+
+    def test_wilderness_scout_uses_wisdom_check_and_can_reduce_threat(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=10)
+        world = world_repo.load_default()
+        world.current_turn = 7
+        world.threat_level = 4
+        world_repo.save(world)
+
+        character = Character(id=40, name="Ari", location_id=1)
+        character.attributes["wisdom"] = 16
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Ridge")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", return_value=1), mock.patch("random.Random.randint", return_value=20):
+            result = service.wilderness_action_intent(character.id, "scout")
+
+        self.assertTrue(any("Survival check" in line for line in result.messages))
+        self.assertTrue(any("lower local pressure" in line for line in result.messages))
+        updated_world = world_repo.load_default()
+        self.assertEqual(3, int(getattr(updated_world, "threat_level", 0) or 0))
+
+    def test_wilderness_sneak_sets_next_explore_surprise_and_consumes(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=11)
+        character = Character(id=41, name="Vale", location_id=1)
+        character.attributes["dexterity"] = 18
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Pines")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", return_value=1), mock.patch("random.Random.randint", return_value=20):
+            result = service.wilderness_action_intent(character.id, "sneak")
+
+        self.assertTrue(any("Stealth check" in line for line in result.messages))
+        self.assertTrue(any("next encounter starts with surprise" in line for line in result.messages))
+
+        first = service.consume_next_explore_surprise_intent(character.id)
+        second = service.consume_next_explore_surprise_intent(character.id)
+        self.assertEqual("player", first)
+        self.assertIsNone(second)
+
     def test_apply_encounter_reward_intent_levels_up_when_threshold_crossed(self) -> None:
         world_repo = InMemoryWorldRepository(seed=9)
         character = Character(id=14, name="Ryn", location_id=1, level=1, xp=20, hp_max=10, hp_current=7)
@@ -282,6 +405,36 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual("Bandit", payload.enemy.name)
         self.assertEqual("aggressive", payload.enemy.intent)
         self.assertEqual(["Attack", "Dodge", "Cast Spell"], payload.options)
+
+    def test_combat_round_view_includes_active_status_conditions(self) -> None:
+        character = Character(id=15, name="Mira", class_name="wizard", hp_current=10, hp_max=12)
+        character.flags = {
+            "combat_statuses": [
+                {"id": "burning", "rounds": 2, "potency": 1},
+                {"id": "blessed", "rounds": 1, "potency": 1},
+            ]
+        }
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        enemy = Entity(id=18, name="Raider", level=1, hp=8)
+        entity_repo = InMemoryEntityRepository([enemy])
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=InMemoryLocationRepository({}),
+            world_repo=InMemoryWorldRepository(seed=12),
+        )
+
+        payload = service.combat_round_view_intent(
+            options=["Attack"],
+            player=character,
+            enemy=enemy,
+            round_no=1,
+            scene_ctx={},
+        )
+
+        self.assertIn("Burning(2)", payload.player.conditions)
+        self.assertIn("Blessed(1)", payload.player.conditions)
 
     def test_submit_combat_action_intent_maps_actions(self) -> None:
         options = ["Attack", "Cast Spell", "Dodge"]
@@ -344,6 +497,26 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual(42, sheet.xp)
         self.assertEqual(50, sheet.next_level_xp)
         self.assertEqual(8, sheet.xp_to_next_level)
+
+    def test_character_sheet_includes_faction_pressure_summary(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=26)
+        character = Character(id=60, name="Vale", location_id=1, hp_max=18, hp_current=12)
+        character.flags["faction_heat"] = {"wardens": 12, "thieves_guild": 5}
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        sheet = service.get_character_sheet_intent(character.id)
+
+        self.assertIn("Pressure:", sheet.pressure_summary)
+        self.assertTrue(any("Wardens" in line for line in sheet.pressure_lines))
 
     def test_encounter_plan_is_deterministic_for_same_context(self) -> None:
         character = Character(id=21, name="Scout", location_id=1, level=2)
@@ -573,6 +746,778 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual(2, level)
         self.assertEqual(2, max_enemies)
         self.assertEqual("wild", bias)
+
+    def test_faction_heat_pressure_raises_travel_risk_hint(self) -> None:
+        character = Character(id=50, name="Dane", location_id=1, level=1)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Road")})
+        world_repo = InMemoryWorldRepository(seed=21)
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        with mock.patch("random.Random.randint", return_value=30):
+            base = service._travel_risk_hint(
+                character_id=character.id,
+                world_turn=1,
+                threat_level=1,
+                location_id=1,
+                location_name="Road",
+                recommended_level=1,
+            )
+
+        character.flags["faction_heat"] = {"wardens": 20}
+        service.character_repo.save(character)
+
+        with mock.patch("random.Random.randint", return_value=30):
+            heated = service._travel_risk_hint(
+                character_id=character.id,
+                world_turn=1,
+                threat_level=1,
+                location_id=1,
+                location_name="Road",
+                recommended_level=1,
+            )
+
+        self.assertEqual("Low", base)
+        self.assertEqual("Moderate", heated)
+
+    def test_biome_severity_raises_travel_risk_hint(self) -> None:
+        character = Character(id=150, name="Tarin", location_id=1, level=1)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository(
+            {
+                1: Location(id=1, name="Green Road", biome="temperate_deciduous_forest"),
+                2: Location(id=2, name="Ice Pass", biome="glacier"),
+            }
+        )
+        world_repo = InMemoryWorldRepository(seed=121)
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        dataset = type(
+            "DatasetStub",
+            (),
+            {"biome_severity_index": {"temperate_deciduous_forest": 20, "glacier": 95}},
+        )()
+        with mock.patch.object(GameService, "_load_reference_world_dataset_cached", return_value=dataset):
+            with mock.patch("random.Random.randint", return_value=39):
+                low_risk = service._travel_risk_hint(
+                    character_id=character.id,
+                    world_turn=1,
+                    threat_level=1,
+                    location_id=1,
+                    location_name="Green Road",
+                    recommended_level=1,
+                )
+            with mock.patch("random.Random.randint", return_value=39):
+                high_risk = service._travel_risk_hint(
+                    character_id=character.id,
+                    world_turn=1,
+                    threat_level=1,
+                    location_id=2,
+                    location_name="Ice Pass",
+                    recommended_level=1,
+                )
+
+        self.assertEqual("Low", low_risk)
+        self.assertEqual("Moderate", high_risk)
+
+    def test_biome_severity_increases_explore_hazard_dc(self) -> None:
+        character = Character(id=151, name="Kira", location_id=1, level=1, hp_max=20, hp_current=20)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Wilds", biome="forest")})
+        world_repo = InMemoryWorldRepository(seed=122)
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+        plan = EncounterPlan(enemies=[], hazards=["Falling Rocks"], source="table")
+
+        low_dataset = type("DatasetLow", (), {"biome_severity_index": {"forest": 10}})()
+        high_dataset = type("DatasetHigh", (), {"biome_severity_index": {"forest": 95}})()
+
+        with mock.patch("random.Random.randint", return_value=13):
+            with mock.patch.object(GameService, "_load_reference_world_dataset_cached", return_value=low_dataset):
+                low_message, low_skip = service._resolve_explore_hazard(character, plan)
+
+        character.hp_current = character.hp_max
+        with mock.patch("random.Random.randint", return_value=13):
+            with mock.patch.object(GameService, "_load_reference_world_dataset_cached", return_value=high_dataset):
+                high_message, high_skip = service._resolve_explore_hazard(character, plan)
+
+        self.assertIn("safely", low_message)
+        self.assertFalse(low_skip)
+        self.assertIn("strains your advance", high_message)
+        self.assertFalse(high_skip)
+
+    def test_explore_applies_dominant_faction_heat_as_bias(self) -> None:
+        character = Character(id=51, name="Moss", location_id=1, level=2)
+        character.flags["faction_heat"] = {"wardens": 8}
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository(
+            {1: Location(id=1, name="Frontier", factions=["wild"]) }
+        )
+        world_repo = InMemoryWorldRepository(seed=22)
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        with mock.patch.object(
+            service.encounter_service,
+            "generate_plan",
+            return_value=EncounterPlan(enemies=[], source="table"),
+        ) as generate_plan:
+            service.explore(character.id)
+
+        called_bias = generate_plan.call_args.kwargs.get("faction_bias")
+        self.assertEqual("wardens", called_bias)
+
+    def test_town_price_modifier_includes_faction_heat_pressure(self) -> None:
+        character = Character(id=52, name="Bram", location_id=1, level=1)
+        character.flags["faction_heat"] = {"thieves_guild": 10}
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+        world_repo = InMemoryWorldRepository(seed=23)
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        modifier = service._town_price_modifier(character.id)
+
+        self.assertEqual(5, modifier)
+
+    def test_shop_view_labels_pressure_source_when_surcharged(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=27)
+        character = Character(id=61, name="Bram", location_id=1, level=1, money=50)
+        character.flags["faction_heat"] = {"thieves_guild": 12}
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        shop = service.get_shop_view_intent(character.id)
+
+        self.assertIn("pressure", shop.price_modifier_label.lower())
+        self.assertIn("thieves guild", shop.price_modifier_label.lower())
+
+    def test_rest_decays_faction_heat_and_records_log(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=24)
+        character = Character(id=53, name="Mira", location_id=1, hp_current=4, hp_max=10)
+        character.flags["faction_heat"] = {"wardens": 6}
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        service.rest(character.id)
+
+        saved = character_repo.get(character.id)
+        self.assertIsNotNone(saved)
+        heat = dict(saved.flags.get("faction_heat", {}))
+        self.assertEqual(4, int(heat.get("wardens", 0)))
+        history = list(saved.flags.get("faction_heat_log", []))
+        self.assertTrue(history)
+        self.assertEqual("rest", str(history[-1].get("reason", "")))
+
+    def test_travel_faction_heat_decay_respects_interval(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=25)
+        player = Character(id=54, name="Ari", class_name="fighter", location_id=1)
+        player.flags["faction_heat"] = {"thieves_guild": 5}
+        character_repo = InMemoryCharacterRepository({player.id: player})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository(
+            {
+                1: Location(id=1, name="Town", biome="village", x=0.0, y=0.0),
+                2: Location(id=2, name="Wilds", biome="forest", x=100.0, y=0.0),
+            }
+        )
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        service.travel_intent(player.id, destination_id=2, travel_mode="road")
+
+        saved = character_repo.get(player.id)
+        self.assertIsNotNone(saved)
+        heat = dict(saved.flags.get("faction_heat", {}))
+        self.assertEqual(3, int(heat.get("thieves_guild", 0)))
+        history = [entry for entry in list(saved.flags.get("faction_heat_log", [])) if str(entry.get("reason", "")) == "travel"]
+        self.assertEqual(2, len(history))
+
+    def test_pressure_relief_reduces_selected_faction_heat_and_spends_day_and_gold(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=28)
+        world = world_repo.load_default()
+        start_turn = int(getattr(world, "current_turn", 0) or 0)
+        character = Character(id=62, name="Nyx", location_id=1, money=20)
+        character.flags["faction_heat"] = {"wardens": 9, "thieves_guild": 4}
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        result = service.submit_pressure_relief_intent(character.id, faction_id="wardens")
+
+        saved = character_repo.get(character.id)
+        self.assertIsNotNone(saved)
+        self.assertEqual(14, int(saved.money))
+        heat = dict(saved.flags.get("faction_heat", {}))
+        self.assertEqual(6, int(heat.get("wardens", 0)))
+        relief_rows = [row for row in list(saved.flags.get("faction_heat_log", [])) if str(row.get("reason", "")) == "relief"]
+        self.assertTrue(relief_rows)
+        updated_world = world_repo.load_default()
+        self.assertEqual(start_turn + 1, int(getattr(updated_world, "current_turn", 0) or 0))
+        self.assertTrue(any("lay low" in line.lower() for line in result.messages))
+
+    def test_pressure_relief_requires_gold(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=29)
+        character = Character(id=63, name="Ryn", location_id=1, money=2)
+        character.flags["faction_heat"] = {"wardens": 8}
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        result = service.submit_pressure_relief_intent(character.id, faction_id="wardens")
+
+        saved = character_repo.get(character.id)
+        self.assertIsNotNone(saved)
+        self.assertEqual(2, int(saved.money))
+        self.assertEqual(8, int(dict(saved.flags.get("faction_heat", {})).get("wardens", 0)))
+        self.assertTrue(any("need" in line.lower() and "gold" in line.lower() for line in result.messages))
+
+    def test_explore_applies_faction_encounter_hazard_package(self) -> None:
+        character = Character(id=64, name="Kest", location_id=1, level=2)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Backstreets", factions=["thieves_guild"])})
+        world_repo = InMemoryWorldRepository(seed=30)
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        with mock.patch.object(
+            service.encounter_service,
+            "generate_plan",
+            return_value=EncounterPlan(enemies=[], hazards=[]),
+        ), mock.patch("rpg.application.services.game_service.derive_seed", return_value=1):
+            plan, _, _ = service.explore(character.id)
+
+        self.assertIn("Hidden Snare", list(plan.hazards or []))
+
+    def test_apply_encounter_reward_intent_applies_faction_money_tilt(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=31)
+        character = Character(id=65, name="Nara", location_id=1, xp=0, money=0)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        monster = Entity(id=66, name="Cutpurse", level=1, faction_id="thieves_guild", loot_tags=["stolen map"])
+        entity_repo = InMemoryEntityRepository([monster])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Alleys")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        reward = service.apply_encounter_reward_intent(character, monster)
+
+        self.assertEqual(4, reward.money_gain)
+        saved = character_repo.get(character.id)
+        self.assertEqual(4, int(saved.money))
+
+    def test_post_combat_morale_consequence_triggers_and_reduces_threat(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=32)
+        world = world_repo.load_default()
+        world.threat_level = 4
+        world.current_turn = 9
+        world_repo.save(world)
+
+        character = Character(id=70, name="Ari", location_id=1)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Frontier")}),
+            world_repo=world_repo,
+        )
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", return_value=1):
+            triggered = service._apply_post_combat_morale_consequence(
+                world=world,
+                character_id=character.id,
+                world_turn=9,
+                allies_won=True,
+                fled=False,
+                enemy_factions=["wardens"],
+                context_key="party",
+            )
+
+        self.assertTrue(triggered)
+        self.assertEqual(3, int(getattr(world, "threat_level", 0) or 0))
+        messages = service._recent_consequence_messages(world, limit=1)
+        self.assertTrue(any("wardens" in line.lower() for line in messages))
+
+    def test_post_combat_morale_consequence_does_not_trigger_when_roll_fails(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=33)
+        world = world_repo.load_default()
+        world.threat_level = 4
+        world.current_turn = 9
+        world_repo.save(world)
+
+        character = Character(id=71, name="Ari", location_id=1)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Frontier")}),
+            world_repo=world_repo,
+        )
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", return_value=99):
+            triggered = service._apply_post_combat_morale_consequence(
+                world=world,
+                character_id=character.id,
+                world_turn=9,
+                allies_won=True,
+                fled=False,
+                enemy_factions=["wardens"],
+                context_key="party",
+            )
+
+        self.assertFalse(triggered)
+        self.assertEqual(4, int(getattr(world, "threat_level", 0) or 0))
+
+    def test_no_combat_fallback_rope_counter_reduces_hp_and_threat(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=34)
+        world = world_repo.load_default()
+        world.threat_level = 0
+        world_repo.save(world)
+
+        character = Character(id=72, name="Ari", location_id=1, hp_current=12, hp_max=24)
+        character.inventory = ["Rope"]
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Road")}),
+            world_repo=world_repo,
+        )
+
+        with mock.patch("random.Random.randint", return_value=20):
+            message = service._apply_explore_no_combat_fallback(character, [Entity(id=1, name="Scout", level=1)])
+
+        self.assertIn("rope line", message.lower())
+        self.assertEqual(11, int(character.hp_current))
+        self.assertNotIn("Rope", list(character.inventory))
+        updated_world = world_repo.load_default()
+        self.assertEqual(0, int(getattr(updated_world, "threat_level", 0) or 0))
+
+    def test_no_combat_fallback_torch_counter_reduces_hp_and_threat(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=35)
+        world = world_repo.load_default()
+        world.threat_level = 1
+        world_repo.save(world)
+
+        character = Character(id=73, name="Ari", location_id=1, hp_current=12, hp_max=24)
+        character.inventory = ["Torch"]
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Road")}),
+            world_repo=world_repo,
+        )
+
+        with mock.patch("random.Random.randint", return_value=50):
+            message = service._apply_explore_no_combat_fallback(character, [Entity(id=2, name="Raider", level=1)])
+
+        self.assertIn("torchlight", message.lower())
+        self.assertEqual(11, int(character.hp_current))
+        self.assertNotIn("Torch", list(character.inventory))
+        updated_world = world_repo.load_default()
+        self.assertEqual(1, int(getattr(updated_world, "threat_level", 0) or 0))
+
+    def test_no_combat_fallback_antitoxin_counter_cancels_threat_rise(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=36)
+        world = world_repo.load_default()
+        world.threat_level = 2
+        world_repo.save(world)
+
+        character = Character(id=74, name="Ari", location_id=1, hp_current=12, hp_max=24)
+        character.inventory = ["Antitoxin"]
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Road")}),
+            world_repo=world_repo,
+        )
+
+        with mock.patch("random.Random.randint", return_value=90):
+            message = service._apply_explore_no_combat_fallback(character, [Entity(id=3, name="Skirmisher", level=1)])
+
+        self.assertIn("antitoxin", message.lower())
+        self.assertNotIn("Antitoxin", list(character.inventory))
+        updated_world = world_repo.load_default()
+        self.assertEqual(2, int(getattr(updated_world, "threat_level", 0) or 0))
+
+    def test_social_success_can_advance_companion_arc(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=37)
+        character = Character(id=75, name="Ari", location_id=1)
+        character.attributes["charisma"] = 18
+        character.flags = {
+            "unlocked_companions": ["npc_silas", "npc_vael"],
+            "companion_arcs": {
+                "npc_vael": {"progress": 10, "trust": 10, "stage": "intro"},
+            },
+        }
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        with mock.patch("random.Random.randint", return_value=20):
+            outcome = service.submit_social_approach_intent(character.id, "innkeeper_mara", "Friendly")
+
+        self.assertTrue(outcome.success)
+        saved = character_repo.get(character.id)
+        self.assertIsNotNone(saved)
+        arc = dict(saved.flags.get("companion_arcs", {})).get("npc_vael", {})
+        self.assertGreater(int(dict(arc).get("progress", 0) or 0), 10)
+        self.assertTrue(any("bond" in line.lower() for line in outcome.messages))
+
+    def test_companion_leads_intent_includes_arc_progress_section(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=38)
+        character = Character(id=76, name="Ari", location_id=1)
+        character.flags = {
+            "unlocked_companions": ["npc_silas", "npc_vael"],
+            "companion_arcs": {
+                "npc_vael": {"progress": 22, "trust": 11, "stage": "warming"},
+            },
+        }
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        lines = service.get_companion_leads_intent(character.id)
+        joined = "\n".join(lines)
+        self.assertIn("Arc Progress:", joined)
+        self.assertIn("Vael: Arc 22/100", joined)
+
+    def test_companion_arc_choice_available_when_bonded_and_unresolved(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=39)
+        character = Character(id=77, name="Ari", location_id=1)
+        character.flags = {
+            "unlocked_companions": ["npc_silas", "npc_vael"],
+            "companion_arcs": {
+                "npc_vael": {"progress": 100, "trust": 32, "stage": "bonded"},
+            },
+        }
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        choices = service.get_companion_arc_choices_intent(character.id)
+
+        self.assertTrue(any(companion_id == "npc_vael" for companion_id, _name in choices))
+
+    def test_companion_arc_choice_locks_in_and_blocks_repeat(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=40)
+        character = Character(id=78, name="Ari", location_id=1)
+        character.flags = {
+            "unlocked_companions": ["npc_silas", "npc_vael"],
+            "companion_arcs": {
+                "npc_vael": {"progress": 100, "trust": 30, "stage": "bonded"},
+            },
+        }
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        first = service.submit_companion_arc_choice_intent(character.id, "npc_vael", "oath")
+        second = service.submit_companion_arc_choice_intent(character.id, "npc_vael", "distance")
+
+        self.assertTrue(any("locked" in line.lower() for line in first.messages))
+        self.assertTrue(any("no unresolved" in line.lower() for line in second.messages))
+        saved = character_repo.get(character.id)
+        self.assertIsNotNone(saved)
+        outcomes = dict(saved.flags.get("companion_arc_outcomes", {}))
+        self.assertEqual("oath", outcomes.get("npc_vael"))
+
+    def test_game_loop_view_includes_time_and_weather_labels(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=41)
+        world = world_repo.load_default()
+        world.current_turn = 31
+        world.threat_level = 2
+        world_repo.save(world)
+
+        character = Character(id=79, name="Ari", location_id=1)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        view = service.get_game_loop_view(character.id)
+
+        self.assertTrue(str(view.time_label).startswith("Day "))
+        self.assertTrue(bool(str(view.weather_label).strip()))
+
+    def test_camp_activity_requires_rations(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=42)
+        character = Character(id=80, name="Ari", location_id=1, hp_current=7, hp_max=20)
+        character.inventory = []
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Old Road", biome="forest")}),
+            world_repo=world_repo,
+        )
+
+        result = service.submit_camp_activity_intent(character.id, "watch")
+
+        self.assertTrue(any("rations" in line.lower() for line in result.messages))
+
+    def test_camp_activity_consumes_rations_and_heals(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=43)
+        character = Character(id=81, name="Ari", location_id=1, hp_current=6, hp_max=20)
+        character.inventory = ["Sturdy Rations"]
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Deep Wild", biome="forest")}),
+            world_repo=world_repo,
+        )
+
+        result = service.submit_camp_activity_intent(character.id, "watch")
+
+        saved = character_repo.get(character.id)
+        self.assertIsNotNone(saved)
+        self.assertNotIn("Sturdy Rations", list(saved.inventory))
+        self.assertGreaterEqual(int(saved.hp_current), 6)
+        self.assertTrue(any("campfire" in line.lower() for line in result.messages))
+
+    def test_shop_after_hours_label_applies_at_night(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=44)
+        world = world_repo.load_default()
+        world.current_turn = 22
+        world_repo.save(world)
+
+        character = Character(id=82, name="Ari", location_id=1, money=100)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        shop = service.get_shop_view_intent(character.id)
+
+        self.assertIn("after-hours", str(shop.price_modifier_label).lower())
+
+    def test_short_rest_recovers_less_than_long_rest(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=47)
+        short_character = Character(id=86, name="Ari", location_id=1, hp_current=4, hp_max=20)
+        short_character.spell_slots_max = 3
+        short_character.spell_slots_current = 0
+        long_character = Character(id=87, name="Ari", location_id=1, hp_current=4, hp_max=20)
+        long_character.spell_slots_max = 3
+        long_character.spell_slots_current = 0
+
+        short_repo = InMemoryCharacterRepository({short_character.id: short_character})
+        long_repo = InMemoryCharacterRepository({long_character.id: long_character})
+
+        short_service = self._build_service(
+            character_repo=short_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+        long_service = self._build_service(
+            character_repo=long_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=InMemoryWorldRepository(seed=47),
+        )
+
+        short_service.short_rest_intent(short_character.id)
+        long_service.long_rest_intent(long_character.id)
+
+        saved_short = short_repo.get(short_character.id)
+        saved_long = long_repo.get(long_character.id)
+        self.assertIsNotNone(saved_short)
+        self.assertIsNotNone(saved_long)
+        self.assertLess(int(saved_short.hp_current), int(saved_long.hp_current))
+        self.assertLess(int(saved_short.spell_slots_current), int(saved_long.spell_slots_current))
+
+    def test_codex_bestiary_tier_progresses_unknown_to_known(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=48)
+        character = Character(id=88, name="Ari", location_id=1, xp=0, money=0)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        monster = Entity(id=89, name="Grave Hound", level=3, faction_id="undead", armour_class=13, hp_max=18)
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([monster]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Crypt")}),
+            world_repo=world_repo,
+        )
+
+        service.apply_encounter_reward_intent(character, monster)
+        lines_after_first = service.get_codex_entries_intent(character.id)
+        service.apply_encounter_reward_intent(character, monster)
+        service.apply_encounter_reward_intent(character, monster)
+        lines_after_third = service.get_codex_entries_intent(character.id)
+
+        self.assertTrue(any("Unknown" in line and "Grave Hound" in line for line in lines_after_first))
+        self.assertTrue(any("Known" in line and "Grave Hound" in line for line in lines_after_third))
+
+    def test_encounter_reward_updates_bestiary_codex_entry(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=45)
+        character = Character(id=83, name="Ari", location_id=1, xp=0, money=0)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        monster = Entity(id=84, name="Bog Wretch", level=2, faction_id="wild")
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([monster]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Mire")}),
+            world_repo=world_repo,
+        )
+
+        service.apply_encounter_reward_intent(character, monster)
+        service.apply_encounter_reward_intent(character, monster)
+
+        saved = character_repo.get(character.id)
+        self.assertIsNotNone(saved)
+        codex = dict(saved.flags.get("codex_entries", {}))
+        entry = dict(codex.get("bestiary:bog_wretch", {}))
+        self.assertEqual("Bestiary", str(entry.get("category", "")))
+        self.assertGreaterEqual(int(entry.get("discoveries", 0) or 0), 2)
+
+    def test_investigate_wilderness_action_adds_lore_codex_entry(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=46)
+        character = Character(id=85, name="Ari", location_id=1)
+        character.attributes["intelligence"] = 18
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Ruins", biome="forest", factions=["wardens"])}),
+            world_repo=world_repo,
+        )
+
+        with mock.patch("random.Random.randint", return_value=20):
+            service.wilderness_action_intent(character.id, "investigate")
+
+        saved = character_repo.get(character.id)
+        self.assertIsNotNone(saved)
+        codex = dict(saved.flags.get("codex_entries", {}))
+        self.assertTrue(any(str(key).startswith("lore:investigate:") for key in codex.keys()))
+        lore_entry = next((dict(value) for key, value in codex.items() if str(key).startswith("lore:investigate:")), {})
+        self.assertIn("forest", str(lore_entry.get("body", "")).lower())
+        self.assertIn("wardens", str(lore_entry.get("body", "")).lower())
+
+    def test_encounter_intro_codex_hint_progression_unknown_observed_known(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=52)
+        character = Character(id=90, name="Ari", location_id=1, xp=0, money=0)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        monster = Entity(id=91, name="Bog Wretch", level=2, faction_id="wild", armour_class=12)
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([monster]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Mire")}),
+            world_repo=world_repo,
+        )
+
+        first_intro = service.encounter_intro_intent(monster, character_id=character.id)
+        self.assertIn("Unknown", first_intro)
+
+        service.apply_encounter_reward_intent(character, monster)
+        second_intro = service.encounter_intro_intent(monster, character_id=character.id)
+        self.assertIn("Unknown", second_intro)
+
+        service.apply_encounter_reward_intent(character, monster)
+        third_intro = service.encounter_intro_intent(monster, character_id=character.id)
+        self.assertIn("Observed", third_intro)
+
+        service.apply_encounter_reward_intent(character, monster)
+        fourth_intro = service.encounter_intro_intent(monster, character_id=character.id)
+        self.assertIn("Known", fourth_intro)
 
 
 if __name__ == "__main__":

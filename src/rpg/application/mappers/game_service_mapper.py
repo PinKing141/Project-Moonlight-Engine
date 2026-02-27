@@ -53,6 +53,10 @@ def to_town_view(
     district_tag: str,
     landmark_tag: str,
     active_prep_summary: str,
+    pressure_summary: str = "",
+    pressure_lines: Sequence[str] = (),
+    time_label: str = "",
+    weather_label: str = "",
 ) -> TownView:
     return TownView(
         day=day,
@@ -63,6 +67,10 @@ def to_town_view(
         district_tag=district_tag,
         landmark_tag=landmark_tag,
         active_prep_summary=active_prep_summary,
+        pressure_summary=pressure_summary,
+        pressure_lines=list(pressure_lines),
+        time_label=time_label,
+        weather_label=weather_label,
     )
 
 

@@ -38,6 +38,8 @@ class GameLoopView:
     hp_max: int
     world_turn: int | None
     threat_level: int | None
+    time_label: str = ""
+    weather_label: str = ""
 
 
 @dataclass
@@ -53,6 +55,8 @@ class CharacterSheetView:
     xp_to_next_level: int
     hp_current: int
     hp_max: int
+    pressure_summary: str = ""
+    pressure_lines: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -190,6 +194,10 @@ class TownView:
     district_tag: str = ""
     landmark_tag: str = ""
     active_prep_summary: str = ""
+    pressure_summary: str = ""
+    pressure_lines: List[str] = field(default_factory=list)
+    time_label: str = ""
+    weather_label: str = ""
 
 
 @dataclass

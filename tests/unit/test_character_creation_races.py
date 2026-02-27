@@ -181,6 +181,51 @@ class CharacterCreationRacesTests(unittest.TestCase):
         self.assertTrue(client.closed)
         self.assertEqual([], client.calls)
 
+    def test_default_races_include_half_elf_and_orc(self) -> None:
+        service = CharacterCreationService(
+            self.char_repo, self.class_repo, self.location_repo, open5e_client=None
+        )
+
+        names = {race.name for race in service.list_races()}
+        self.assertIn("Half-Elf", names)
+        self.assertIn("Orc", names)
+
+    def test_default_races_include_non_playable_entries(self) -> None:
+        service = CharacterCreationService(
+            self.char_repo, self.class_repo, self.location_repo, open5e_client=None
+        )
+
+        all_races = {race.name: race for race in service.list_races()}
+        self.assertIn("Goblin", all_races)
+        self.assertIn("Gnome", all_races)
+        self.assertFalse(bool(all_races["Goblin"].playable))
+        self.assertFalse(bool(all_races["Gnome"].playable))
+
+        playable_names = {race.name for race in service.list_playable_races()}
+        self.assertNotIn("Goblin", playable_names)
+        self.assertNotIn("Gnome", playable_names)
+
+    def test_create_character_rejects_non_playable_race(self) -> None:
+        class_repo = _FakeClassRepo(
+            [
+                CharacterClass(
+                    id=1,
+                    name="Fighter",
+                    slug="fighter",
+                    hit_die="d10",
+                    primary_ability="strength",
+                    base_attributes={"STR": 15, "CON": 14, "DEX": 12},
+                )
+            ]
+        )
+        service = CharacterCreationService(
+            _FakeCharacterRepo(), class_repo, _FakeLocationRepo(), open5e_client=None
+        )
+
+        goblin = next(race for race in service.list_races() if race.name == "Goblin")
+        with self.assertRaises(ValueError):
+            service.create_character(name="Grik", class_index=0, race=goblin)
+
     def test_provides_race_background_and_difficulty_option_labels(self) -> None:
         class_repo = _FakeClassRepo(
             [

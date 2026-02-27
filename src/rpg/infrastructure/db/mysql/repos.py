@@ -2437,7 +2437,20 @@ class MysqlLocationRepository(LocationRepository):
                            l.environmental_flags
                     FROM location l
                     INNER JOIN place p ON p.place_id = l.place_id
-                    ORDER BY l.location_id
+                    ORDER BY
+                        CASE
+                            WHEN LOWER(COALESCE(p.name, '')) LIKE '%town%'
+                              OR LOWER(COALESCE(p.name, '')) LIKE '%village%'
+                              OR LOWER(COALESCE(p.name, '')) LIKE '%city%'
+                              OR LOWER(COALESCE(p.name, '')) LIKE '%square%'
+                              OR LOWER(COALESCE(p.name, '')) LIKE '%settlement%'
+                              OR LOWER(COALESCE(l.biome_key, '')) LIKE '%town%'
+                              OR LOWER(COALESCE(l.biome_key, '')) LIKE '%village%'
+                              OR LOWER(COALESCE(l.biome_key, '')) LIKE '%city%'
+                            THEN 0
+                            ELSE 1
+                        END,
+                        l.location_id
                     LIMIT 1
                     """
                 )

@@ -92,6 +92,21 @@ class MenuControlTests(unittest.TestCase):
 
         self.assertEqual(1, idx)
 
+    def test_arrow_menu_ignores_enter_immediately_after_noise_input(self) -> None:
+        fake_msvcrt = mock.Mock()
+        fake_msvcrt.kbhit.return_value = False
+
+        with mock.patch.object(menu_controls, "msvcrt", fake_msvcrt), mock.patch.object(
+            menu_controls, "_CONSOLE", None
+        ), mock.patch.object(menu_controls, "Live", None), mock.patch.object(
+            menu_controls, "clear_screen", return_value=None
+        ), mock.patch.object(menu_controls, "read_key", side_effect=["MOUSE", "ENTER", "ENTER"]), mock.patch.object(
+            menu_controls.time, "monotonic", side_effect=[1.00, 1.05, 1.10, 1.40]
+        ):
+            idx = menu_controls.arrow_menu("Title", ["One", "Two"])
+
+        self.assertEqual(0, idx)
+
 
 if __name__ == "__main__":
     unittest.main()

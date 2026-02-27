@@ -1,0 +1,139 @@
+Id,Type,Icon,Name,Note,X,Y,Latitude,Longitude
+0,volcanoes,🌋,"Mount Clithe","Erupting volcano. Height: 13862 ft.",120.1,550.43,23.5,-37.55
+1,volcanoes,🌋,"Balton Volcano","Dormant volcano. Height: 14728 ft.",46.02,307.91,38.13,-42.02
+2,volcanoes,🌋,"Mount Burlingley","Dormant volcano. Height: 14292 ft.",143.54,213.92,43.8,-36.14
+3,hot-springs,♨️,"Eriusharon","A geothermal springs with naturally heated water that provide relaxation and medicinal benefits. Average temperature is 41°C.",1358.09,529.13,24.79,37.14
+4,hot-springs,♨️,"Yethva Hot Springs","A geothermal springs with naturally heated water that provide relaxation and medicinal benefits. Average temperature is 52°C.",1366.94,467.72,28.49,37.68
+5,water-sources,💧,"Vorara Spring of Life","This legendary water source is whispered about in ancient tales and believed to possess mystical properties. The spring emanates crystal-clear water, shimmering with an otherworldly iridescence that sparkles even in the dimmest light.",725.33,756.97,11.05,-1.04
+6,water-sources,💧,"Witnester Healing Spring","This legendary water source is whispered about in ancient tales and believed to possess mystical properties. The spring emanates crystal-clear water, shimmering with an otherworldly iridescence that sparkles even in the dimmest light.",113.32,5.7,56.36,-37.96
+7,mines,⛏️,"Sigkan — tin mining town","Sigkan is a mining town of 6131 people just nearby the tin mine.",1174.23,766.6,10.47,26.05
+8,mines,⛏️,"Thylath Se — iron mining town","Thylath Se is a mining town of 4372 people just nearby the iron mine.",1416.7,705.73,14.14,40.68
+9,mines,⛏️,"Gafran — salt mining town","Gafran is a mining town of 1879 people just nearby the salt mine.",1399.95,660.67,16.86,39.67
+10,mines,⛏️,"Hulaan — silver mining town","Hulaan is a mining town of 9629 people just nearby the silver mine.",1366.22,304.77,38.32,37.63
+11,mines,⛏️,"Nararnan — gold mining town","Nararnan is a mining town of 4288 people just nearby the gold mine.",1203.84,725.72,12.93,27.84
+12,mines,⛏️,"Kindiragz — tin mining town","Kindiragz is a mining town of 1363 people just nearby the tin mine.",172.91,609.83,19.92,-34.37
+13,mines,⛏️,"Hluinonesesi — lead mining town","Hluinonesesi is a mining town of 3604 people just nearby the lead mine.",1436.09,683.73,15.46,41.85
+14,mines,⛏️,"Hloiral — silver mining town","Hloiral is a mining town of 8466 people just nearby the silver mine.",1442.85,670.37,16.27,42.26
+15,mines,⛏️,"Rezad — silver mining town","Rezad is a mining town of 1551 people just nearby the silver mine.",59.43,759.76,10.88,-41.21
+16,mines,⛏️,"Filfalin — gold mining town","Filfalin is a mining town of 1911 people just nearby the gold mine.",1390.14,615.66,19.57,39.08
+17,mines,⛏️,"Manynlune — silver mining town","Manynlune is a mining town of 4473 people just nearby the silver mine.",1399.47,609.95,19.91,39.64
+18,mines,⛏️,"Nathella — salt mining town","Nathella is a mining town of 7310 people just nearby the salt mine.",1369.35,618.78,19.38,37.82
+19,mines,⛏️,"Bulanbogdlon — silver mining town","Bulanbogdlon is a mining town of 6329 people just nearby the silver mine.",1346.77,389.68,33.2,36.46
+20,mines,⛏️,"Britthgro — iron mining town","Britthgro is a mining town of 8874 people just nearby the iron mine.",253.86,308.73,38.08,-29.48
+21,bridges,🌉,"Mosstrand Bridge","A lengthy bridge spans over the Mosstrand Fork near Deerchpost.",252.87,282.96,39.63,-29.54
+22,inns,🍻,"The Grey Wolf","A big and famous roadside tavern. Delicious marinated duck with orange wine is served here.",667.59,318.62,37.48,-4.52
+23,inns,🍻,"The Major Inn","A big and famous roadside inn. Delicious jugged onions with blue spirits is served here.",409.5,238.1,42.34,-20.09
+24,inns,🍻,"The Brave Moose","A big and famous roadside tavern. Delicious fried beet with smoky gin is served here.",694.64,552.7,23.37,-2.89
+25,inns,🍻,"The Blue Beaver","A big and famous roadside tavern. Delicious syrupped beaver with sour cider is served here.",619.27,359.07,35.04,-7.44
+26,inns,🍻,"The Red Goose","A big and famous roadside tavern. Delicious stewed deer with blue beer is served here.",956.95,79.7,51.89,12.94
+27,inns,🍻,"The Happy Panther","A big and famous roadside inn. Delicious mashed broccoli with yellow tea is served here.",414.71,391.32,33.1,-19.78
+28,inns,🍻,"The Brown Hare","A big and famous roadside tavern. Delicious spit-roasted oranges with salty wine is served here.",936.42,644.87,17.81,11.7
+29,inns,🍻,"The Frozen Ape","A big and famous roadside tavern. Delicious pan-fried oranges with grey tequila is served here.",1282.68,401.79,32.47,32.59
+30,inns,🍻,"The Sunny Tavern","A big and famous roadside tavern. Delicious flame-broiled hare with bright sap is served here.",1394.63,680.37,15.67,39.35
+31,inns,🍻,"The Big Shark","A big and famous roadside tavern. Delicious corned beet with white kvass is served here.",516.29,342.82,36.02,-13.65
+32,inns,🍻,"The High Tavern","A big and famous roadside tavern. Delicious dried quail with hot liquor is served here.",574.29,673.92,16.06,-10.15
+33,lighthouses,🚨,"Toprarokuz Lighthouse","A lighthouse to serve as a beacon for ships in the open sea.",513.28,355.09,35.28,-13.83
+34,lighthouses,🚨,"Aydilkan Lighthouse","A lighthouse to serve as a beacon for ships in the open sea.",893.08,572.69,22.16,9.09
+35,battlefields,⚔️,"Hulag Uur Battlefield","A historical battle of the Ortarith Conquest. 
+Date: January 24, 1172 Bothambe Era.",1412.73,143.68,48.03,40.44
+36,battlefields,⚔️,"Grughakh Battlefield","A historical battle of the Rorest Expedition. 
+Date: March 1, 959 Bothambe Era.",292.1,9.76,56.11,-27.18
+37,battlefields,⚔️,"Car'thass Battlefield","A historical battle of the Sazyurtan Rebellion. 
+Date: August 8, 1173 Bothambe Era.",920.38,154.23,47.4,10.73
+38,battlefields,⚔️,"Khizruc Battlefield","A historical battle of the Yaryurt Conquest. 
+Date: December 24, 1170 Bothambe Era.",615.16,716.04,13.52,-7.68
+39,battlefields,⚔️,"Narar Battlefield","A historical battle of the Rauhelyth Invasion. 
+Date: November 19, 1149 Bothambe Era.",1144.06,692.23,14.95,24.23
+40,battlefields,⚔️,"Tulworil Battlefield","A historical battle of the Drardan Intervention. 
+Date: January 2, 1171 Bothambe Era.",555.6,656.14,17.13,-11.28
+41,battlefields,⚔️,"Querex Battlefield","A historical battle of the Vuyurt War. 
+Date: October 1, 1043 Bothambe Era.",1075.53,164.85,46.76,20.09
+42,battlefields,⚔️,"Oguz Battlefield","A historical battle of the Toza-Yaryurtian War. 
+Date: December 6, 1080 Bothambe Era.",558.88,317.75,37.54,-11.08
+43,dungeons,🗝️,"Dungeon","<div>Undiscovered dungeon. See <a href=""https://watabou.github.io/one-page-dungeon/?seed=5642600451513"" target=""_blank"">One page dungeon</a></div><iframe style=""pointer-events: none;"" src=""https://watabou.github.io/one-page-dungeon/?seed=5642600451513"" sandbox=""allow-scripts allow-same-origin""></iframe>",732.19,110.08,50.06,-0.62
+44,dungeons,🗝️,"Dungeon","<div>Undiscovered dungeon. See <a href=""https://watabou.github.io/one-page-dungeon/?seed=564260045441"" target=""_blank"">One page dungeon</a></div><iframe style=""pointer-events: none;"" src=""https://watabou.github.io/one-page-dungeon/?seed=564260045441"" sandbox=""allow-scripts allow-same-origin""></iframe>",202.4,36.14,54.52,-32.59
+45,dungeons,🗝️,"Dungeon","<div>Undiscovered dungeon. See <a href=""https://watabou.github.io/one-page-dungeon/?seed=5642600455983"" target=""_blank"">One page dungeon</a></div><iframe style=""pointer-events: none;"" src=""https://watabou.github.io/one-page-dungeon/?seed=5642600455983"" sandbox=""allow-scripts allow-same-origin""></iframe>",1402.57,495.26,26.83,39.83
+46,dungeons,🗝️,"Dungeon","<div>Undiscovered dungeon. See <a href=""https://watabou.github.io/one-page-dungeon/?seed=564260045668"" target=""_blank"">One page dungeon</a></div><iframe style=""pointer-events: none;"" src=""https://watabou.github.io/one-page-dungeon/?seed=564260045668"" sandbox=""allow-scripts allow-same-origin""></iframe>",1015.67,45.97,53.93,16.48
+47,dungeons,🗝️,"Dungeon","<div>Undiscovered dungeon. See <a href=""https://watabou.github.io/one-page-dungeon/?seed=5642600452053"" target=""_blank"">One page dungeon</a></div><iframe style=""pointer-events: none;"" src=""https://watabou.github.io/one-page-dungeon/?seed=5642600452053"" sandbox=""allow-scripts allow-same-origin""></iframe>",558.51,155.92,47.3,-11.1
+48,dungeons,🗝️,"Dungeon","<div>Undiscovered dungeon. See <a href=""https://watabou.github.io/one-page-dungeon/?seed=564260045501"" target=""_blank"">One page dungeon</a></div><iframe style=""pointer-events: none;"" src=""https://watabou.github.io/one-page-dungeon/?seed=564260045501"" sandbox=""allow-scripts allow-same-origin""></iframe>",845.83,40.96,54.23,6.23
+49,lake-monsters,🐉,"Kepesene Monster","Whispers say a relic monster of 7 ft long inhabits Kepesene Lake. Truth or lie, folks are afraid to fish in the lake.",511.21,312.87,37.83,-13.96
+50,lake-monsters,🐉,"Nurilfond Monster","Locals say a relic monster of 9 ft long inhabits Nurilfond Lake. Truth or lie, folks are afraid to fish in the lake.",452.22,507.93,26.07,-17.51
+51,lake-monsters,🐉,"Gotontseg Monster","Legends say a relic monster of 15 ft long inhabits Gotontseg Lake. Truth or lie, folks are afraid to fish in the lake.",1154.32,296.01,38.85,24.85
+52,hill-monsters,👹,"Rhera Giant","Locals speak of a hungry Giant who inhabits Rhera hills and harasses travelers in the area.",27.95,454.11,29.31,-43.11
+53,hill-monsters,👹,"Chegan Ogre","Rumors speak of a golden Ogre who inhabits Chegan hills and harasses travelers in the area.",678.18,111.79,49.96,-3.88
+54,hill-monsters,👹,"Roceanshime Vampire","Tipplers speak of a giant Vampire who inhabits Roceanshime hills and doesn't mind human flesh.",240.63,341.16,36.12,-30.28
+55,sacred-forests,🌳,"Ervan Forest","A forest sacred to local Witnesses of Elloragh.",1250.93,412.95,31.8,30.68
+56,sacred-forests,🌳,"Keathalin Forest","A forest sacred to local Witnesses of Elloragh.",1367.91,714.65,13.6,37.74
+57,sacred-forests,🌳,"Ghizziz Forest","A forest sacred to local Neverchism.",753.01,124.42,49.2,0.63
+58,sacred-pineries,🌲,"Bhirkiz Pinery","A pinery sacred to local Uruk (Orkish) Pantheon.",733.72,59.11,53.14,-0.53
+59,sacred-pineries,🌲,"Grirkrun Pinery","A pinery sacred to local Uruk (Orkish) Pantheon.",1037.97,70.53,52.45,17.83
+60,brigands,💰,"Erbeykut Crows","A gang of forest brigands.",564.8,335.38,36.47,-10.72
+61,brigands,💰,"Yalakar Dogs","A gang of forest bandits.",1039.3,211.8,43.93,17.91
+62,brigands,💰,"Yale Foxes","A gang of forest bandits.",787.9,236.9,42.41,2.74
+63,pirates,🏴‍☠️,"Pirates","Pirate ships have been spotted in these waters.",721.7,344.8,35.91,-1.26
+64,pirates,🏴‍☠️,"Pirates","Pirate ships have been spotted in these waters.",1461.24,109.36,50.1,43.37
+65,statues,🗿,"Toprakbe Effigy","An ancient effigy. It has an inscription, but no one can translate it:
+        <div style=""font-size: 1.8em; line-break: anywhere;"">ሐፈገነሰከኀየጸተወሀተሰየ ረተተ ነፀፀሀለ የገሰገመ ሰበፀለሀዘጸጠዘየአጰፐሀከጠተ ፀ</div>",619.02,365.72,34.64,-7.45
+66,statues,🗿,"Khathake Statue","An ancient statue. It has an inscription, but no one can translate it:
+        <div style=""font-size: 1.8em; line-break: anywhere;"">�𐠮���𐠙𐠁𐠠 ��� ��𐠅 ��𐠞���𐠐𐠸����� �</div>",810.4,638.79,18.18,4.1
+67,statues,🗿,"Kholeddus Monolith","An ancient monolith. It has an inscription, but no one can translate it:
+        <div style=""font-size: 1.8em; line-break: anywhere;"">ሀሠጰሰከዘሐሀ ፈፀሐመጸለሰሠፐ  የደጰዐ ጰፐጠፈፀ አመዘኀሠለደጠረጠአደሐ</div>",364.25,606.34,20.13,-22.82
+68,statues,🗿,"Motont Monolith","An ancient monolith. It has an inscription, but no one can translate it:
+        <div style=""font-size: 1.8em; line-break: anywhere;"">ፈሠ በለ ሠየቀረረረአነሠሠጸረወኀከቀነኀአሀመመኀመፀ  ሰፐሠጸኀየጸየሠነጠጸ ዘ ወ</div>",1265.14,80.43,51.85,31.53
+69,ruins,🏺,"Ruined Town","Ruins of an ancient town. Untold riches may lie within.",1370.45,387.24,33.35,37.89
+70,ruins,🏺,"Ruined Mausoleum","Ruins of an ancient mausoleum. Untold riches may lie within.",1030.2,597,20.7,17.36
+71,ruins,🏺,"Ruined Fortress","Ruins of an ancient fortress. Untold riches may lie within.",1043.61,145.32,47.94,18.17
+72,ruins,🏺,"Ruined Outpost","Ruins of an ancient outpost. Untold riches may lie within.",232.72,378.21,33.89,-30.76
+73,ruins,🏺,"Ruined Fortress","Ruins of an ancient fortress. Untold riches may lie within.",661.99,620.34,19.29,-4.86
+74,ruins,🏺,"Ruined Fortification","Ruins of an ancient fortification. Untold riches may lie within.",868.7,594.2,20.86,7.61
+75,libraries,📚,"Aibalger Archive","A vast collection of knowledge, including many rare and ancient tomes.",1237.51,459.2,29.01,29.87
+76,libraries,📚,"Adogroc Collection","A vast collection of knowledge, including many rare and ancient tomes.",345.01,57.31,53.24,-23.98
+77,circuses,🎪,"Travelling Unmissable Circus","Roll up, roll up, this unmissable circus is here for a limited time only.",1115.35,446.8,29.75,22.5
+78,circuses,🎪,"Travelling Fantastical Circus","Roll up, roll up, this fantastical circus is here for a limited time only.",490.26,562.43,22.78,-15.22
+79,circuses,🎪,"Travelling Breathtaking Circus","Roll up, roll up, this breathtaking circus is here for a limited time only.",661.75,329,36.86,-4.87
+80,jousts,🤺,"Pudrock Melee","Warriors from around the land gather for a melee of acumen in Pudrock, with fame, fortune and favour on offer to the victor.",293.2,262.38,40.88,-27.11
+81,fairs,🎠,"Thorngview Fair","A fair is being held in Thorngview, with all manner of local and foreign goods and services on offer.",326.28,183.18,45.65,-25.11
+82,canoes,🛶,"Minor Jetty","A small location along the Rourneecad Branch to launch boats from sits here, along with a weary looking owner, willing to sell passage along the river.",77.06,443.06,29.98,-40.15
+83,canoes,🛶,"Minor Jetty","A small location along the Yeli River to launch boats from sits here, along with a weary looking owner, willing to sell passage along the river.",743.4,161.59,46.95,0.05
+84,migration,🐗,"Mooses migration","A huge group of mooses are migrating, whether part of their annual routine, or something more extraordinary.",1411.91,272.85,40.24,40.39
+85,migration,🐗,"Badgers migration","A huge group of badgers are migrating, whether part of their annual routine, or something more extraordinary.",115.19,80.34,51.85,-37.85
+86,caves,🦇,"Arithsenolon Cave","The Arithsenolon Cave. Locals claim that it is the home of strange monsters.",1443.81,631.43,18.62,42.31
+87,caves,🦇,"Qhas'qos Sinkhole","The Qhas'qos Sinkhole. Locals claim that it is slowly filling with lava.",80.45,403.32,32.38,-39.95
+88,portals,🌀,"Monkh Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",1371.63,184.68,45.56,37.96
+89,portals,🌀,"Irewick Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",439.15,319.55,37.43,-18.3
+90,portals,🌀,"Dalantsalan Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",1461.12,148.24,47.76,43.36
+91,portals,🌀,"Orgun Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",1047.79,588.62,21.2,18.42
+92,portals,🌀,"Buyagh Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",240.98,134.29,48.6,-30.26
+93,portals,🌀,"Urebul Uul Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",1351.38,352.99,35.41,36.74
+94,portals,🌀,"Zragzel Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",476.39,127.93,48.98,-16.06
+95,portals,🌀,"Kepe Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",609.17,341.73,36.09,-8.04
+96,portals,🌀,"Dobaraok Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",961.92,205.21,44.32,13.24
+97,portals,🌀,"Malanjarmen Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",1244.07,404.11,32.33,30.26
+98,portals,🌀,"Naastor Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",1103.24,107.33,50.23,21.77
+99,portals,🌀,"Gagalddud Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",813.39,723.2,13.08,4.28
+100,portals,🌀,"Klearzan Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",208.83,293.1,39.02,-32.2
+101,portals,🌀,"Baydi Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",762.26,273.41,40.21,1.19
+102,portals,🌀,"Unzargarth Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",384.4,770.57,10.23,-21.61
+103,portals,🌀,"Yasiken Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",1071.19,230.95,42.77,19.83
+104,portals,🌀,"Oxlight Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",254.72,179.33,45.88,-29.43
+105,portals,🌀,"Stagport Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",306.08,260.88,40.97,-26.33
+106,portals,🌀,"Ereri Portal","An element of the magic portal system connecting major city. The portals were installed centuries ago, but still work fine.",651.95,240.97,42.17,-5.46
+107,rifts,🎆,"Cataclysmic Rift","A rumoured cataclysmic rift in this area is causing cracks in reality itself to form.",1316.34,14.36,55.83,34.62
+108,disturbed-burials,💀,"Disturbed Burial","A burial site has been disturbed in this area, causing the dead to rise and attack the living.",1321.98,490.71,27.11,34.96
+109,disturbed-burials,💀,"Disturbed Burial","A burial site has been disturbed in this area, causing the dead to rise and attack the living.",872.11,234.01,42.59,7.82
+110,disturbed-burials,💀,"Disturbed Burial","A burial site has been disturbed in this area, causing the dead to rise and attack the living.",610.84,642,17.98,-7.94
+111,necropolises,🪦,"Khirnizoh Graveyard","A labyrinthine necropolis where each step echoes with haunting murmurs. The walls are adorned with ancient runes, and restless spirits guide or hinder those who dare to delve into its depths.",140.82,484.6,27.47,-36.3
+112,necropolises,🪦,"Zhever Cemetery","A foreboding necropolis shrouded in perpetual darkness, where eerie whispers echo through the winding corridors and spectral guardians stand watch over the tombs of long-forgotten souls.",86.72,615.42,19.58,-39.57
+113,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/2114"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",1213.41,151.31,47.57,28.41
+114,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/8373"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",470.12,690.6,15.05,-16.43
+115,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/2257"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",1269.53,165.84,46.7,31.8
+116,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/2224"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",918.84,163.5,46.84,10.64
+117,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/1075"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",726.22,83.87,51.64,-0.98
+118,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/6621"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",1337.24,548.15,23.64,35.88
+119,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/6856"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",789.15,577.02,21.9,2.81
+120,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/3904"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",714.68,298.26,38.71,-1.68
+121,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/2698"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",1456.58,196.92,44.82,43.09
+122,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/9217"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",640.2,759.03,10.92,-6.17
+123,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/4651"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",373.23,357.72,35.13,-22.28
+124,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/2926"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",748.75,224.5,43.16,0.38
+125,encounters,🧙,"Random encounter","<div>You have encountered a character.</div><iframe src=""https://deorum.vercel.app/encounter/540"" width=""375"" height=""600"" sandbox=""allow-scripts allow-same-origin allow-popups""></iframe>",1262.3,37.31,54.45,31.36

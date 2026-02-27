@@ -32,6 +32,20 @@ class DnDCorpusNameGenerator:
         "orc": "halforc",
         "tiefling": "tiefling",
         "dragonborn": "dragonborn",
+        "darkelf": "darkelf",
+        "drow": "darkelf",
+        "aarakocra": "aarakocra",
+        "genasi": "genasi",
+        "gnome": "gnome",
+        "gnomes": "gnome",
+        "goblin": "goblin",
+        "goblins": "goblin",
+        "hobgoblin": "hobgoblin",
+        "kobold": "kobold",
+        "bugbear": "bugbear",
+        "giant": "giant",
+        "giants": "giant",
+        "goliath": "goliath",
     }
     _FALLBACK_NAMES = {
         ("human", "male"): ["Alden", "Borin", "Cedric", "Darian", "Edric", "Fenn"],
@@ -48,11 +62,52 @@ class DnDCorpusNameGenerator:
         ("tiefling", "female"): ["Akta", "Bryseis", "Criella", "Kallista", "Nemeia", "Orianna"],
         ("dragonborn", "male"): ["Arjhan", "Balasar", "Ghesh", "Kriv", "Medrash", "Nadarr"],
         ("dragonborn", "female"): ["Akra", "Biri", "Daar", "Harann", "Kava", "Sora"],
+        ("darkelf", "male"): ["Drizzen", "Velkyn", "Ryld", "Zaknafein", "Pharaun", "Nalfein"],
+        ("darkelf", "female"): ["Viconia", "Zesstra", "Vierna", "Quenthel", "Malice", "Sabrae"],
+        ("aarakocra", "male"): ["Kleeck", "Tarak", "Skrit", "Aruuk", "Qiri", "Vorr"],
+        ("aarakocra", "female"): ["Sree", "Ariik", "Tila", "Qeera", "Veesh", "Karaak"],
+        ("genasi", "male"): ["Ashar", "Nazer", "Vaylen", "Zahir", "Khem", "Ruvan"],
+        ("genasi", "female"): ["Nissa", "Saphra", "Vesha", "Kalyra", "Nym", "Ariya"],
+        ("gnome", "male"): ["Boddynock", "Dimble", "Fonkin", "Frug", "Nackle", "Wrenn"],
+        ("gnome", "female"): ["Bimpnottin", "Ellyjobell", "Loopmottin", "Nissa", "Roywyn", "Tana"],
+        ("goblin", "male"): ["Snik", "Grub", "Rikkit", "Mog", "Vrak", "Zug"],
+        ("goblin", "female"): ["Snika", "Grikka", "Miva", "Rakka", "Zaza", "Vri"],
+        ("hobgoblin", "male"): ["Dargun", "Kragh", "Mokran", "Hruk", "Vharr", "Zorak"],
+        ("hobgoblin", "female"): ["Dhara", "Kavra", "Morga", "Vrissa", "Tazra", "Hara"],
+        ("kobold", "male"): ["Skreek", "Ix", "Tark", "Rik", "Ziz", "Kraz"],
+        ("kobold", "female"): ["Siss", "Vixa", "Kiri", "Zarra", "Tis", "Riksa"],
+        ("bugbear", "male"): ["Brug", "Harg", "Murg", "Thokk", "Vrug", "Krann"],
+        ("bugbear", "female"): ["Brakka", "Harra", "Morga", "Thora", "Vrukka", "Karna"],
+        ("giant", "male"): ["Hrod", "Skarn", "Bromm", "Targ", "Ulfar", "Drogan"],
+        ("giant", "female"): ["Hilda", "Skarra", "Brynja", "Torga", "Ulrika", "Droga"],
+        ("goliath", "male"): ["Aukan", "Eglath", "Gae-Al", "Keothi", "Lo-Kag", "Manneo"],
+        ("goliath", "female"): ["Gathakanathi", "Kuori", "Lo-Mota", "Maveith", "Nalla", "Orilo"],
     }
-    _ENTITY_KIND_TO_RACE = {
-        "humanoid": "human",
-        "person": "human",
-        "npc": "human",
+    _ENTITY_KIND_TO_RACES = {
+        "humanoid": [
+            "human",
+            "elf",
+            "dwarf",
+            "halfling",
+            "halforc",
+            "tiefling",
+            "dragonborn",
+            "darkelf",
+            "gnome",
+            "goblin",
+            "hobgoblin",
+            "kobold",
+            "bugbear",
+            "goliath",
+            "genasi",
+            "aarakocra",
+        ],
+        "person": ["human", "elf", "dwarf", "halfling", "gnome", "tiefling", "genasi"],
+        "npc": ["human", "elf", "dwarf", "halfling", "gnome", "tiefling", "genasi"],
+        "goblinoid": ["goblin", "hobgoblin", "bugbear"],
+        "giant": ["giant", "goliath"],
+        "dragon": ["dragonborn"],
+        "fiend": ["tiefling"],
     }
 
     def __init__(self, data_dir: Path | None = None) -> None:
@@ -162,7 +217,23 @@ class DnDCorpusNameGenerator:
         level: int | None = None,
     ) -> str:
         normalized_kind = self._normalize_token(kind)
-        race = self._ENTITY_KIND_TO_RACE.get(normalized_kind, "")
+        default_name_token = self._normalize_token(default_name)
+        race = self._normalize_race(default_name) if default_name_token in self._RACE_ALIASES else ""
+        if not race:
+            races = list(self._ENTITY_KIND_TO_RACES.get(normalized_kind, []))
+            if races:
+                seed = derive_seed(
+                    namespace="name.entity.race",
+                    context={
+                        "kind": normalized_kind,
+                        "faction": self._normalize_token(faction_id),
+                        "entity_id": entity_id,
+                        "level": level,
+                        "default_name": self._normalize_token(default_name),
+                    },
+                )
+                rng = random.Random(seed)
+                race = races[rng.randrange(len(races))]
         if not race:
             return default_name
 

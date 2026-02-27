@@ -18,7 +18,7 @@ from rpg.infrastructure.db.inmemory.repos import (
 
 
 class TravelFlavourInjectionTests(unittest.TestCase):
-    def test_travel_preview_includes_culture_hint_when_available(self) -> None:
+    def test_travel_preview_stays_compact_even_with_culture_metadata(self) -> None:
         event_bus = EventBus()
         world_repo = InMemoryWorldRepository(seed=11)
         character = Character(id=51, name="Iris", location_id=1)
@@ -52,7 +52,9 @@ class TravelFlavourInjectionTests(unittest.TestCase):
 
         destinations = service.get_travel_destinations_intent(character.id)
         self.assertTrue(destinations)
-        self.assertIn("Culture Lothian (Dark Elfish)", destinations[0].preview)
+        self.assertNotIn("Culture", destinations[0].preview)
+        self.assertNotIn("Lothian", destinations[0].preview)
+        self.assertIn("Lv", destinations[0].preview)
 
 
 if __name__ == "__main__":

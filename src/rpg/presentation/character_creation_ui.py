@@ -196,7 +196,7 @@ def _show_class_detail(creation_service, chosen_class) -> bool:
 
 
 def _choose_race(creation_service):
-    races = creation_service.list_races()
+    races = creation_service.list_playable_races()
     while True:
         options = creation_service.race_option_labels() + ["Help: Creation Reference Library"]
         idx = arrow_menu("Choose Your Race", options, footer_hint=_CREATION_HELP_HINT)
@@ -418,7 +418,7 @@ def run_character_creation(game_service):
         if not confirmed_name:
             _show_cancelled()
             return None
-        name = creation_service.sanitize_name(raw_name)
+        name = raw_name
 
         # Race selection
         while True:
