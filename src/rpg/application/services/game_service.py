@@ -118,6 +118,10 @@ class GameService:
     _FACTION_HEAT_REST_DECAY_AMOUNT = 2
     _FACTION_HEAT_RELIEF_COST = 6
     _FACTION_HEAT_RELIEF_AMOUNT = 3
+    _DIPLOMACY_RELATION_MIN = -100
+    _DIPLOMACY_RELATION_MAX = 100
+    _DIPLOMACY_WAR_THRESHOLD = -45
+    _DIPLOMACY_ALLIANCE_THRESHOLD = 45
     _COMPANION_ARC_MAX = 100
     _COMPANION_ARC_HISTORY_MAX = 30
     _NPC_COMPANION_MAP = {
@@ -129,6 +133,290 @@ class GameService:
         "broker_silas": "thieves_guild",
         "innkeeper_mara": "wardens",
     }
+    _PROCEDURAL_TOWN_NPC_VERSION = 1
+    _PROCEDURAL_TOWN_NPC_TEMPLATES = (
+        {
+            "template_id": "blacksmith",
+            "role": "Blacksmith",
+            "temperament": "gruff",
+            "openness": 4,
+            "aggression": 5,
+            "faction_affinity": "the_crown",
+            "dialogue_profile": "template:commerce",
+            "routine": {"day": "Forge", "night": "Anvil Hall", "midnight": "Forge Office", "closed": False},
+        },
+        {
+            "template_id": "armourer",
+            "role": "Armourer",
+            "temperament": "stern",
+            "openness": 4,
+            "aggression": 5,
+            "faction_affinity": "the_crown",
+            "dialogue_profile": "template:commerce",
+            "routine": {"day": "Armoury", "night": "Armoury Workshop", "midnight": "Armoury Office", "closed": False},
+        },
+        {
+            "template_id": "fletcher",
+            "role": "Fletcher",
+            "temperament": "focused",
+            "openness": 5,
+            "aggression": 3,
+            "faction_affinity": "wardens",
+            "dialogue_profile": "template:commerce",
+            "routine": {"day": "Fletcher Stall", "night": "Workshop Loft", "midnight": "Workshop Loft", "closed": False},
+        },
+        {
+            "template_id": "shopkeep",
+            "role": "Shopkeep",
+            "temperament": "measured",
+            "openness": 6,
+            "aggression": 3,
+            "faction_affinity": "thieves_guild",
+            "dialogue_profile": "template:commerce",
+            "routine": {"day": "General Store", "night": "Stockroom", "midnight": "Private Quarters", "closed": False},
+        },
+        {
+            "template_id": "travelling_merchant",
+            "role": "Travelling Merchant",
+            "temperament": "opportunistic",
+            "openness": 6,
+            "aggression": 3,
+            "faction_affinity": "thieves_guild",
+            "dialogue_profile": "template:commerce",
+            "routine": {"day": "Caravan Pitch", "night": "Caravan Camp", "midnight": "Caravan Camp", "closed": False},
+        },
+        {
+            "template_id": "jeweller",
+            "role": "Jeweller",
+            "temperament": "careful",
+            "openness": 5,
+            "aggression": 2,
+            "faction_affinity": "the_crown",
+            "dialogue_profile": "template:commerce",
+            "routine": {"day": "Gem House", "night": "Gem House", "midnight": "Vault Office", "closed": True},
+        },
+        {
+            "template_id": "apothecary",
+            "role": "Apothecary",
+            "temperament": "calm",
+            "openness": 6,
+            "aggression": 2,
+            "faction_affinity": "wardens",
+            "dialogue_profile": "template:arcane",
+            "routine": {"day": "Apothecary", "night": "Herbal Workshop", "midnight": "Clinic Office", "closed": False},
+        },
+        {
+            "template_id": "guard_captain",
+            "role": "Guard Captain",
+            "temperament": "disciplined",
+            "openness": 4,
+            "aggression": 6,
+            "faction_affinity": "the_crown",
+            "dialogue_profile": "template:authority",
+            "routine": {"day": "Watch Post", "night": "Barracks Gate", "midnight": "Watch Barracks", "closed": True},
+        },
+        {
+            "template_id": "magistrate",
+            "role": "Magistrate",
+            "temperament": "formal",
+            "openness": 5,
+            "aggression": 4,
+            "faction_affinity": "the_crown",
+            "dialogue_profile": "template:authority",
+            "routine": {"day": "Town Hall", "night": "Council Chamber", "midnight": "Town Hall Office", "closed": True},
+        },
+        {
+            "template_id": "town_crier",
+            "role": "Town Crier",
+            "temperament": "booming",
+            "openness": 7,
+            "aggression": 2,
+            "faction_affinity": "the_crown",
+            "dialogue_profile": "template:authority",
+            "routine": {"day": "Market Steps", "night": "Bell Tower Arch", "midnight": "Bell Tower Arch", "closed": False},
+        },
+        {
+            "template_id": "faction_emissary",
+            "role": "Faction Emissary",
+            "temperament": "calculating",
+            "openness": 5,
+            "aggression": 4,
+            "faction_affinity": "thieves_guild",
+            "dialogue_profile": "template:authority",
+            "routine": {"day": "Guild Annex", "night": "Guild Annex", "midnight": "Guild Office", "closed": True},
+        },
+        {
+            "template_id": "fence",
+            "role": "Fence",
+            "temperament": "shifty",
+            "openness": 4,
+            "aggression": 4,
+            "faction_affinity": "thieves_guild",
+            "dialogue_profile": "template:underworld",
+            "routine": {"day": "Back Alley Stall", "night": "Shadow Courtyard", "midnight": "Shadow Courtyard", "closed": False},
+        },
+        {
+            "template_id": "beggar",
+            "role": "Beggar",
+            "temperament": "wary",
+            "openness": 6,
+            "aggression": 1,
+            "faction_affinity": "wardens",
+            "dialogue_profile": "template:underworld",
+            "routine": {"day": "Market Square", "night": "Side Alley", "midnight": "Bridge Arch", "closed": False},
+        },
+        {
+            "template_id": "smuggler",
+            "role": "Smuggler",
+            "temperament": "hushed",
+            "openness": 4,
+            "aggression": 4,
+            "faction_affinity": "thieves_guild",
+            "dialogue_profile": "template:underworld",
+            "routine": {"day": "River Steps", "night": "Dockside Crate Yard", "midnight": "Dockside Crate Yard", "closed": False},
+        },
+        {
+            "template_id": "tavern_bouncer",
+            "role": "Tavern Bouncer",
+            "temperament": "hard",
+            "openness": 3,
+            "aggression": 6,
+            "faction_affinity": "wardens",
+            "dialogue_profile": "template:underworld",
+            "routine": {"day": "Tavern Door", "night": "Tavern Door", "midnight": "Tavern Door", "closed": False},
+        },
+        {
+            "template_id": "high_priest",
+            "role": "High Priest",
+            "temperament": "serene",
+            "openness": 7,
+            "aggression": 1,
+            "faction_affinity": "the_crown",
+            "dialogue_profile": "template:arcane",
+            "routine": {"day": "Temple Nave", "night": "Temple Cloister", "midnight": "Temple Office", "closed": False},
+        },
+        {
+            "template_id": "tower_scholar",
+            "role": "Tower Scholar",
+            "temperament": "distant",
+            "openness": 6,
+            "aggression": 2,
+            "faction_affinity": "tower_obsidian",
+            "dialogue_profile": "template:arcane",
+            "routine": {"day": "Arcane Archive", "night": "Archive Wing", "midnight": "Scholar Cell", "closed": True},
+        },
+        {
+            "template_id": "oracle",
+            "role": "Oracle",
+            "temperament": "cryptic",
+            "openness": 6,
+            "aggression": 1,
+            "faction_affinity": "tower_obsidian",
+            "dialogue_profile": "template:arcane",
+            "routine": {"day": "Seer Shrine", "night": "Seer Shrine", "midnight": "Seer Shrine", "closed": False},
+        },
+        {
+            "template_id": "cultist",
+            "role": "Cultist",
+            "temperament": "zealous",
+            "openness": 3,
+            "aggression": 5,
+            "faction_affinity": "wild",
+            "dialogue_profile": "template:arcane",
+            "routine": {"day": "Pilgrim Queue", "night": "Catacomb Entrance", "midnight": "Catacomb Entrance", "closed": False},
+        },
+        {
+            "template_id": "scribe",
+            "role": "Scribe",
+            "temperament": "curious",
+            "openness": 7,
+            "aggression": 2,
+            "faction_affinity": "the_crown",
+            "dialogue_profile": "template:social",
+            "routine": {"day": "Registry Desk", "night": "Archive Hall", "midnight": "Records Wing", "closed": True},
+        },
+        {
+            "template_id": "stablemaster",
+            "role": "Stablemaster",
+            "temperament": "plainspoken",
+            "openness": 5,
+            "aggression": 4,
+            "faction_affinity": "wardens",
+            "dialogue_profile": "template:social",
+            "routine": {"day": "Town Stables", "night": "Stable Yard", "midnight": "Tack Room", "closed": False},
+        },
+        {
+            "template_id": "barkeep",
+            "role": "Barkeep",
+            "temperament": "warm",
+            "openness": 7,
+            "aggression": 2,
+            "faction_affinity": "wardens",
+            "dialogue_profile": "template:social",
+            "routine": {"day": "Common Room", "night": "Taproom", "midnight": "Back Counter", "closed": False},
+        },
+        {
+            "template_id": "minstrel",
+            "role": "Minstrel",
+            "temperament": "charming",
+            "openness": 7,
+            "aggression": 1,
+            "faction_affinity": "thieves_guild",
+            "dialogue_profile": "template:social",
+            "routine": {"day": "Tavern Stage", "night": "Tavern Stage", "midnight": "Tavern Stage", "closed": False},
+        },
+        {
+            "template_id": "town_drunk",
+            "role": "Town Drunk",
+            "temperament": "erratic",
+            "openness": 6,
+            "aggression": 1,
+            "faction_affinity": "wardens",
+            "dialogue_profile": "template:social",
+            "routine": {"day": "Alley Bench", "night": "Tavern Step", "midnight": "Street Corner", "closed": False},
+        },
+    )
+    _PROCEDURAL_NAME_PREFIXES = (
+        "Al",
+        "Ber",
+        "Cor",
+        "Dra",
+        "El",
+        "Fen",
+        "Gar",
+        "Hal",
+        "Ira",
+        "Jor",
+        "Kel",
+        "Lor",
+        "Mar",
+        "Nor",
+        "Or",
+        "Per",
+        "Quin",
+        "Rin",
+        "Sel",
+        "Tor",
+        "Ul",
+        "Val",
+        "Wen",
+        "Yor",
+        "Zel",
+    )
+    _PROCEDURAL_NAME_SUFFIXES = (
+        "an",
+        "a",
+        "en",
+        "ia",
+        "or",
+        "yn",
+        "is",
+        "el",
+        "eth",
+        "in",
+        "or",
+        "ra",
+    )
     _FACTION_ENCOUNTER_PACKAGES = {
         "wardens": {"hazard": "Checkpoint Barricade", "money_bonus": 0, "bonus_item": "Whetstone"},
         "wild": {"hazard": "Predator Trails", "money_bonus": 0, "bonus_item": "Antitoxin"},
@@ -164,6 +452,11 @@ class GameService:
         (97, "Storm"),
         (100, "Blizzard"),
     )
+    _TRAVEL_PACE_LABELS = {
+        "cautious": "cautious",
+        "steady": "steady",
+        "hurried": "hurried",
+    }
     _CATACLYSM_PHASES = ("whispers", "grip_tightens", "map_shrinks", "ruin")
     _CATACLYSM_KINDS = ("demon_king", "tyrant", "plague")
     _CATACLYSM_PHASE_ENCOUNTER_LEVEL_DELTA = {
@@ -816,12 +1109,17 @@ class GameService:
         return "Night"
 
     @classmethod
-    def _weather_label_for_world(cls, world: World | None) -> str:
+    def _weather_label_for_world(cls, world: World | None, biome_name: str | None = None) -> str:
         if world is None:
             return "Unknown"
         turn = max(0, int(getattr(world, "current_turn", 0) or 0))
         weather_slot = turn // 6
         threat = max(0, int(getattr(world, "threat_level", 0) or 0))
+        biome_key = str(biome_name or "").strip().lower()
+        severity_centered = cls._biome_severity_score(biome_key) - 50 if biome_key else 0
+        severity_shift = max(-12, min(14, int(round(severity_centered / 4.0))))
+        phase = cls._phase_for_hour(int(turn % 24))
+        time_shift = 3 if phase in {"Night", "Midnight"} else (1 if phase == "Dusk" else 0)
         seed = derive_seed(
             namespace="world.weather",
             context={
@@ -829,17 +1127,24 @@ class GameService:
                 "world_seed": int(getattr(world, "rng_seed", 0) or 0),
                 "weather_slot": int(weather_slot),
                 "threat_level": int(threat),
+                "biome": biome_key or "global",
             },
         )
         rng = random.Random(seed)
-        roll = min(100, max(1, int(rng.randint(1, 100)) + min(10, threat * 2)))
+        roll = min(
+            100,
+            max(
+                1,
+                int(rng.randint(1, 100)) + min(10, threat * 2) + int(severity_shift) + int(time_shift),
+            ),
+        )
         for threshold, label in cls._WORLD_WEATHER_BANDS:
             if roll <= int(threshold):
                 return str(label)
         return "Clear"
 
     @classmethod
-    def _world_immersion_state(cls, world: World | None) -> dict[str, object]:
+    def _world_immersion_state(cls, world: World | None, biome_name: str | None = None) -> dict[str, object]:
         if world is None:
             return {
                 "day": 1,
@@ -852,7 +1157,7 @@ class GameService:
         day = int(turn // 24) + 1
         hour = int(turn % 24)
         phase = cls._phase_for_hour(hour)
-        weather = cls._weather_label_for_world(world)
+        weather = cls._weather_label_for_world(world, biome_name=biome_name)
         return {
             "day": day,
             "hour": hour,
@@ -874,12 +1179,53 @@ class GameService:
             return 2
         return 0
 
+    @staticmethod
+    def _normalize_travel_pace(value: str | None) -> str:
+        normalized = str(value or "steady").strip().lower()
+        if normalized in {"cautious", "steady", "hurried"}:
+            return normalized
+        return "steady"
+
+    @staticmethod
+    def _survival_state(character: Character) -> dict:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        state = flags.setdefault("survival", {})
+        if not isinstance(state, dict):
+            state = {}
+            flags["survival"] = state
+        try:
+            state["travel_exhaustion_level"] = max(0, min(6, int(state.get("travel_exhaustion_level", 0) or 0)))
+        except Exception:
+            state["travel_exhaustion_level"] = 0
+        return state
+
+    def _adjust_travel_exhaustion(self, character: Character, *, delta: int, reason: str) -> int:
+        state = self._survival_state(character)
+        before = int(state.get("travel_exhaustion_level", 0) or 0)
+        after = max(0, min(6, before + int(delta)))
+        state["travel_exhaustion_level"] = after
+        state["last_exhaustion_reason"] = str(reason or "")
+        return after
+
     @classmethod
     def _npc_schedule_snapshot(cls, world: World | None, npc_id: str) -> dict[str, object]:
         immersion = cls._world_immersion_state(world)
         phase = str(immersion.get("phase", "")).strip().lower()
         turn = int(getattr(world, "current_turn", 0) or 0) if world is not None else 0
-        profile = dict(cls._NPC_ROUTINES.get(str(npc_id), {}))
+        profile: dict[str, object] = {}
+        if world is not None and isinstance(getattr(world, "flags", None), dict):
+            town_state = world.flags.get("town_npcs_v1", {})
+            if isinstance(town_state, dict):
+                routines = town_state.get("routines", {})
+                if isinstance(routines, dict):
+                    loaded = routines.get(str(npc_id), {})
+                    if isinstance(loaded, dict):
+                        profile = dict(loaded)
+        if not profile:
+            profile = dict(cls._NPC_ROUTINES.get(str(npc_id), {}))
         if phase in {"night", "midnight"} and turn > 0:
             location = str(profile.get(phase, profile.get("night", "Town")) or "Town")
             available = not bool(profile.get("closed", False))
@@ -1023,9 +1369,16 @@ class GameService:
 
     def short_rest_intent(self, character_id: int) -> ActionResult:
         character = self._require_character(character_id)
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        location_type = self._current_location_type(character, location)
+        used_rations = False
+        if location_type == "wilderness" and self._consume_inventory_item(character, "Sturdy Rations"):
+            used_rations = True
         world_before = self.world_repo.load_default() if self.world_repo else None
         heal_cap = int(rest_heal_amount(int(getattr(character, "hp_max", 1) or 1)))
         heal_amount = max(1, int(round(float(heal_cap) * float(self._SHORT_REST_HEAL_RATIO))))
+        if location_type == "wilderness" and not used_rations:
+            heal_amount = max(1, int(round(heal_amount * 0.7)))
         character.hp_current = min(int(getattr(character, "hp_max", 1) or 1), int(getattr(character, "hp_current", 1) or 1) + heal_amount)
         if hasattr(character, "spell_slots_max"):
             max_slots = int(getattr(character, "spell_slots_max", 0) or 0)
@@ -1053,13 +1406,42 @@ class GameService:
             f"Short rest: +{heal_amount} HP recovered.",
             "You catch your breath and regain limited focus.",
         ]
+        if location_type == "wilderness":
+            if used_rations:
+                messages.append("You consume Sturdy Rations to steady your recovery.")
+            else:
+                messages.append("Without Sturdy Rations, recovery is rough and incomplete.")
+        exhaustion_recovery = 1 if used_rations or location_type == "town" else 0
+        if exhaustion_recovery > 0:
+            before = int(self._survival_state(character).get("travel_exhaustion_level", 0) or 0)
+            after = self._adjust_travel_exhaustion(character, delta=-exhaustion_recovery, reason="short_rest")
+            if after < before:
+                messages.append(f"Travel exhaustion eases ({before} -> {after}).")
+            self.character_repo.save(character)
         if corruption_loss > 0:
             messages.append(f"Cataclysm corruption seeps into camp: -{corruption_loss} HP.")
         return ActionResult(messages=messages, game_over=False)
 
     def long_rest_intent(self, character_id: int) -> ActionResult:
         self.rest(character_id)
+        character = self._require_character(character_id)
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        location_type = self._current_location_type(character, location)
+        used_rations = False
+        if location_type == "wilderness" and self._consume_inventory_item(character, "Sturdy Rations"):
+            used_rations = True
         messages = ["Long rest complete. You rest and feel restored."]
+        if location_type == "wilderness":
+            if used_rations:
+                messages.append("You consume Sturdy Rations and sleep deeply despite the wilds.")
+            else:
+                messages.append("You lacked Sturdy Rations; the rest is less restorative than an inn stay.")
+        exhaustion_recovery = 2 if (location_type == "town" or used_rations) else 1
+        before = int(self._survival_state(character).get("travel_exhaustion_level", 0) or 0)
+        after = self._adjust_travel_exhaustion(character, delta=-exhaustion_recovery, reason="long_rest")
+        if after < before:
+            messages.append(f"Travel exhaustion eases ({before} -> {after}).")
+        self.character_repo.save(character)
         corruption_note = self._last_rest_corruption_message(self._require_character(character_id))
         if corruption_note:
             messages.append(corruption_note)
@@ -1107,7 +1489,7 @@ class GameService:
 
         world_before = self.world_repo.load_default() if self.world_repo else None
         world_turn = int(getattr(world_before, "current_turn", 0) or 0) if world_before is not None else 0
-        immersion = self._world_immersion_state(world_before)
+        immersion = self._world_immersion_state(world_before, biome_name=str(getattr(location, "biome", "") or ""))
         weather_label = str(immersion.get("weather", "Unknown"))
 
         heal_cap = int(rest_heal_amount(int(getattr(character, "hp_max", 1) or 1)))
@@ -1714,12 +2096,23 @@ class GameService:
             },
         )
         rng = random.Random(seed)
-        roll = rng.randint(1, 20)
+        biome_name = str(getattr(location, "biome", "") or "")
+        immersion = self._world_immersion_state(world, biome_name=biome_name)
+        weather_label = str(immersion.get("weather", "Unknown"))
+        severe_visibility = weather_label in {"Rain", "Fog", "Storm", "Blizzard"}
+        uses_perception = action_key in {"scout", "investigate"}
+        if severe_visibility and uses_perception:
+            roll = min(rng.randint(1, 20), rng.randint(1, 20))
+            dc += 1 if weather_label in {"Rain", "Fog"} else 2
+        else:
+            roll = rng.randint(1, 20)
         total = roll + modifier
         success = total >= dc
 
         skill_name = str(payload.get("skill", "Check"))
         messages = [f"{skill_name} check: d20 ({roll}) + {modifier} = {total} vs DC {dc}."]
+        if severe_visibility and uses_perception:
+            messages.append(f"{weather_label} imposes disadvantage on field awareness checks.")
 
         if action_key == "scout":
             if success:
@@ -1919,8 +2312,12 @@ class GameService:
         character = self._require_character(character_id)
         world_state = self.world_repo.load_default() if self.world_repo else None
         if world_state is not None:
+            self._ensure_persistent_town_npcs(world_state)
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        biome_name = str(getattr(location, "biome", "") or "")
+        if world_state is not None:
             self._resolve_cataclysm_terminal_state(world_state)
-        immersion = self._world_immersion_state(world_state)
+        immersion = self._world_immersion_state(world_state, biome_name=biome_name)
         cataclysm = self._world_cataclysm_state(world_state)
         end_state = self._world_cataclysm_end_state(world_state)
         try:
@@ -2032,18 +2429,34 @@ class GameService:
         operation_builder = getattr(self.character_repo, "build_progression_unlock_operation", None)
         for row in progression_rows:
             to_level = int(row.get("to_level", character.level) or character.level)
-            row_choice = str(row.get("growth_choice", growth_choice) or growth_choice)
-            unlock_key = f"level_{to_level}_{row_choice}"
+            unlock_entries = row.get("unlocks", []) if isinstance(row, dict) else []
+            normalized_unlocks: list[tuple[str, str, int]] = []
+            if isinstance(unlock_entries, list):
+                for unlock in unlock_entries:
+                    if not isinstance(unlock, dict):
+                        continue
+                    unlock_kind = str(unlock.get("kind", "") or "").strip() or "growth_choice"
+                    unlock_key = str(unlock.get("key", "") or "").strip()
+                    unlock_level = int(unlock.get("level", to_level) or to_level)
+                    if not unlock_key:
+                        continue
+                    normalized_unlocks.append((unlock_kind, unlock_key, unlock_level))
+            if not normalized_unlocks:
+                row_choice = str(row.get("growth_choice", growth_choice) or growth_choice)
+                unlock_key = f"level_{to_level}_{row_choice}"
+                normalized_unlocks.append(("growth_choice", unlock_key, to_level))
+
             if callable(operation_builder):
-                operation = operation_builder(
-                    character_id=int(character.id or 0),
-                    unlock_kind="growth_choice",
-                    unlock_key=unlock_key,
-                    unlocked_level=to_level,
-                    created_turn=int(getattr(world, "current_turn", 0)) if world is not None else 0,
-                )
-                if callable(operation):
-                    operations.append(cast(Callable[[object], None], operation))
+                for unlock_kind, unlock_key, unlock_level in normalized_unlocks:
+                    operation = operation_builder(
+                        character_id=int(character.id or 0),
+                        unlock_kind=unlock_kind,
+                        unlock_key=unlock_key,
+                        unlocked_level=unlock_level,
+                        created_turn=int(getattr(world, "current_turn", 0)) if world is not None else 0,
+                    )
+                    if callable(operation):
+                        operations.append(cast(Callable[[object], None], operation))
 
         self._set_progression_messages(character, level_messages)
 
@@ -2057,17 +2470,97 @@ class GameService:
             if callable(recorder):
                 for row in progression_rows:
                     to_level = int(row.get("to_level", character.level) or character.level)
-                    row_choice = str(row.get("growth_choice", growth_choice) or growth_choice)
-                    unlock_key = f"level_{to_level}_{row_choice}"
-                    recorder(
-                        character_id=int(character.id or 0),
-                        unlock_kind="growth_choice",
-                        unlock_key=unlock_key,
-                        unlocked_level=to_level,
-                        created_turn=int(getattr(world, "current_turn", 0)) if world is not None else 0,
-                    )
+                    unlock_entries = row.get("unlocks", []) if isinstance(row, dict) else []
+                    normalized_unlocks: list[tuple[str, str, int]] = []
+                    if isinstance(unlock_entries, list):
+                        for unlock in unlock_entries:
+                            if not isinstance(unlock, dict):
+                                continue
+                            unlock_kind = str(unlock.get("kind", "") or "").strip() or "growth_choice"
+                            unlock_key = str(unlock.get("key", "") or "").strip()
+                            unlock_level = int(unlock.get("level", to_level) or to_level)
+                            if not unlock_key:
+                                continue
+                            normalized_unlocks.append((unlock_kind, unlock_key, unlock_level))
+                    if not normalized_unlocks:
+                        row_choice = str(row.get("growth_choice", growth_choice) or growth_choice)
+                        unlock_key = f"level_{to_level}_{row_choice}"
+                        normalized_unlocks.append(("growth_choice", unlock_key, to_level))
+
+                    for unlock_kind, unlock_key, unlock_level in normalized_unlocks:
+                        recorder(
+                            character_id=int(character.id or 0),
+                            unlock_kind=unlock_kind,
+                            unlock_key=unlock_key,
+                            unlocked_level=unlock_level,
+                            created_turn=int(getattr(world, "current_turn", 0)) if world is not None else 0,
+                        )
 
         return ActionResult(messages=level_messages, game_over=False)
+
+    def initialize_skill_training_intent(
+        self,
+        character_id: int,
+        *,
+        grant_level_points: bool = False,
+    ) -> ActionResult:
+        character = self._require_character(character_id)
+        snapshot = self.progression_service.initialize_skill_training(
+            character,
+            grant_level_points=grant_level_points,
+        )
+        self.character_repo.save(character)
+        points = int(snapshot.get("points_available", 0) or 0)
+        source_level = int(snapshot.get("points_source_level", 0) or 0)
+        if grant_level_points and points > 0:
+            return ActionResult(
+                messages=[f"Skill training initialized: {points} point(s) ready at level {source_level}."],
+                game_over=False,
+            )
+        return ActionResult(messages=["Skill training profile initialized."], game_over=False)
+
+    def get_skill_training_status_intent(self, character_id: int) -> dict[str, object]:
+        character = self._require_character(character_id)
+        snapshot = self.progression_service.get_skill_training_snapshot(character)
+        return dict(snapshot)
+
+    def list_granular_skills_intent(
+        self,
+        character_id: int,
+        *,
+        allow_special: bool = False,
+    ) -> list[dict[str, object]]:
+        character = self._require_character(character_id)
+        return self.progression_service.list_granular_skills(character, allow_special=allow_special)
+
+    def declare_skill_training_intent_intent(self, character_id: int, skill_slugs: list[str]) -> ActionResult:
+        character = self._require_character(character_id)
+        payload = self.progression_service.declare_skill_training_intent(character, skill_slugs)
+        self.character_repo.save(character)
+        intent = list(payload.get("intent", [])) if isinstance(payload, dict) else []
+        if intent:
+            labels = ", ".join(str(row).replace("_", " ").title() for row in intent)
+            return ActionResult(messages=[f"Training intent set: {labels}."], game_over=False)
+        return ActionResult(messages=["Training intent cleared."], game_over=False)
+
+    def spend_skill_proficiency_points_intent(
+        self,
+        character_id: int,
+        allocations: dict[str, int],
+        *,
+        allow_special: bool = False,
+    ) -> ActionResult:
+        character = self._require_character(character_id)
+        try:
+            messages = self.progression_service.spend_skill_proficiency_points(
+                character,
+                allocations,
+                allow_special=allow_special,
+            )
+        except ValueError as exc:
+            return ActionResult(messages=[str(exc)], game_over=False)
+        self.character_repo.save(character)
+        return ActionResult(messages=messages, game_over=False)
 
     def get_location_context_intent(self, character_id: int) -> LocationContextView:
         character = self._require_character(character_id)
@@ -2106,6 +2599,15 @@ class GameService:
 
         current_location_id = getattr(character, "location_id", None)
         current_location = self.location_repo.get(current_location_id) if current_location_id is not None else None
+        diplomacy_state: dict[str, object] = {}
+        if world is not None:
+            diplomacy_state, diplomacy_changed = self._sync_faction_diplomacy(
+                world,
+                character=character,
+                current_location=current_location,
+            )
+            if diplomacy_changed and self.world_repo:
+                self.world_repo.save(world)
         discovered = self._discovered_locations(character, current_location)
         locations = self.location_repo.list_all()
         destinations: list[TravelDestinationView] = []
@@ -2133,6 +2635,7 @@ class GameService:
                 recommended_level=int(recommended_level) if isinstance(recommended_level, int) else 1,
                 travel_mode="road",
                 prep_profile=prep_profile,
+                diplomacy_risk_shift=self._diplomacy_travel_risk_shift(diplomacy_state=diplomacy_state, location=location),
             )
             risk_hint = self._apply_cataclysm_travel_risk_hint(risk_hint, cataclysm)
             road_days = self._estimate_travel_days(
@@ -2149,6 +2652,9 @@ class GameService:
             level_label = f"Lv {recommended_level}"
             days_label = f"{road_days}d"
             preview = f"{level_label:<6} • {days_label:<3} • {risk_label:<{risk_width}}"
+            diplomacy_route_note = self._diplomacy_route_note(diplomacy_state=diplomacy_state, location=location)
+            cataclysm_note = self._cataclysm_route_note(road_days=road_days, cataclysm=cataclysm)
+            route_note = " ".join(part for part in [cataclysm_note, diplomacy_route_note] if part).strip()
             destinations.append(
                 TravelDestinationView(
                     location_id=int(location.id),
@@ -2157,7 +2663,7 @@ class GameService:
                     biome=biome,
                     preview=preview,
                     estimated_days=road_days,
-                    route_note=self._cataclysm_route_note(road_days=road_days, cataclysm=cataclysm),
+                    route_note=route_note,
                     mode_hint="Modes: Road balanced • Stealth safer/slower • Caravan safer/slower",
                     prep_summary=prep_summary,
                 )
@@ -2363,6 +2869,7 @@ class GameService:
         recommended_level: int,
         travel_mode: str = "road",
         prep_profile: dict | None = None,
+        diplomacy_risk_shift: int = 0,
     ) -> str:
         mode = self._normalize_travel_mode(travel_mode)
         prep_id = str((prep_profile or {}).get("id", "none"))
@@ -2388,7 +2895,14 @@ class GameService:
         location = self.location_repo.get(int(location_id)) if self.location_repo else None
         biome_shift = self._biome_travel_risk_shift(str(getattr(location, "biome", "") or ""))
         mode_shift = {"road": 0, "stealth": -8, "caravan": -12}.get(mode, 0)
-        score = roll + pressure + mode_shift + max(-30, min(10, prep_risk_shift)) + biome_shift
+        score = (
+            roll
+            + pressure
+            + mode_shift
+            + max(-30, min(10, prep_risk_shift))
+            + biome_shift
+            + max(-12, min(18, int(diplomacy_risk_shift)))
+        )
 
         if score <= 40:
             return "Low"
@@ -2396,9 +2910,16 @@ class GameService:
             return "Moderate"
         return "High"
 
-    def travel_intent(self, character_id: int, destination_id: int | None = None, travel_mode: str = "road") -> ActionResult:
+    def travel_intent(
+        self,
+        character_id: int,
+        destination_id: int | None = None,
+        travel_mode: str = "road",
+        travel_pace: str = "steady",
+    ) -> ActionResult:
         character = self._require_character(character_id)
         mode = self._normalize_travel_mode(travel_mode)
+        pace = self._normalize_travel_pace(travel_pace)
         prep_profile = self._active_travel_prep_profile(character)
         target_location = None
         current_location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
@@ -2435,6 +2956,7 @@ class GameService:
             source=current_location,
             destination=target_location,
             travel_mode=mode,
+            travel_pace=pace,
             prep_profile=prep_profile,
         )
 
@@ -2443,6 +2965,7 @@ class GameService:
             destination_id=int(getattr(target_location, "id", 0) or 0),
             destination_name=str(destination_name or "unknown"),
             travel_mode=mode,
+            travel_pace=pace,
             estimated_days=estimated_days,
             world_turn=int(getattr(world, "current_turn", 0)) if world is not None else 0,
             prep_profile=prep_profile,
@@ -2457,6 +2980,7 @@ class GameService:
                     target_context,
                     destination_name,
                     mode,
+                    travel_pace=pace,
                     prep_profile=prep_profile,
                     destination_biome=str(getattr(target_location, "biome", "") or ""),
                 )
@@ -2466,16 +2990,43 @@ class GameService:
                 log_messages.append(self._travel_day_quiet_message(day=day, estimated_days=estimated_days, travel_mode=mode))
 
             active_world = self.world_repo.load_default() if self.world_repo else None
-            immersion = self._world_immersion_state(active_world)
+            destination_biome = str(getattr(target_location, "biome", "") or "")
+            immersion = self._world_immersion_state(active_world, biome_name=destination_biome)
             weather_label = str(immersion.get("weather", "Unknown"))
             if weather_label in {"Rain", "Storm", "Blizzard", "Fog"}:
                 log_messages.append(f"Weather: {weather_label} slows the march and complicates scouting.")
-            if weather_label == "Blizzard" and not self._inventory_has_item(character, "Sturdy Rations"):
+            ration_used = self._consume_inventory_item(character, "Sturdy Rations")
+            if ration_used:
+                log_messages.append("Supplies: You consume Sturdy Rations to keep marching strength.")
+            else:
+                log_messages.append("Supplies: You have no Sturdy Rations for today.")
+
+            if weather_label == "Blizzard" and not ration_used:
                 max_safe_loss = max(0, int(getattr(character, "hp_current", 1)) - 1)
                 hp_loss = min(max_safe_loss, 1)
                 if hp_loss > 0:
                     character.hp_current = max(1, int(getattr(character, "hp_current", 1)) - hp_loss)
                     log_messages.append("Without winter provisions, the blizzard strips 1 HP from exposure.")
+
+            strain_score = 0
+            if pace == "hurried":
+                strain_score += 1
+            elif pace == "cautious":
+                strain_score -= 1
+            if weather_label in {"Storm", "Blizzard"}:
+                strain_score += 1
+            if not ration_used:
+                strain_score += 1
+
+            if strain_score >= 2:
+                next_level = self._adjust_travel_exhaustion(character, delta=1, reason="travel_strain")
+                log_messages.append(f"Travel strain builds exhaustion (level {next_level}/6).")
+                if next_level >= 4:
+                    max_safe_loss = max(0, int(getattr(character, "hp_current", 1) or 1) - 1)
+                    hp_loss = min(max_safe_loss, 1 + max(0, next_level - 4))
+                    if hp_loss > 0:
+                        character.hp_current = max(1, int(getattr(character, "hp_current", 1) or 1) - hp_loss)
+                        log_messages.append(f"Exhaustion wear drains {hp_loss} HP.")
 
             self.character_repo.save(character)
             world_after_tick = self.advance_world(ticks=1)
@@ -2541,6 +3092,7 @@ class GameService:
             self.character_repo.save(character)
 
         mode_label = {"road": "road", "stealth": "stealth route", "caravan": "caravan route"}.get(mode, "road")
+        pace_label = self._TRAVEL_PACE_LABELS.get(pace, "steady")
         if target_context == "wilderness":
             message = (
                 f"You travel to {destination_name} and head into the wilderness."
@@ -2553,7 +3105,10 @@ class GameService:
                 if destination_name
                 else "You return to town."
             )
-        message = f"{message} Journey: {estimated_days} day(s) via {mode_label}."
+        message = f"{message} Journey: {estimated_days} day(s) via {mode_label} at a {pace_label} pace."
+        exhaustion_level = int(self._survival_state(character).get("travel_exhaustion_level", 0) or 0)
+        if exhaustion_level > 0:
+            message = f"{message} Exhaustion: {exhaustion_level}/6."
         prep_summary = self._travel_prep_summary(prep_profile)
         if prep_summary:
             message = f"{message} Prep applied: {prep_summary}."
@@ -2569,6 +3124,7 @@ class GameService:
         target_context: str,
         destination_name: str | None,
         travel_mode: str = "road",
+        travel_pace: str = "steady",
         prep_profile: dict | None = None,
         destination_biome: str | None = None,
     ) -> str:
@@ -2576,6 +3132,7 @@ class GameService:
             return ""
         world = self._require_world()
         mode = self._normalize_travel_mode(travel_mode)
+        pace = self._normalize_travel_pace(travel_pace)
         prep_id = str((prep_profile or {}).get("id", "none"))
         prep_roll_shift = int((prep_profile or {}).get("event_roll_shift", 0))
         seed = derive_seed(
@@ -2587,6 +3144,7 @@ class GameService:
                 "destination_name": str(destination_name or "unknown"),
                 "location_id": int(getattr(character, "location_id", 0) or 0),
                 "travel_mode": mode,
+                "travel_pace": pace,
                 "travel_prep": prep_id,
                 "destination_biome": str(destination_biome or ""),
             },
@@ -2594,11 +3152,12 @@ class GameService:
         rng = random.Random(seed)
         roll = rng.randint(1, 100)
         mode_shift = {"road": 0, "stealth": -8, "caravan": -12}.get(mode, 0)
+        pace_shift = {"cautious": -8, "steady": 0, "hurried": 10}.get(pace, 0)
         heat_pressure = self._faction_heat_pressure(character)
         biome_shift = self._biome_travel_risk_shift(str(destination_biome or ""))
         adjusted_roll = max(
             1,
-            min(100, roll + mode_shift + heat_pressure + max(-20, min(8, prep_roll_shift)) + biome_shift),
+            min(100, roll + mode_shift + pace_shift + heat_pressure + max(-20, min(8, prep_roll_shift)) + biome_shift),
         )
 
         if adjusted_roll <= 35:
@@ -2682,11 +3241,13 @@ class GameService:
         source: Location | None,
         destination: Location | None,
         travel_mode: str,
+        travel_pace: str = "steady",
         prep_profile: dict | None = None,
     ) -> int:
         if destination is None:
             return 1
         mode = self._normalize_travel_mode(travel_mode)
+        pace = self._normalize_travel_pace(travel_pace)
         prep_day_shift = int((prep_profile or {}).get("day_shift", 0))
         source_id = int(getattr(source, "id", 0) or 0)
         destination_id = int(getattr(destination, "id", 0) or 0)
@@ -2706,7 +3267,8 @@ class GameService:
         challenge_days = 1 if recommended_level >= 3 else 0
         biome_days = 1 if any(token in biome for token in ("mountain", "marsh", "swamp", "wild", "forest")) else 0
         mode_days = {"road": 0, "stealth": 1, "caravan": 1}.get(mode, 0)
-        days = base_days + challenge_days + biome_days + mode_days + max(-2, min(2, prep_day_shift))
+        pace_days = {"cautious": 1, "steady": 0, "hurried": -1}.get(pace, 0)
+        days = base_days + challenge_days + biome_days + mode_days + pace_days + max(-2, min(2, prep_day_shift))
         return max(1, min(9, days))
 
     def _plan_travel_event_days(
@@ -2716,11 +3278,13 @@ class GameService:
         destination_id: int,
         destination_name: str,
         travel_mode: str,
+        travel_pace: str = "steady",
         estimated_days: int,
         world_turn: int,
         prep_profile: dict | None = None,
     ) -> set[int]:
         mode = self._normalize_travel_mode(travel_mode)
+        pace = self._normalize_travel_pace(travel_pace)
         if estimated_days <= 1:
             return set()
         prep_id = str((prep_profile or {}).get("id", "none"))
@@ -2733,6 +3297,7 @@ class GameService:
                 "destination_id": int(destination_id),
                 "destination_name": str(destination_name or "unknown"),
                 "travel_mode": mode,
+                "travel_pace": pace,
                 "travel_prep": prep_id,
                 "estimated_days": int(estimated_days),
                 "world_turn": int(world_turn),
@@ -2741,7 +3306,8 @@ class GameService:
         rng = random.Random(seed)
         max_events = min(3, max(0, int(estimated_days) - 1))
         mode_cap_adjust = {"road": 0, "stealth": -1, "caravan": -1}.get(mode, 0)
-        max_events = max(0, max_events + mode_cap_adjust + max(-2, min(1, prep_event_cap_shift)))
+        pace_cap_adjust = {"cautious": -1, "steady": 0, "hurried": 1}.get(pace, 0)
+        max_events = max(0, max_events + mode_cap_adjust + pace_cap_adjust + max(-2, min(1, prep_event_cap_shift)))
         if max_events <= 0:
             return set()
 
@@ -2842,13 +3408,14 @@ class GameService:
     def get_town_view_intent(self, character_id: int) -> TownView:
         character = self._require_character(character_id)
         world = self._require_world()
+        self._ensure_persistent_town_npcs(world)
         location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
         location_name = self._settlement_display_name(world, location)
         district_tag, landmark_tag = self._town_layer_tags(world=world, location=location)
-        immersion = self._world_immersion_state(world)
+        immersion = self._world_immersion_state(world, biome_name=str(getattr(location, "biome", "") or ""))
         prep_summary = self._travel_prep_summary(self._active_travel_prep_profile(character))
         npcs = []
-        for npc in self._TOWN_NPCS:
+        for npc in self._town_npcs_for_world(world):
             disposition = self._get_npc_disposition(world, npc["id"])
             npcs.append(
                 to_town_npc_view(
@@ -2973,6 +3540,7 @@ class GameService:
     def get_npc_interaction_intent(self, character_id: int, npc_id: str) -> NpcInteractionView:
         character = self._require_character(character_id)
         world = self._require_world()
+        self._ensure_persistent_town_npcs(world)
         npc = self._find_town_npc(npc_id)
         schedule = self._npc_schedule_snapshot(world, str(npc["id"]))
         disposition = self._get_npc_disposition(world, npc["id"])
@@ -2995,7 +3563,12 @@ class GameService:
             greeting = f"{greeting} {memory_hint}"
         if int(getattr(world, "threat_level", 0) or 0) >= 4:
             greeting = f"{greeting} The unrest has everyone speaking in lower voices."
+        if bool(npc.get("is_procedural", False)):
+            worksite = str(schedule.get("location", "town") or "town")
+            greeting = f"{greeting} {npc['name']} keeps watch over the {str(npc.get('role', 'trade')).lower()} post near {worksite}."
         approaches = ["Friendly", "Direct", "Intimidate"]
+        if bool(npc.get("is_procedural", False)):
+            approaches.extend(["Persuasion", "Deception", "Intimidation"])
         if npc["id"] == "broker_silas" and self._has_interaction_unlock(character, "intel_leverage"):
             approaches.append("Leverage Intel")
         if npc["id"] == "captain_ren" and self._has_interaction_unlock(character, "captain_favor"):
@@ -3027,6 +3600,7 @@ class GameService:
         interaction = self.get_npc_interaction_intent(character_id, npc_id)
         character = self._require_character(character_id)
         world = self._require_world()
+        npc = self._find_town_npc(str(interaction.npc_id))
         session = self.dialogue_service.build_dialogue_session(
             world=world,
             character=character,
@@ -3035,6 +3609,7 @@ class GameService:
             npc_name=str(interaction.npc_name),
             greeting=str(interaction.greeting),
             approaches=list(interaction.approaches or []),
+            npc_profile_id=self._npc_dialogue_profile(npc),
         )
         choices = [
             DialogueChoiceView(
@@ -3061,7 +3636,13 @@ class GameService:
         price_modifier = self._town_price_modifier(character_id)
         world = self.world_repo.load_default() if self.world_repo else None
         cataclysm = self._world_cataclysm_state(world)
-        immersion = self._world_immersion_state(world)
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        immersion = self._world_immersion_state(world, biome_name=str(getattr(location, "biome", "") or ""))
+        settlement_scale = self._settlement_scale(location)
+        scale_price_shift = self._shop_scale_price_shift(settlement_scale)
+        local_faction_shift = self._local_faction_trade_shift(character_id, location)
+        event_pressure_shift = self._shop_recent_event_pressure_shift(world)
+        price_modifier += int(scale_price_shift) + int(local_faction_shift) + int(event_pressure_shift)
         phase = str(immersion.get("phase", ""))
         weather = str(immersion.get("weather", "Unknown"))
         world_turn = int(getattr(world, "current_turn", 0) or 0) if world is not None else 0
@@ -3083,12 +3664,22 @@ class GameService:
         if bool(cataclysm.get("active", False)):
             cataclysm_phase = str(cataclysm.get("phase", "") or "").replace("_", " ")
             standing_label = f"{standing_label}; cataclysm strain ({cataclysm_phase})"
+        if settlement_scale == "city":
+            standing_label = f"{standing_label}; city trade depth"
+        elif settlement_scale == "village":
+            standing_label = f"{standing_label}; village scarcity"
+        if local_faction_shift < 0:
+            standing_label = f"{standing_label}; local faction support"
+        elif local_faction_shift > 0:
+            standing_label = f"{standing_label}; local faction tolls"
+        if event_pressure_shift > 0:
+            standing_label = f"{standing_label}; recent unrest"
 
         dynamic_rows: list[dict] = []
         loader = getattr(self.character_repo, "list_shop_items", None)
         if callable(loader):
             try:
-                loaded = loader(character_id=character_id, max_items=8)
+                loaded = loader(character_id=character_id, max_items=self._shop_dynamic_item_limit(settlement_scale, event_pressure_shift))
                 if isinstance(loaded, list):
                     dynamic_rows = [row for row in loaded if isinstance(row, dict)]
             except Exception:
@@ -3103,11 +3694,15 @@ class GameService:
             item_id = str(row.get("id", "")).strip()
             if not item_id or item_id in emitted:
                 continue
+            if settlement_scale == "village" and item_id in {"focus_potion", "iron_longsword"}:
+                continue
             if after_hours and item_id not in after_hours_essentials:
                 continue
             if bool(cataclysm.get("active", False)) and str(cataclysm.get("phase", "")) in {"map_shrinks", "ruin"}:
                 if item_id not in cataclysm_essentials:
                     continue
+            if event_pressure_shift >= 2 and item_id not in {"healing_herbs", "sturdy_rations", "torch", "rope", "antitoxin", "whetstone"}:
+                continue
             emitted.add(item_id)
             base_price = int(row.get("base_price", 1))
             row_modifier = int(price_modifier)
@@ -3140,6 +3735,72 @@ class GameService:
         if after_hours and not items:
             standing_label = f"{standing_label}; shutters closed until morning"
         return to_shop_view(gold=character.money, price_modifier_label=standing_label, items=items)
+
+    @staticmethod
+    def _shop_scale_price_shift(settlement_scale: str) -> int:
+        normalized = str(settlement_scale or "town").strip().lower()
+        if normalized == "city":
+            return -1
+        if normalized == "village":
+            return 1
+        return 0
+
+    @staticmethod
+    def _shop_dynamic_item_limit(settlement_scale: str, event_pressure_shift: int) -> int:
+        normalized = str(settlement_scale or "town").strip().lower()
+        if normalized == "city":
+            base = 12
+        elif normalized == "village":
+            base = 5
+        else:
+            base = 8
+        return max(3, int(base) - max(0, int(event_pressure_shift)))
+
+    def _local_faction_trade_shift(self, character_id: int, location: Location | None) -> int:
+        if location is None:
+            return 0
+        local_factions = [
+            str(faction_id or "").strip().lower()
+            for faction_id in (getattr(location, "factions", []) or [])
+            if str(faction_id or "").strip()
+        ]
+        if not local_factions:
+            return 0
+        standings = self.faction_standings_intent(character_id)
+        if not standings:
+            return 0
+        local_scores = [int(standings.get(faction_id, 0) or 0) for faction_id in local_factions]
+        if not local_scores:
+            return 0
+        best_local = max(local_scores)
+        if best_local >= 10:
+            return -1
+        if best_local <= -10:
+            return 1
+        return 0
+
+    @staticmethod
+    def _shop_recent_event_pressure_shift(world) -> int:
+        if not isinstance(getattr(world, "flags", None), dict):
+            return 0
+        rows = world.flags.get("consequences", [])
+        if not isinstance(rows, list) or not rows:
+            return 0
+        current_turn = int(getattr(world, "current_turn", 0) or 0)
+        severe = 0
+        normal = 0
+        for row in reversed(rows):
+            if not isinstance(row, dict):
+                continue
+            row_turn = int(row.get("turn", -10_000) or -10_000)
+            if row_turn < current_turn - 8:
+                break
+            severity = str(row.get("severity", "minor") or "minor").strip().lower()
+            if severity in {"high", "critical"}:
+                severe += 1
+            elif severity == "normal":
+                normal += 1
+        return min(3, severe + (1 if normal >= 2 else 0))
 
     def buy_shop_item_intent(self, character_id: int, item_id: str) -> ActionResult:
         character = self._require_character(character_id)
@@ -3398,6 +4059,14 @@ class GameService:
     def get_rumour_board_intent(self, character_id: int) -> RumourBoardView:
         character = self._require_character(character_id)
         world = self._require_world()
+        current_location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        diplomacy_state, diplomacy_changed = self._sync_faction_diplomacy(
+            world,
+            character=character,
+            current_location=current_location,
+        )
+        if diplomacy_changed and self.world_repo:
+            self.world_repo.save(world)
         day = int(getattr(world, "current_turn", 0))
         threat = int(getattr(world, "threat_level", 0))
         broker_disposition = self._get_npc_disposition(world, "broker_silas")
@@ -3408,6 +4077,7 @@ class GameService:
         flashpoint_fingerprint = self._flashpoint_echo_fingerprint(world, limit=4)
         flashpoint_pressure = self._recent_flashpoint_pressure_score(world, day=day, window=4)
         flashpoint_bias_faction = self._latest_flashpoint_bias_faction(world)
+        diplomacy_fingerprint = self._diplomacy_fingerprint(diplomacy_state, limit=4)
 
         seed = derive_seed(
             namespace="town.rumour_board",
@@ -3426,6 +4096,7 @@ class GameService:
                 "faction_snapshot": standings,
                 "memory_fingerprint": memory_fingerprint,
                 "flashpoint_fingerprint": flashpoint_fingerprint,
+                "diplomacy_fingerprint": diplomacy_fingerprint,
             },
         )
         rng = random.Random(seed)
@@ -3459,6 +4130,13 @@ class GameService:
         flashpoint_item = self._flashpoint_echo_rumour(world, character_id=character_id)
         if flashpoint_item is not None:
             items.append(flashpoint_item)
+        diplomacy_item = self._diplomacy_rumour_item(
+            world=world,
+            character_id=character_id,
+            diplomacy_state=diplomacy_state,
+        )
+        if diplomacy_item is not None:
+            items.append(diplomacy_item)
         for row in selection:
             confidence = str(row.get("confidence", "uncertain"))
             if broker_disposition >= 25 and confidence == "uncertain":
@@ -3533,11 +4211,17 @@ class GameService:
         )
 
     def get_quest_board_intent(self, character_id: int) -> QuestBoardView:
-        self._require_character(character_id)
+        character = self._require_character(character_id)
         world = self._require_world()
+        current_location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        diplomacy_state, diplomacy_changed = self._sync_faction_diplomacy(
+            world,
+            character=character,
+            current_location=current_location,
+        )
         world_turn = int(getattr(world, "current_turn", 0))
         changed = self._sync_cataclysm_quest_pressure(world, world_turn=world_turn)
-        if changed and self.world_repo:
+        if (changed or diplomacy_changed) and self.world_repo:
             self.world_repo.save(world)
         quests = self._world_quests(world)
         views: list[QuestStateView] = []
@@ -3548,6 +4232,17 @@ class GameService:
             progress = int(payload.get("progress", 0))
             target = max(1, int(payload.get("target", 1)))
             status = str(payload.get("status", "unknown"))
+            urgency_label = self._quest_urgency_label(
+                status=status,
+                world_turn=world_turn,
+                expires_turn=payload.get("expires_turn"),
+            )
+            diplomacy_suffix = self._diplomacy_quest_urgency_suffix(
+                diplomacy_state=diplomacy_state,
+                quest_payload=payload,
+            )
+            if diplomacy_suffix:
+                urgency_label = f"{urgency_label} • {diplomacy_suffix}" if urgency_label else diplomacy_suffix
             views.append(
                 to_quest_state_view(
                     quest_id=str(quest_id),
@@ -3562,17 +4257,15 @@ class GameService:
                         progress=progress,
                         target=target,
                     ),
-                    urgency_label=self._quest_urgency_label(
-                        status=status,
-                        world_turn=world_turn,
-                        expires_turn=payload.get("expires_turn"),
-                    ),
+                    urgency_label=urgency_label,
                 )
             )
         views.sort(key=lambda item: item.quest_id)
         empty_state_hint = (
             "No quest postings yet. Explore nearby zones, advance a day, and check back at the board for new contracts."
         )
+        if list(diplomacy_state.get("active_wars", []) or []):
+            empty_state_hint = f"{empty_state_hint} Border conflicts may temporarily reduce courier and travel contracts."
         return to_quest_board_view(quests=views, empty_state_hint=empty_state_hint)
 
     def get_quest_journal_intent(self, character_id: int) -> QuestJournalView:
@@ -3844,9 +4537,12 @@ class GameService:
         character_id: int,
         npc_id: str,
         approach: str,
+        forced_dc: int | None = None,
+        forced_skill: str | None = None,
     ) -> SocialOutcomeView:
         character = self._require_character(character_id)
         world = self._require_world()
+        self._ensure_persistent_town_npcs(world)
         npc = self._find_town_npc(npc_id)
         schedule = self._npc_schedule_snapshot(world, str(npc["id"]))
         if not bool(schedule.get("available", True)):
@@ -3865,10 +4561,16 @@ class GameService:
             )
 
         normalized_approach = self.dialogue_service.normalize_approach(approach)
+        normalized_forced_skill = self.dialogue_service.normalize_approach(forced_skill or "")
+        if normalized_forced_skill in {"persuasion", "intimidation", "deception"}:
+            normalized_approach = normalized_forced_skill
         if normalized_approach not in {
             "friendly",
             "direct",
             "intimidate",
+            "persuasion",
+            "intimidation",
+            "deception",
             "leverage intel",
             "call in favor",
             "invoke faction",
@@ -3907,6 +4609,9 @@ class GameService:
             "friendly": "charisma",
             "direct": "wisdom",
             "intimidate": "strength",
+            "persuasion": "charisma",
+            "intimidation": "strength",
+            "deception": "charisma",
             "ask about companions": "wisdom",
             "leverage intel": "wisdom",
             "call in favor": "charisma",
@@ -3919,7 +4624,7 @@ class GameService:
         }[normalized_approach]
         score = int(getattr(character, "attributes", {}).get(skill_attr, 10))
         modifier = (score - 10) // 2
-        npc_affinity = self._NPC_FACTION_AFFINITY.get(str(npc["id"]))
+        npc_affinity = self._npc_faction_affinity(world, str(npc["id"]))
         heat_state = self._faction_heat_state(character)
         npc_heat = int(heat_state.get(npc_affinity, 0)) if npc_affinity else 0
         npc_heat_dc_penalty = min(2, max(0, npc_heat // 7))
@@ -3947,6 +4652,8 @@ class GameService:
             dc += 1
         if normalized_approach == "leverage rumour":
             dc -= 1
+        if forced_dc is not None:
+            dc = int(forced_dc)
         dc = max(8, min(18, dc))
 
         world_turn = getattr(world, "current_turn", 0)
@@ -3974,6 +4681,12 @@ class GameService:
         delta = 8 if success else -6
         if normalized_approach == "intimidate":
             delta = 5 if success else -8
+        if normalized_approach == "persuasion":
+            delta = 8 if success else -5
+        if normalized_approach == "intimidation":
+            delta = 5 if success else -8
+        if normalized_approach == "deception":
+            delta = 6 if success else -6
         if normalized_approach == "leverage intel":
             delta = 6 if success else -4
         if normalized_approach == "call in favor":
@@ -3994,11 +4707,11 @@ class GameService:
         self._set_npc_disposition(world, npc["id"], disposition_after)
         if npc_affinity:
             heat_shift = 0
-            if not success and normalized_approach in {"intimidate", "invoke faction"}:
+            if not success and normalized_approach in {"intimidate", "intimidation", "invoke faction"}:
                 heat_shift = 2
             elif not success:
                 heat_shift = 1
-            elif success and normalized_approach in {"friendly", "call in favor", "bribe"}:
+            elif success and normalized_approach in {"friendly", "persuasion", "call in favor", "bribe"}:
                 heat_shift = -1
             if heat_shift != 0:
                 self._adjust_faction_heat(character, faction_id=npc_affinity, delta=heat_shift)
@@ -4137,6 +4850,7 @@ class GameService:
         interaction = self.get_npc_interaction_intent(character_id, npc_id)
         character = self._require_character(character_id)
         world = self._require_world()
+        npc = self._find_town_npc(str(interaction.npc_id))
         resolved = self.dialogue_service.resolve_dialogue_choice(
             world=world,
             character=character,
@@ -4146,18 +4860,56 @@ class GameService:
             greeting=str(interaction.greeting),
             approaches=list(interaction.approaches or []),
             choice_id=str(choice_id),
+            npc_profile_id=self._npc_dialogue_profile(npc),
         )
+        skill_check = resolved.get("skill_check", {}) if isinstance(resolved.get("skill_check", {}), dict) else {}
+        forced_dc = None
+        forced_skill = ""
+        if skill_check:
+            try:
+                forced_dc = int(skill_check.get("dc", 12) or 12)
+            except Exception:
+                forced_dc = None
+            forced_skill = str(skill_check.get("skill", "")).strip().lower()
+
         outcome = self.submit_social_approach_intent(
             character_id=character_id,
             npc_id=npc_id,
             approach=str(resolved.get("approach", "direct")),
+            forced_dc=forced_dc,
+            forced_skill=forced_skill,
         )
         if not bool(resolved.get("accepted", False)):
             outcome.messages = [str(resolved.get("reason", "Choice unavailable.")), *list(outcome.messages or [])]
         else:
+            if skill_check:
+                skill_label = str(skill_check.get("skill", "check")).strip().title()
+                outcome.messages = [
+                    f"Skill check: {skill_label} ({outcome.roll_total} vs DC {outcome.target_dc}).",
+                    *list(outcome.messages or []),
+                ]
             response = str(resolved.get("response", "")).strip()
             if response:
                 outcome.messages = [response, *list(outcome.messages or [])]
+            if skill_check:
+                world_after_branch = self._require_world()
+                character_after_branch = self._require_character(character_id)
+                branch = self.dialogue_service.apply_skill_check_branch(
+                    world=world_after_branch,
+                    character=character_after_branch,
+                    npc_id=str(npc_id),
+                    success=bool(outcome.success),
+                    branch={row_key: row_value for row_key, row_value in skill_check.items()},
+                )
+                branch_response = str(branch.get("response", "")).strip()
+                if branch_response:
+                    outcome.messages = [branch_response, *list(outcome.messages or [])]
+                branch_note = str(branch.get("note", "")).strip()
+                if branch_note:
+                    outcome.messages = [*list(outcome.messages or []), branch_note]
+                self.character_repo.save(character_after_branch)
+                if self.world_repo:
+                    self.world_repo.save(world_after_branch)
             effects = resolved.get("effects", [])
             if isinstance(effects, list) and effects:
                 world_after = self._require_world()
@@ -4574,6 +5326,18 @@ class GameService:
             return {}
         return self.combat_service.derive_player_stats(player)
 
+    def _scene_with_world_weather(self, player: Character, scene: Optional[dict]) -> dict:
+        scene_ctx = dict(scene or {})
+        location = self.location_repo.get(player.location_id) if self.location_repo and player.location_id is not None else None
+        biome_name = str(getattr(location, "biome", "") or "")
+        world = self.world_repo.load_default() if self.world_repo else None
+        immersion = self._world_immersion_state(world, biome_name=biome_name)
+        if not str(scene_ctx.get("weather", "") or "").strip():
+            scene_ctx["weather"] = str(immersion.get("weather", "Unknown"))
+        if not str(scene_ctx.get("terrain", "") or "").strip():
+            scene_ctx["terrain"] = str(biome_name or "open")
+        return scene_ctx
+
     def combat_resolve_intent(
         self,
         player: Character,
@@ -4587,7 +5351,7 @@ class GameService:
         if self.world_repo:
             world = self.world_repo.load_default()
             world_turn = getattr(world, "current_turn", 0) if world else 0
-        scene_ctx = scene or {}
+        scene_ctx = self._scene_with_world_weather(player, scene)
         seed = derive_seed(
             namespace="combat.resolve",
             context={
@@ -4597,6 +5361,7 @@ class GameService:
                 "distance": scene_ctx.get("distance", "close"),
                 "terrain": scene_ctx.get("terrain", "open"),
                 "surprise": scene_ctx.get("surprise", "none"),
+                "weather": scene_ctx.get("weather", "Unknown"),
             },
         )
         self.combat_service.set_seed(seed)
@@ -4604,7 +5369,7 @@ class GameService:
             player,
             enemy,
             choose_action,
-            scene=scene,
+            scene=scene_ctx,
         )
 
     def combat_resolve_party_intent(
@@ -4626,7 +5391,7 @@ class GameService:
         else:
             world = None
 
-        scene_ctx = scene or {}
+        scene_ctx = self._scene_with_world_weather(player, scene)
         party_allies = [player, *self._active_party_companions(player)]
         reinforcement_note = ""
         working_enemies = list(enemies or [])
@@ -4648,6 +5413,7 @@ class GameService:
                 "distance": scene_ctx.get("distance", "close"),
                 "terrain": scene_ctx.get("terrain", "open"),
                 "surprise": scene_ctx.get("surprise", "none"),
+                "weather": scene_ctx.get("weather", "Unknown"),
             },
         )
         self.combat_service.set_seed(seed)
@@ -4657,7 +5423,7 @@ class GameService:
             choose_action=choose_action,
             choose_target=choose_target,
             evaluate_ai_action=evaluate_ai_action,
-            scene=scene,
+            scene=scene_ctx,
         )
         if reinforcement_note:
             self._append_party_combat_log(result, reinforcement_note)
@@ -5994,6 +6760,15 @@ class GameService:
                     continue
                 label = key.replace("_", " ").title()
                 conditions_list.append(f"{label}({rounds})")
+        raw_tactical = getattr(player, "flags", {}).get("combat_tactical_tags", {})
+        if isinstance(raw_tactical, dict):
+            for key, rounds in raw_tactical.items():
+                slug = str(key or "").strip().lower()
+                duration = int(rounds or 0)
+                if not slug or duration <= 0:
+                    continue
+                label = slug.replace("_", " ").title()
+                conditions_list.append(f"{label}({duration})")
         conditions = " | ".join(conditions_list) if conditions_list else "—"
 
         scene = scene_ctx or {}
@@ -6114,6 +6889,11 @@ class GameService:
             except Exception:
                 pass
 
+        flags = getattr(character, "flags", None)
+        subclass_name = ""
+        if isinstance(flags, dict):
+            subclass_name = str(flags.get("subclass_name", "") or "").strip()
+
         return CharacterCreationSummaryView(
             character_id=character.id or 0,
             name=character.name,
@@ -6130,6 +6910,7 @@ class GameService:
             background_features=list(character.background_features or []),
             inventory=list(character.inventory or []),
             starting_location_name=location_name,
+            subclass_name=subclass_name,
         )
 
     def apply_encounter_reward_intent(self, character: Character, monster: Entity) -> RewardOutcomeView:
@@ -6575,6 +7356,124 @@ class GameService:
             social = {}
             world.flags["npc_social"] = social
         return social
+
+    @classmethod
+    def _world_town_npc_state(cls, world) -> dict:
+        if not getattr(world, "flags", None):
+            world.flags = {}
+        row = world.flags.setdefault("town_npcs_v1", {})
+        if not isinstance(row, dict):
+            row = {}
+            world.flags["town_npcs_v1"] = row
+        row["version"] = int(cls._PROCEDURAL_TOWN_NPC_VERSION)
+        generated = row.setdefault("generated", [])
+        if not isinstance(generated, list):
+            generated = []
+            row["generated"] = generated
+        routines = row.setdefault("routines", {})
+        if not isinstance(routines, dict):
+            routines = {}
+            row["routines"] = routines
+        affinities = row.setdefault("affinities", {})
+        if not isinstance(affinities, dict):
+            affinities = {}
+            row["affinities"] = affinities
+        return row
+
+    @classmethod
+    def _procedural_name_for_rng(cls, rng: random.Random) -> str:
+        first = cls._PROCEDURAL_NAME_PREFIXES[rng.randrange(len(cls._PROCEDURAL_NAME_PREFIXES))]
+        second = cls._PROCEDURAL_NAME_SUFFIXES[rng.randrange(len(cls._PROCEDURAL_NAME_SUFFIXES))]
+        return f"{first}{second}"
+
+    def _ensure_persistent_town_npcs(self, world) -> bool:
+        state = self._world_town_npc_state(world)
+        existing = state.get("generated", [])
+        if isinstance(existing, list) and existing:
+            return False
+
+        seed = derive_seed(
+            namespace="town.npcs.bootstrap",
+            context={
+                "world_id": int(getattr(world, "id", 0) or 0),
+                "world_seed": int(getattr(world, "rng_seed", 0) or 0),
+            },
+        )
+        rng = random.Random(seed)
+        generated: list[dict[str, object]] = []
+        routines: dict[str, dict[str, object]] = {}
+        affinities: dict[str, str] = {}
+        seen_ids: set[str] = set()
+
+        for template in self._PROCEDURAL_TOWN_NPC_TEMPLATES:
+            template_id = str(template.get("template_id", "npc")).strip().lower()
+            npc_name = self._procedural_name_for_rng(rng)
+            npc_id = f"generated_{template_id}_{npc_name.lower()}"
+            counter = 2
+            while npc_id in seen_ids:
+                npc_id = f"generated_{template_id}_{npc_name.lower()}_{counter}"
+                counter += 1
+            seen_ids.add(npc_id)
+            generated.append(
+                {
+                    "id": npc_id,
+                    "name": npc_name,
+                    "role": str(template.get("role", "Resident")),
+                    "temperament": str(template.get("temperament", "neutral")),
+                    "openness": int(template.get("openness", 5) or 5),
+                    "aggression": int(template.get("aggression", 4) or 4),
+                    "is_procedural": True,
+                    "template_id": template_id,
+                    "dialogue_profile": str(template.get("dialogue_profile", "") or "").strip(),
+                }
+            )
+            routine = template.get("routine", {})
+            if isinstance(routine, dict):
+                routines[npc_id] = {
+                    "day": str(routine.get("day", "Town") or "Town"),
+                    "night": str(routine.get("night", "Town") or "Town"),
+                    "midnight": str(routine.get("midnight", "Town") or "Town"),
+                    "closed": bool(routine.get("closed", False)),
+                }
+            affinity = str(template.get("faction_affinity", "") or "").strip().lower()
+            if affinity:
+                affinities[npc_id] = affinity
+
+        state["generated"] = generated
+        state["routines"] = routines
+        state["affinities"] = affinities
+        return True
+
+    def _town_npcs_for_world(self, world) -> list[dict]:
+        self._ensure_persistent_town_npcs(world)
+        state = self._world_town_npc_state(world)
+        generated_raw = state.get("generated", [])
+        generated: list[dict] = []
+        if isinstance(generated_raw, list):
+            generated = [dict(row) for row in generated_raw if isinstance(row, dict)]
+        return [*list(self._TOWN_NPCS), *generated]
+
+    def _npc_faction_affinity(self, world, npc_id: str) -> str | None:
+        normalized = str(npc_id or "").strip().lower()
+        if not normalized:
+            return None
+        static_affinity = self._NPC_FACTION_AFFINITY.get(normalized)
+        if static_affinity:
+            return static_affinity
+        state = self._world_town_npc_state(world)
+        affinities = state.get("affinities", {})
+        if not isinstance(affinities, dict):
+            return None
+        affinity = str(affinities.get(normalized, "") or "").strip().lower()
+        return affinity or None
+
+    def _npc_dialogue_profile(self, npc: dict) -> str:
+        profile = str(npc.get("dialogue_profile", "") or "").strip()
+        if profile:
+            return profile
+        if bool(npc.get("is_procedural", False)):
+            return "template:social"
+        return ""
 
     @staticmethod
     def _world_quests(world) -> dict:
@@ -7901,6 +8800,383 @@ class GameService:
         return worst_partner
 
     @staticmethod
+    def _faction_pair_key(left: str, right: str) -> str:
+        ordered = sorted([str(left or "").strip().lower(), str(right or "").strip().lower()])
+        if len(ordered) != 2 or not ordered[0] or not ordered[1] or ordered[0] == ordered[1]:
+            return ""
+        return f"{ordered[0]}|{ordered[1]}"
+
+    @classmethod
+    def _world_faction_diplomacy_state(cls, world) -> dict:
+        narrative = cls._world_narrative_flags(world)
+        raw = narrative.setdefault("faction_diplomacy", {})
+        if not isinstance(raw, dict):
+            raw = {}
+            narrative["faction_diplomacy"] = raw
+        if not isinstance(raw.get("relations"), dict):
+            raw["relations"] = {}
+        if not isinstance(raw.get("border_pressure"), dict):
+            raw["border_pressure"] = {}
+        if not isinstance(raw.get("active_wars"), list):
+            raw["active_wars"] = []
+        if not isinstance(raw.get("active_alliances"), list):
+            raw["active_alliances"] = []
+        if not isinstance(raw.get("factions"), list):
+            raw["factions"] = []
+        raw["last_turn"] = int(raw.get("last_turn", -1) or -1)
+        return raw
+
+    def _diplomacy_seed_factions(
+        self,
+        *,
+        character: Character | None,
+        current_location: Location | None,
+        existing: dict,
+    ) -> list[str]:
+        selected: list[str] = []
+
+        for faction_id in list(existing.get("factions", []) or []):
+            normalized = str(faction_id or "").strip().lower()
+            if normalized and normalized not in selected:
+                selected.append(normalized)
+
+        for faction_id in self._location_faction_ids(current_location):
+            normalized = str(faction_id or "").strip().lower()
+            if normalized and normalized not in selected:
+                selected.append(normalized)
+
+        if character is not None:
+            discovered = self._discovered_factions(character, current_location=current_location)
+            for faction_id in sorted(discovered):
+                normalized = str(faction_id or "").strip().lower()
+                if normalized and normalized not in selected:
+                    selected.append(normalized)
+
+        defaults = ("wardens", "wild", "undead")
+        for faction_id in defaults:
+            if faction_id not in selected:
+                selected.append(faction_id)
+
+        if self.faction_repo:
+            if character is not None:
+                target = f"character:{int(getattr(character, 'id', 0) or 0)}"
+                standing_factions: list[str] = []
+                for faction in self.faction_repo.list_all():
+                    faction_id = str(getattr(faction, "id", "") or "").strip().lower()
+                    if not faction_id:
+                        continue
+                    reputation = int(getattr(faction, "reputation", {}).get(target, 0) or 0)
+                    if reputation != 0:
+                        standing_factions.append(faction_id)
+                standing_factions.sort()
+                for faction_id in standing_factions:
+                    if faction_id not in selected:
+                        selected.append(faction_id)
+
+            if len(selected) < 3:
+                repo_ids = sorted(
+                    str(getattr(faction, "id", "") or "").strip().lower()
+                    for faction in self.faction_repo.list_all()
+                    if str(getattr(faction, "id", "") or "").strip()
+                )
+                for faction_id in repo_ids:
+                    if faction_id and faction_id not in selected:
+                        selected.append(faction_id)
+                    if len(selected) >= 3:
+                        break
+
+        return sorted(selected)[:12]
+
+    def _sync_faction_diplomacy(
+        self,
+        world,
+        *,
+        character: Character | None = None,
+        current_location: Location | None = None,
+    ) -> tuple[dict[str, object], bool]:
+        state = self._world_faction_diplomacy_state(world)
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+        world_seed = int(getattr(world, "rng_seed", 0) or 0)
+        threat_level = int(getattr(world, "threat_level", 0) or 0)
+
+        factions = self._diplomacy_seed_factions(character=character, current_location=current_location, existing=state)
+        if len(factions) < 2:
+            changed = int(state.get("last_turn", -1) or -1) != world_turn
+            state["factions"] = factions
+            state["last_turn"] = world_turn
+            return state, changed
+
+        narrative = self._world_narrative_flags(world)
+        graph = narrative.setdefault("relationship_graph", {})
+        if not isinstance(graph, dict):
+            graph = {}
+            narrative["relationship_graph"] = graph
+        graph_edges = graph.setdefault("faction_edges", {})
+        if not isinstance(graph_edges, dict):
+            graph_edges = {}
+            graph["faction_edges"] = graph_edges
+
+        raw_relations = state.get("relations", {})
+        if not isinstance(raw_relations, dict):
+            raw_relations = {}
+        relations: dict[str, int] = {}
+        for left_index in range(len(factions)):
+            for right_index in range(left_index + 1, len(factions)):
+                pair = self._faction_pair_key(factions[left_index], factions[right_index])
+                if not pair:
+                    continue
+                if pair in raw_relations:
+                    value = raw_relations[pair]
+                elif pair in graph_edges:
+                    value = graph_edges[pair]
+                else:
+                    seed = derive_seed(
+                        namespace="faction.diplomacy.initial",
+                        context={
+                            "world_seed": world_seed,
+                            "pair": pair,
+                        },
+                    )
+                    value = random.Random(seed).randint(-20, 20)
+                relations[pair] = max(self._DIPLOMACY_RELATION_MIN, min(self._DIPLOMACY_RELATION_MAX, int(value)))
+
+        previous_relations = dict(relations)
+        last_turn = int(state.get("last_turn", -1) or -1)
+        if world_turn > last_turn:
+            for turn in range(last_turn + 1, world_turn + 1):
+                for pair, score in list(relations.items()):
+                    seed = derive_seed(
+                        namespace="faction.diplomacy.step",
+                        context={
+                            "world_seed": world_seed,
+                            "turn": int(turn),
+                            "pair": str(pair),
+                            "threat": threat_level,
+                        },
+                    )
+                    roll = random.Random(seed).randint(1, 100)
+                    delta = 0
+                    if roll <= 8:
+                        delta = -6
+                    elif roll <= 20:
+                        delta = -3
+                    elif roll >= 95:
+                        delta = 6
+                    elif roll >= 82:
+                        delta = 3
+                    if threat_level >= 6:
+                        delta -= 1
+                    if score <= -55 and delta < 0:
+                        delta = 0
+                    if score >= 55 and delta > 0:
+                        delta = 0
+                    relations[pair] = max(
+                        self._DIPLOMACY_RELATION_MIN,
+                        min(self._DIPLOMACY_RELATION_MAX, int(score) + int(delta)),
+                    )
+
+        active_wars: list[str] = []
+        active_alliances: list[str] = []
+        border_pressure: dict[str, int] = {faction_id: 0 for faction_id in factions}
+        for pair, score in relations.items():
+            left, right = str(pair).split("|", 1)
+            if int(score) <= int(self._DIPLOMACY_WAR_THRESHOLD):
+                active_wars.append(pair)
+                border_pressure[left] = int(border_pressure.get(left, 0)) + 3
+                border_pressure[right] = int(border_pressure.get(right, 0)) + 3
+            elif int(score) >= int(self._DIPLOMACY_ALLIANCE_THRESHOLD):
+                active_alliances.append(pair)
+
+        previous_wars = sorted(str(item) for item in list(state.get("active_wars", []) or []))
+        previous_alliances = sorted(str(item) for item in list(state.get("active_alliances", []) or []))
+        state["factions"] = factions
+        state["relations"] = {key: int(value) for key, value in sorted(relations.items())}
+        state["active_wars"] = sorted(active_wars)
+        state["active_alliances"] = sorted(active_alliances)
+        state["border_pressure"] = {key: int(value) for key, value in sorted(border_pressure.items()) if int(value) > 0}
+        state["last_turn"] = world_turn
+
+        graph_edges.update({key: int(value) for key, value in relations.items()})
+        graph["faction_edges"] = graph_edges
+
+        changed = (
+            world_turn != last_turn
+            or relations != previous_relations
+            or sorted(active_wars) != previous_wars
+            or sorted(active_alliances) != previous_alliances
+        )
+        return state, bool(changed)
+
+    @staticmethod
+    def _diplomacy_travel_risk_shift(*, diplomacy_state: dict[str, object], location: Location | None) -> int:
+        if location is None:
+            return 0
+        local_factions = {
+            str(faction_id or "").strip().lower()
+            for faction_id in getattr(location, "factions", []) or []
+            if str(faction_id or "").strip()
+        }
+        if not local_factions:
+            return 0
+
+        pressure_map = diplomacy_state.get("border_pressure", {})
+        if not isinstance(pressure_map, dict):
+            pressure_map = {}
+        wars = diplomacy_state.get("active_wars", [])
+        if not isinstance(wars, list):
+            wars = []
+        alliances = diplomacy_state.get("active_alliances", [])
+        if not isinstance(alliances, list):
+            alliances = []
+
+        shift = 0
+        for faction_id in local_factions:
+            shift += int(pressure_map.get(faction_id, 0) or 0)
+
+        for pair in wars:
+            left, sep, right = str(pair).partition("|")
+            if sep and local_factions.intersection({left, right}):
+                shift += 6
+
+        for pair in alliances:
+            left, sep, right = str(pair).partition("|")
+            if sep and local_factions.intersection({left, right}):
+                shift -= 3
+
+        return max(-10, min(18, int(shift)))
+
+    @staticmethod
+    def _faction_label(faction_id: str) -> str:
+        return str(faction_id or "").replace("_", " ").title()
+
+    @classmethod
+    def _diplomacy_route_note(cls, *, diplomacy_state: dict[str, object], location: Location | None) -> str:
+        if location is None:
+            return ""
+        local_factions = {
+            str(faction_id or "").strip().lower()
+            for faction_id in getattr(location, "factions", []) or []
+            if str(faction_id or "").strip()
+        }
+        if not local_factions:
+            return ""
+
+        wars = diplomacy_state.get("active_wars", [])
+        if isinstance(wars, list):
+            for pair in wars:
+                left, sep, right = str(pair).partition("|")
+                if not sep:
+                    continue
+                if local_factions.intersection({left, right}):
+                    return f"Border clashes between {cls._faction_label(left)} and {cls._faction_label(right)} increase route danger."
+
+        alliances = diplomacy_state.get("active_alliances", [])
+        if isinstance(alliances, list):
+            for pair in alliances:
+                left, sep, right = str(pair).partition("|")
+                if not sep:
+                    continue
+                if local_factions.intersection({left, right}):
+                    return f"Joint patrols from {cls._faction_label(left)} and {cls._faction_label(right)} steady nearby roads."
+
+        return ""
+
+    @staticmethod
+    def _diplomacy_fingerprint(diplomacy_state: dict[str, object], limit: int = 4) -> tuple[str, ...]:
+        relations = diplomacy_state.get("relations", {})
+        if not isinstance(relations, dict):
+            return ()
+        rows = sorted((str(key), int(value)) for key, value in relations.items())
+        trimmed = rows[: max(1, int(limit))]
+        return tuple(f"{key}:{value}" for key, value in trimmed)
+
+    def _diplomacy_rumour_item(
+        self,
+        *,
+        world,
+        character_id: int,
+        diplomacy_state: dict[str, object],
+    ) -> RumourItemView | None:
+        day = int(getattr(world, "current_turn", 0) or 0)
+        wars = [str(item) for item in list(diplomacy_state.get("active_wars", []) or []) if "|" in str(item)]
+        alliances = [str(item) for item in list(diplomacy_state.get("active_alliances", []) or []) if "|" in str(item)]
+        if not wars and not alliances:
+            return None
+
+        seed = derive_seed(
+            namespace="town.rumour.diplomacy",
+            context={
+                "day": day,
+                "character_id": int(character_id),
+                "wars": tuple(sorted(wars)),
+                "alliances": tuple(sorted(alliances)),
+            },
+        )
+        rng = random.Random(seed)
+
+        if wars and (not alliances or rng.randint(1, 100) <= 70):
+            pair = wars[rng.randrange(len(wars))]
+            left, right = pair.split("|", 1)
+            return to_rumour_item_view(
+                rumour_id=f"diplomacy:war:{pair}:{day}",
+                text=f"[Border War] Scouts report fresh skirmishes between {self._faction_label(left)} and {self._faction_label(right)} along frontier roads.",
+                confidence="credible",
+                source="Caravan Wardens",
+            )
+
+        pair = alliances[rng.randrange(len(alliances))]
+        left, right = pair.split("|", 1)
+        return to_rumour_item_view(
+            rumour_id=f"diplomacy:alliance:{pair}:{day}",
+            text=f"[Alliance Watch] {self._faction_label(left)} and {self._faction_label(right)} are coordinating patrol routes, opening safer trade windows.",
+            confidence="uncertain",
+            source="Guild Couriers",
+        )
+
+    def _diplomacy_quest_urgency_suffix(
+        self,
+        *,
+        diplomacy_state: dict[str, object],
+        quest_payload: dict,
+    ) -> str:
+        if not isinstance(quest_payload, dict) or not self.location_repo:
+            return ""
+        objective_kind = str(quest_payload.get("objective_kind", "")).strip().lower()
+        if objective_kind != "travel_to":
+            return ""
+        try:
+            location_id = int(quest_payload.get("objective_target_location_id", 0) or 0)
+        except Exception:
+            return ""
+        if location_id <= 0:
+            return ""
+        location = self.location_repo.get(location_id)
+        if location is None:
+            return ""
+
+        local_factions = {
+            str(faction_id or "").strip().lower()
+            for faction_id in getattr(location, "factions", []) or []
+            if str(faction_id or "").strip()
+        }
+        if not local_factions:
+            return ""
+
+        wars = list(diplomacy_state.get("active_wars", []) or [])
+        for pair in wars:
+            left, sep, right = str(pair).partition("|")
+            if sep and local_factions.intersection({left, right}):
+                return "Warfront pressure"
+
+        alliances = list(diplomacy_state.get("active_alliances", []) or [])
+        for pair in alliances:
+            left, sep, right = str(pair).partition("|")
+            if sep and local_factions.intersection({left, right}):
+                return "Alliance escort window"
+
+        return ""
+
+    @staticmethod
     def _bounded_price(base_price: int, modifier: int) -> int:
         floor = 1
         ceiling = max(2, int(base_price) * 2)
@@ -8216,7 +9492,8 @@ class GameService:
 
     def _find_town_npc(self, npc_id: str) -> dict:
         target = (npc_id or "").strip().lower()
-        for npc in self._TOWN_NPCS:
+        world = self._require_world()
+        for npc in self._town_npcs_for_world(world):
             if str(npc["id"]).lower() == target:
                 return npc
         raise ValueError(f"Unknown NPC: {npc_id}")
@@ -8400,6 +9677,12 @@ class GameService:
                     "distance": "close",
                     "terrain": str(getattr(location, "biome", "open") if location else "open"),
                     "surprise": "none",
+                    "weather": str(
+                        self._world_immersion_state(
+                            world,
+                            biome_name=str(getattr(location, "biome", "") or ""),
+                        ).get("weather", "Unknown")
+                    ),
                 },
             )
 

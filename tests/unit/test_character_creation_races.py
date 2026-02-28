@@ -440,6 +440,85 @@ class CharacterCreationRacesTests(unittest.TestCase):
         self.assertEqual(14, created.attributes["dexterity"])
         self.assertEqual(11, created.attributes["wisdom"])
 
+    def test_lists_bespoke_subclasses_for_playable_class(self) -> None:
+        class_repo = _FakeClassRepo(
+            [
+                CharacterClass(
+                    id=1,
+                    name="Wizard",
+                    slug="wizard",
+                    hit_die="d6",
+                    primary_ability="intelligence",
+                    base_attributes={"INT": 16},
+                )
+            ]
+        )
+        service = CharacterCreationService(
+            self.char_repo,
+            class_repo,
+            self.location_repo,
+            open5e_client=None,
+        )
+
+        subclasses = service.list_subclasses_for_class("wizard")
+        names = [row.name for row in subclasses]
+        self.assertEqual(6, len(subclasses))
+        self.assertIn("School of the Crimson Spire", names)
+        self.assertIn("School of the Aurelian Order", names)
+
+    def test_create_character_persists_selected_subclass_in_flags(self) -> None:
+        class_repo = _FakeClassRepo(
+            [
+                CharacterClass(
+                    id=1,
+                    name="Artificer",
+                    slug="artificer",
+                    hit_die="d8",
+                    primary_ability="intelligence",
+                    base_attributes={"INT": 16},
+                )
+            ]
+        )
+        char_repo = _FakeCharacterRepo()
+        service = CharacterCreationService(
+            char_repo,
+            class_repo,
+            _FakeLocationRepo(),
+            open5e_client=None,
+        )
+
+        created = service.create_character(
+            name="Vara",
+            class_index=0,
+            subclass_slug="iron_vanguard",
+        )
+
+        self.assertEqual("iron_vanguard", created.flags.get("subclass_slug"))
+        self.assertEqual("The Iron Vanguard", created.flags.get("subclass_name"))
+
+    def test_create_character_rejects_invalid_subclass(self) -> None:
+        class_repo = _FakeClassRepo(
+            [
+                CharacterClass(
+                    id=1,
+                    name="Fighter",
+                    slug="fighter",
+                    hit_die="d10",
+                    primary_ability="strength",
+                    base_attributes={"STR": 15},
+                )
+            ]
+        )
+        service = CharacterCreationService(
+            _FakeCharacterRepo(),
+            class_repo,
+            _FakeLocationRepo(),
+            open5e_client=None,
+        )
+
+        with self.assertRaises(ValueError):
+            service.create_character(name="Cato", class_index=0, subclass_slug="crimson_spire")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -115,6 +115,7 @@ class CharacterCreationSummaryView:
     background_features: List[str] = field(default_factory=list)
     inventory: List[str] = field(default_factory=list)
     starting_location_name: str = "Starting Town"
+    subclass_name: str = ""
 
 
 @dataclass

@@ -245,6 +245,112 @@ class FeaturePipelineTests(unittest.TestCase):
         self.assertTrue(any("stunned and loses the turn" in row.text.lower() for row in result.log))
         self.assertNotIn("combat_statuses", getattr(result.allies[0], "flags", {}))
 
+    def test_paralysed_actor_loses_turn_in_party_combat(self) -> None:
+        service = CombatService(verbosity="compact")
+        service.set_seed(9)
+
+        ally = Character(id=91, name="Bex", class_name="fighter", hp_current=18, hp_max=18)
+        ally.flags = {"combat_statuses": [{"id": "paralysed", "rounds": 1, "potency": 1}]}
+        ally.attributes["strength"] = 18
+
+        enemy = Entity(id=92, name="Bandit", level=1, hp=12, hp_current=12, hp_max=12, armour_class=10, attack_bonus=0, damage_die="d4")
+
+        def choose_action(options, _player, _enemy, _round_no, _scene):
+            return "Attack" if "Attack" in options else options[0]
+
+        result = service.fight_party_turn_based([ally], [enemy], choose_action)
+
+        self.assertTrue(any("incapacitated and loses the turn" in row.text.lower() for row in result.log))
+
+    def test_restrained_actor_cannot_dash_or_flee(self) -> None:
+        service = CombatService(verbosity="compact")
+        service.set_seed(3)
+
+        hero = Character(id=101, name="Kite", class_name="rogue", hp_current=16, hp_max=16)
+        hero.flags = {"combat_statuses": [{"id": "restrained", "rounds": 2, "potency": 1}]}
+        hero.attributes["dexterity"] = 16
+
+        enemy = Entity(id=102, name="Sentry", level=1, hp=30, hp_current=30, hp_max=30, armour_class=12, attack_bonus=0, damage_die="d4")
+
+        def choose_action(_options, _player, _enemy, round_no, _scene):
+            if round_no == 1:
+                return "Dash"
+            return "Flee"
+
+        result = service.fight_turn_based(hero, enemy, choose_action)
+
+        self.assertTrue(any("cannot dash" in row.text.lower() for row in result.log))
+        self.assertTrue(any("cannot flee" in row.text.lower() for row in result.log))
+
+    def test_exhaustion_six_causes_collapse(self) -> None:
+        service = CombatService(verbosity="compact")
+        hero = Character(id=111, name="Lio", class_name="fighter", hp_current=20, hp_max=20)
+        hero.flags = {"combat_statuses": [{"id": "exhaustion", "rounds": 2, "potency": 6}]}
+        log = []
+
+        service._apply_start_turn_statuses(hero, log)
+
+        self.assertEqual(0, hero.hp_current)
+        self.assertTrue(any("collapses from exhaustion" in row.text.lower() for row in log))
+
+    def test_condition_feature_applies_status_with_duration(self) -> None:
+        repo = InMemoryFeatureRepository(
+            {
+                "feature.snare_strike": Feature(
+                    id=12,
+                    slug="feature.snare_strike",
+                    name="Snare Strike",
+                    trigger_key="on_attack_hit",
+                    effect_kind="condition_restrained",
+                    effect_value=2,
+                )
+            }
+        )
+        hero = Character(id=121, name="Shade", class_name="rogue", hp_current=12, hp_max=12)
+        hero.attributes["dexterity"] = 16
+        repo.grant_feature_by_slug(int(hero.id or 0), "feature.snare_strike")
+
+        enemy = Entity(id=122, name="Guard", level=1, hp=40, hp_current=40, hp_max=40, armour_class=1, attack_min=1, attack_max=1)
+        service = CombatService(feature_repo=repo, verbosity="compact")
+        service.set_seed(5)
+
+        def choose_action(_options, _player, _enemy, round_no, _scene):
+            return "Attack"
+
+        result = service.fight_turn_based(hero, enemy, choose_action)
+
+        self.assertTrue(any("is now Restrained (2 rounds)" in row.text for row in result.log))
+
+    def test_weather_rain_disadvantages_ranged_attackers(self) -> None:
+        service = CombatService(verbosity="compact")
+        ranged_actor = Character(id=131, name="Iri", class_name="wizard", hp_current=12, hp_max=12)
+        melee_actor = Character(id=132, name="Brakk", class_name="fighter", hp_current=12, hp_max=12)
+
+        self.assertEqual(
+            "disadvantage",
+            service._weather_attack_advantage(weather="rain", attacker=ranged_actor, action="attack"),
+        )
+        self.assertIsNone(service._weather_attack_advantage(weather="rain", attacker=melee_actor, action="attack"))
+
+    def test_weather_rain_logs_ranged_attack_disadvantage(self) -> None:
+        service = CombatService(verbosity="compact")
+        service.set_seed(17)
+
+        hero = Character(id=141, name="Lyra", class_name="wizard", hp_current=14, hp_max=14)
+        enemy = Entity(id=142, name="Bandit", level=1, hp=12, hp_current=12, hp_max=12, armour_class=12, damage_die="d4")
+
+        def choose_action(options, _player, _enemy, _round_no, _scene):
+            return "Attack" if "Attack" in options else options[0]
+
+        result = service.fight_turn_based(
+            hero,
+            enemy,
+            choose_action,
+            scene={"distance": "engaged", "terrain": "open", "surprise": "none", "weather": "Rain"},
+        )
+
+        self.assertTrue(any("disadvantage on your ranged attack" in row.text.lower() for row in result.log))
+
 
 if __name__ == "__main__":
     unittest.main()

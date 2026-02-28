@@ -14,6 +14,7 @@ class DialogueService:
     _DIALOGUE_CONTENT_FILE = "data/world/dialogue_trees.json"
     _MANEUVERS = ("friendly", "direct", "intimidate")
     _STAGES = ("opening", "probe", "resolve")
+    _SKILL_CHECKS = ("persuasion", "intimidation", "deception")
 
     @classmethod
     def _dialogue_content_path(cls) -> Path:
@@ -91,6 +92,27 @@ class DialogueService:
                     if response is not None and not str(response).strip():
                         errors.append(f"{prefix}.response must be a non-empty string when provided")
                     _validate_variants(owner=f"{prefix}.response_variants", value=choice.get("response_variants"))
+                    skill_check = choice.get("skill_check")
+                    if skill_check is not None:
+                        if not isinstance(skill_check, dict):
+                            errors.append(f"{prefix}.skill_check must be an object")
+                        else:
+                            skill_name = str(skill_check.get("skill", "")).strip().lower()
+                            if skill_name not in cls._SKILL_CHECKS:
+                                errors.append(f"{prefix}.skill_check.skill must be one of persuasion|intimidation|deception")
+                            dc_value = skill_check.get("dc", None)
+                            try:
+                                dc_int = int(dc_value)
+                                if dc_int < 5 or dc_int > 25:
+                                    errors.append(f"{prefix}.skill_check.dc must be between 5 and 25")
+                            except Exception:
+                                errors.append(f"{prefix}.skill_check.dc must be an integer")
+                            success_stage = str(skill_check.get("success_stage", "")).strip().lower()
+                            failure_stage = str(skill_check.get("failure_stage", "")).strip().lower()
+                            if success_stage and success_stage not in cls._STAGES:
+                                errors.append(f"{prefix}.skill_check.success_stage must be one of opening|probe|resolve")
+                            if failure_stage and failure_stage not in cls._STAGES:
+                                errors.append(f"{prefix}.skill_check.failure_stage must be one of opening|probe|resolve")
                     effects = choice.get("effects", [])
                     if effects is not None:
                         if not isinstance(effects, list):
@@ -326,6 +348,31 @@ class DialogueService:
         row["stage_id"] = stage
         return row
 
+    @staticmethod
+    def _dialogue_stage_content(*, content: object, npc_id: str, stage_id: str, npc_profile_id: str = "") -> tuple[str, object, object]:
+        npc_trees = content.get("npcs", {}) if isinstance(content, dict) else {}
+        if not isinstance(npc_trees, dict):
+            return "", [], []
+
+        candidates: list[str] = []
+        profile_key = str(npc_profile_id or "").strip()
+        if profile_key:
+            candidates.append(profile_key)
+        candidates.append(str(npc_id))
+
+        for key in candidates:
+            npc_tree = npc_trees.get(str(key), {})
+            if not isinstance(npc_tree, dict):
+                continue
+            content_stage = npc_tree.get(str(stage_id), {})
+            if not isinstance(content_stage, dict):
+                continue
+            line = str(content_stage.get("line", "")).strip()
+            variants = content_stage.get("variants", [])
+            choices = content_stage.get("choices", [])
+            return line, variants, choices
+        return "", [], []
+
     def build_dialogue_session(
         self,
         *,
@@ -336,6 +383,7 @@ class DialogueService:
         npc_name: str,
         greeting: str,
         approaches: Sequence[str],
+        npc_profile_id: str = "",
     ) -> dict:
         stage_row = self._session_row(character=character, npc_id=str(npc_id))
         stage_id = str(stage_row.get("stage_id", "opening"))
@@ -344,12 +392,12 @@ class DialogueService:
         available_ids = {self._normalize_choice_id(label) for label in available_labels}
 
         content = self.load_dialogue_content_cached()
-        npc_trees = content.get("npcs", {}) if isinstance(content, dict) else {}
-        npc_tree = npc_trees.get(str(npc_id), {}) if isinstance(npc_trees, dict) else {}
-        content_stage = npc_tree.get(stage_id, {}) if isinstance(npc_tree, dict) else {}
-        content_line = str(content_stage.get("line", "")).strip() if isinstance(content_stage, dict) else ""
-        content_line_variants = content_stage.get("variants", []) if isinstance(content_stage, dict) else []
-        content_choices = content_stage.get("choices", []) if isinstance(content_stage, dict) else []
+        content_line, content_line_variants, content_choices = self._dialogue_stage_content(
+            content=content,
+            npc_id=str(npc_id),
+            stage_id=str(stage_id),
+            npc_profile_id=str(npc_profile_id),
+        )
         selected_line = self._pick_variant_line(
             world=world,
             character=character,
@@ -389,10 +437,15 @@ class DialogueService:
                     if not isinstance(row, dict):
                         continue
                     row_id = self._normalize_choice_id(str(row.get("id", "")))
-                    if row_id and row_id == key:
+                    row_label = self._normalize_choice_id(str(row.get("label", "")))
+                    if (row_id and row_id == key) or (row_label and row_label == key):
                         rule = row
                         break
             if isinstance(rule, dict):
+                skill_check = rule.get("skill_check")
+                if isinstance(skill_check, dict):
+                    is_available = True
+                    locked_reason = ""
                 requires = rule.get("requires", [])
                 req_list = [str(item).strip().lower() for item in requires] if isinstance(requires, list) else []
                 req_fail = self._failed_requirements(
@@ -405,10 +458,25 @@ class DialogueService:
                 if req_fail:
                     is_available = False
                     locked_reason = self._requirement_reason(req_fail[0])
+            choice_id = key
+            rendered_label = label
+            if isinstance(rule, dict):
+                rule_id = self._normalize_choice_id(str(rule.get("id", "")))
+                if rule_id:
+                    choice_id = rule_id
+                skill_check = rule.get("skill_check")
+                if isinstance(skill_check, dict):
+                    skill_name = str(skill_check.get("skill", "")).strip().lower()
+                    try:
+                        skill_dc = int(skill_check.get("dc", 12) or 12)
+                    except Exception:
+                        skill_dc = 12
+                    if skill_name in self._SKILL_CHECKS:
+                        rendered_label = f"{label} [{skill_name.title()} DC {max(5, min(25, skill_dc))}]"
             choices.append(
                 {
-                    "choice_id": key,
-                    "label": label,
+                    "choice_id": choice_id,
+                    "label": rendered_label,
                     "available": bool(is_available),
                     "locked_reason": locked_reason,
                 }
@@ -587,6 +655,7 @@ class DialogueService:
         greeting: str,
         approaches: Sequence[str],
         choice_id: str,
+        npc_profile_id: str = "",
     ) -> dict:
         session = self.build_dialogue_session(
             world=world,
@@ -596,6 +665,7 @@ class DialogueService:
             npc_name=str(npc_name),
             greeting=str(greeting),
             approaches=approaches,
+            npc_profile_id=str(npc_profile_id),
         )
         choice_key = self._normalize_choice_id(choice_id)
         selected = None
@@ -613,19 +683,23 @@ class DialogueService:
 
         stage_id = str(session.get("stage_id", "opening") or "opening").strip().lower()
         content = self.load_dialogue_content_cached()
-        npc_trees = content.get("npcs", {}) if isinstance(content, dict) else {}
-        npc_tree = npc_trees.get(str(npc_id), {}) if isinstance(npc_trees, dict) else {}
-        content_stage = npc_tree.get(stage_id, {}) if isinstance(npc_tree, dict) else {}
-        content_choices = content_stage.get("choices", []) if isinstance(content_stage, dict) else []
+        _content_line, _content_variants, content_choices = self._dialogue_stage_content(
+            content=content,
+            npc_id=str(npc_id),
+            stage_id=str(stage_id),
+            npc_profile_id=str(npc_profile_id),
+        )
 
         choice_response = ""
         choice_effects: list[dict] = []
+        choice_skill_check: dict[str, object] | None = None
         if isinstance(content_choices, list):
             for row in content_choices:
                 if not isinstance(row, dict):
                     continue
                 row_id = self._normalize_choice_id(str(row.get("id", "")))
-                if row_id != choice_key:
+                row_label = self._normalize_choice_id(str(row.get("label", "")))
+                if row_id != choice_key and row_label != choice_key:
                     continue
                 base_response = str(row.get("response", "")).strip()
                 response_variants = row.get("response_variants", [])
@@ -640,19 +714,52 @@ class DialogueService:
                 loaded_effects = row.get("effects", [])
                 if isinstance(loaded_effects, list):
                     choice_effects = [item for item in loaded_effects if isinstance(item, dict)]
+                raw_skill_check = row.get("skill_check")
+                if isinstance(raw_skill_check, dict):
+                    skill_name = str(raw_skill_check.get("skill", "")).strip().lower()
+                    if skill_name in self._SKILL_CHECKS:
+                        try:
+                            skill_dc = int(raw_skill_check.get("dc", 12) or 12)
+                        except Exception:
+                            skill_dc = 12
+                        success_stage = str(raw_skill_check.get("success_stage", "")).strip().lower()
+                        failure_stage = str(raw_skill_check.get("failure_stage", "")).strip().lower()
+                        success_response = str(raw_skill_check.get("success_response", "")).strip()
+                        failure_response = str(raw_skill_check.get("failure_response", "")).strip()
+                        normalized_approach = self.normalize_approach(str(raw_skill_check.get("approach", skill_name)))
+                        choice_skill_check = {
+                            "skill": skill_name,
+                            "approach": normalized_approach,
+                            "dc": max(5, min(25, skill_dc)),
+                            "success_stage": success_stage if success_stage in self._STAGES else "",
+                            "failure_stage": failure_stage if failure_stage in self._STAGES else "",
+                            "success_response": success_response,
+                            "failure_response": failure_response,
+                        }
                 break
 
+        resolved_approach = self.normalize_approach(str(selected.get("label", "direct")))
+        if isinstance(choice_skill_check, dict):
+            resolved_approach = str(choice_skill_check.get("approach", choice_skill_check.get("skill", resolved_approach)))
+
         return {
-            "approach": self.normalize_approach(str(selected.get("label", "direct"))),
+            "approach": resolved_approach,
             "accepted": True,
             "reason": "",
             "response": choice_response,
             "effects": choice_effects,
+            "skill_check": choice_skill_check,
         }
 
     @staticmethod
     def normalize_approach(approach: str) -> str:
         token = str(approach or "").strip().lower()
+        if token in {"persuasion", "persuade"}:
+            return "persuasion"
+        if token in {"deception", "deceive", "lie"}:
+            return "deception"
+        if token in {"intimidation", "threaten"}:
+            return "intimidation"
         if token in {"urgent appeal"}:
             return "urgent appeal"
         if token in {"address flashpoint", "flashpoint"}:
@@ -662,6 +769,34 @@ class DialogueService:
         if token in {"leverage rumour", "leverage rumor"}:
             return "leverage rumour"
         return token
+
+    def apply_skill_check_branch(
+        self,
+        *,
+        world,
+        character,
+        npc_id: str,
+        success: bool,
+        branch: dict[str, object],
+    ) -> dict[str, str]:
+        if not self._dialogue_tree_enabled() or not isinstance(branch, dict):
+            return {"response": "", "stage": "", "note": ""}
+
+        response_key = "success_response" if bool(success) else "failure_response"
+        response = str(branch.get(response_key, "")).strip()
+        stage_key = "success_stage" if bool(success) else "failure_stage"
+        target_stage = str(branch.get(stage_key, "")).strip().lower()
+        if target_stage in self._STAGES:
+            session = self._session_row(character=character, npc_id=str(npc_id))
+            prior_stage = str(session.get("stage_id", "opening") or "opening").strip().lower()
+            session["stage_id"] = target_stage
+            if target_stage != prior_stage:
+                return {
+                    "response": response,
+                    "stage": target_stage,
+                    "note": f"Dialogue branch shifts from {prior_stage} to {target_stage}.",
+                }
+        return {"response": response, "stage": "", "note": ""}
 
     def record_outcome(
         self,

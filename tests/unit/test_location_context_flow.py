@@ -139,6 +139,47 @@ class LocationContextFlowTests(unittest.TestCase):
         self.assertEqual(result_a.messages, result_b.messages)
         self.assertIn("stealth", " ".join(result_a.messages).lower())
 
+    def test_travel_pace_changes_duration(self):
+        cautious_service, _cautious_repo, cautious_world_repo, cautious_character_id = self._build_service()
+        hurried_service, _hurried_repo, hurried_world_repo, hurried_character_id = self._build_service()
+
+        cautious_before = cautious_world_repo.load_default().current_turn
+        hurried_before = hurried_world_repo.load_default().current_turn
+
+        cautious_service.travel_intent(
+            cautious_character_id,
+            destination_id=2,
+            travel_mode="road",
+            travel_pace="cautious",
+        )
+        hurried_service.travel_intent(
+            hurried_character_id,
+            destination_id=2,
+            travel_mode="road",
+            travel_pace="hurried",
+        )
+
+        cautious_after = cautious_world_repo.load_default().current_turn
+        hurried_after = hurried_world_repo.load_default().current_turn
+        self.assertGreater(cautious_after - cautious_before, hurried_after - hurried_before)
+
+    def test_hurried_travel_without_rations_builds_exhaustion(self):
+        service, character_repo, _world_repo, character_id = self._build_service()
+
+        result = service.travel_intent(
+            character_id,
+            destination_id=2,
+            travel_mode="road",
+            travel_pace="hurried",
+        )
+
+        updated = character_repo.get(character_id)
+        self.assertIsNotNone(updated)
+        flags = updated.flags if isinstance(updated.flags, dict) else {}
+        survival = flags.get("survival", {}) if isinstance(flags.get("survival", {}), dict) else {}
+        self.assertGreater(int(survival.get("travel_exhaustion_level", 0) or 0), 0)
+        self.assertIn("exhaustion", " ".join(result.messages).lower())
+
     def test_travel_phase_advances_world_by_estimated_days(self):
         service, _repo, world_repo, character_id = self._build_service()
         before = world_repo.load_default().current_turn
