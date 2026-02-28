@@ -1,0 +1,336 @@
+Total monsters: 334
+
+001. Aboleth
+002. Acolyte
+003. Adult Black Dragon
+004. Adult Blue Dragon
+005. Adult Brass Dragon
+006. Adult Bronze Dragon
+007. Adult Copper Dragon
+008. Adult Gold Dragon
+009. Adult Green Dragon
+010. Adult Red Dragon
+011. Adult Silver Dragon
+012. Adult White Dragon
+013. Air Elemental
+014. Ancient Black Dragon
+015. Ancient Blue Dragon
+016. Ancient Brass Dragon
+017. Ancient Bronze Dragon
+018. Ancient Copper Dragon
+019. Ancient Gold Dragon
+020. Ancient Green Dragon
+021. Ancient Red Dragon
+022. Ancient Silver Dragon
+023. Ancient White Dragon
+024. Androsphinx
+025. Animated Armor
+026. Ankheg
+027. Ape
+028. Archmage
+029. Assassin
+030. Awakened Shrub
+031. Awakened Tree
+032. Axe Beak
+033. Azer
+034. Baboon
+035. Badger
+036. Balor
+037. Bandit
+038. Bandit Captain
+039. Barbed Devil
+040. Basilisk
+041. Bat
+042. Bearded Devil
+043. Behir
+044. Berserker
+045. Black Bear
+046. Black Dragon Wyrmling
+047. Black Pudding
+048. Blink Dog
+049. Blood Hawk
+050. Blue Dragon Wyrmling
+051. Boar
+052. Bone Devil
+053. Brass Dragon Wyrmling
+054. Bronze Dragon Wyrmling
+055. Brown Bear
+056. Bugbear
+057. Bulette
+058. Camel
+059. Cat
+060. Centaur
+061. Chain Devil
+062. Chimera
+063. Chuul
+064. Clay Golem
+065. Cloaker
+066. Cloud Giant
+067. Cockatrice
+068. Commoner
+069. Constrictor Snake
+070. Copper Dragon Wyrmling
+071. Couatl
+072. Crab
+073. Crocodile
+074. Cult Fanatic
+075. Cultist
+076. Darkmantle
+077. Death Dog
+078. Deep Gnome (Svirfneblin)
+079. Deer
+080. Deva
+081. Dire Wolf
+082. Djinni
+083. Doppelganger
+084. Draft Horse
+085. Dragon Turtle
+086. Dretch
+087. Drider
+088. Drow
+089. Druid
+090. Dryad
+091. Duergar
+092. Dust Mephit
+093. Eagle
+094. Earth Elemental
+095. Efreeti
+096. Elephant
+097. Elk
+098. Erinyes
+099. Ettercap
+100. Ettin
+101. Fire Elemental
+102. Fire Giant
+103. Flesh Golem
+104. Flying Snake
+105. Flying Sword
+106. Frog
+107. Frost Giant
+108. Gargoyle
+109. Gelatinous Cube
+110. Ghast
+111. Ghost
+112. Ghoul
+113. Giant Ape
+114. Giant Badger
+115. Giant Bat
+116. Giant Boar
+117. Giant Centipede
+118. Giant Constrictor Snake
+119. Giant Crab
+120. Giant Crocodile
+121. Giant Eagle
+122. Giant Elk
+123. Giant Fire Beetle
+124. Giant Frog
+125. Giant Goat
+126. Giant Hyena
+127. Giant Lizard
+128. Giant Octopus
+129. Giant Owl
+130. Giant Poisonous Snake
+131. Giant Rat
+132. Giant Rat (Diseased)
+133. Giant Scorpion
+134. Giant Sea Horse
+135. Giant Shark
+136. Giant Spider
+137. Giant Toad
+138. Giant Vulture
+139. Giant Wasp
+140. Giant Weasel
+141. Giant Wolf Spider
+142. Gibbering Mouther
+143. Glabrezu
+144. Gladiator
+145. Gnoll
+146. Goat
+147. Goblin
+148. Gold Dragon Wyrmling
+149. Gorgon
+150. Gray Ooze
+151. Green Dragon Wyrmling
+152. Green Hag
+153. Grick
+154. Griffon
+155. Grimlock
+156. Guard
+157. Guardian Naga
+158. Gynosphinx
+159. Half-Red Dragon Veteran
+160. Harpy
+161. Hawk
+162. Hell Hound
+163. Hezrou
+164. Hill Giant
+165. Hippogriff
+166. Hobgoblin
+167. Homunculus
+168. Horned Devil
+169. Hunter Shark
+170. Hydra
+171. Hyena
+172. Ice Devil
+173. Ice Mephit
+174. Imp
+175. Invisible Stalker
+176. Iron Golem
+177. Jackal
+178. Killer Whale
+179. Knight
+180. Kobold
+181. Kraken
+182. Lamia
+183. Lemure
+184. Lich
+185. Lion
+186. Lizard
+187. Lizardfolk
+188. Mage
+189. Magma Mephit
+190. Magmin
+191. Mammoth
+192. Manticore
+193. Marilith
+194. Mastiff
+195. Medusa
+196. Merfolk
+197. Merrow
+198. Mimic
+199. Minotaur
+200. Minotaur Skeleton
+201. Mule
+202. Mummy
+203. Mummy Lord
+204. Nalfeshnee
+205. Night Hag
+206. Nightmare
+207. Noble
+208. Ochre Jelly
+209. Octopus
+210. Ogre
+211. Ogre Zombie
+212. Oni
+213. Orc
+214. Otyugh
+215. Owl
+216. Owlbear
+217. Panther
+218. Pegasus
+219. Phase Spider
+220. Pit Fiend
+221. Planetar
+222. Plesiosaurus
+223. Poisonous Snake
+224. Polar Bear
+225. Pony
+226. Priest
+227. Pseudodragon
+228. Purple Worm
+229. Quasit
+230. Quipper
+231. Rakshasa
+232. Rat
+233. Raven
+234. Red Dragon Wyrmling
+235. Reef Shark
+236. Remorhaz
+237. Rhinoceros
+238. Riding Horse
+239. Roc
+240. Roper
+241. Rug of Smothering
+242. Rust Monster
+243. Saber-Toothed Tiger
+244. Sahuagin
+245. Salamander
+246. Satyr
+247. Scorpion
+248. Scout
+249. Sea Hag
+250. Sea Horse
+251. Shadow
+252. Shambling Mound
+253. Shield Guardian
+254. Shrieker
+255. Silver Dragon Wyrmling
+256. Skeleton
+257. Solar
+258. Specter
+259. Spider
+260. Spirit Naga
+261. Sprite
+262. Spy
+263. Steam Mephit
+264. Stirge
+265. Stone Giant
+266. Stone Golem
+267. Storm Giant
+268. Succubus/Incubus
+269. Swarm of Bats
+270. Swarm of Beetles
+271. Swarm of Centipedes
+272. Swarm of Insects
+273. Swarm of Poisonous Snakes
+274. Swarm of Quippers
+275. Swarm of Rats
+276. Swarm of Ravens
+277. Swarm of Spiders
+278. Swarm of Wasps
+279. Tarrasque
+280. Thug
+281. Tiger
+282. Treant
+283. Tribal Warrior
+284. Triceratops
+285. Troll
+286. Tyrannosaurus Rex
+287. Unicorn
+288. Vampire Spawn
+289. Vampire, Bat Form
+290. Vampire, Mist Form
+291. Vampire, Vampire Form
+292. Veteran
+293. Violet Fungus
+294. Vrock
+295. Vulture
+296. Warhorse
+297. Warhorse Skeleton
+298. Water Elemental
+299. Weasel
+300. Werebear, Bear Form
+301. Werebear, Human Form
+302. Werebear, Hybrid Form
+303. Wereboar, Boar Form
+304. Wereboar, Human Form
+305. Wereboar, Hybrid Form
+306. Wererat, Human Form
+307. Wererat, Hybrid Form
+308. Wererat, Rat Form
+309. Weretiger, Human Form
+310. Weretiger, Hybrid Form
+311. Weretiger, Tiger Form
+312. Werewolf, Human Form
+313. Werewolf, Hybrid Form
+314. Werewolf, Wolf Form
+315. White Dragon Wyrmling
+316. Wight
+317. Will-o'-Wisp
+318. Winter Wolf
+319. Wolf
+320. Worg
+321. Wraith
+322. Wyvern
+323. Xorn
+324. Young Black Dragon
+325. Young Blue Dragon
+326. Young Brass Dragon
+327. Young Bronze Dragon
+328. Young Copper Dragon
+329. Young Gold Dragon
+330. Young Green Dragon
+331. Young Red Dragon
+332. Young Silver Dragon
+333. Young White Dragon
+334. Zombie

@@ -394,6 +394,7 @@ class RumourBoardView:
 @dataclass
 class FactionStandingsView:
     standings: Dict[str, int] = field(default_factory=dict)
+    faction_names: Dict[str, str] = field(default_factory=dict)
     descriptions: Dict[str, str] = field(default_factory=dict)
     empty_state_hint: str = ""
 

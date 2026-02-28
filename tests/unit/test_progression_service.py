@@ -215,7 +215,7 @@ class ProgressionServiceTests(unittest.TestCase):
         character = Character(id=17, name="Ila", class_name="wizard", level=1, xp=55)
         character.flags = {
             "subclass_slug": "crimson_spire",
-            "subclass_name": "School of the Crimson Spire",
+            "subclass_name": "School of Evocation",
         }
 
         service.apply_level_progression(character, growth_choice="spell")

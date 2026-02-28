@@ -1300,6 +1300,77 @@ class GameServiceTests(unittest.TestCase):
 
         self.assertIn("Hidden Snare", list(plan.hazards or []))
 
+    def test_faction_package_hazard_odds_differ_by_faction(self) -> None:
+        character = Character(id=640, name="Nox", location_id=1, level=2)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Crossroads")}),
+            world_repo=InMemoryWorldRepository(seed=130),
+        )
+
+        wardens_plan = EncounterPlan(enemies=[Entity(id=9001, name="Scout", level=2)], hazards=[])
+        thieves_plan = EncounterPlan(enemies=[Entity(id=9002, name="Cutpurse", level=2)], hazards=[])
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", return_value=70):
+            service._apply_faction_encounter_package(
+                wardens_plan,
+                faction_bias="wardens",
+                character_id=character.id,
+                world_turn=5,
+                location_id=1,
+            )
+            service._apply_faction_encounter_package(
+                thieves_plan,
+                faction_bias="thieves_guild",
+                character_id=character.id,
+                world_turn=5,
+                location_id=1,
+            )
+
+        self.assertNotIn("Checkpoint Barricade", list(wardens_plan.hazards or []))
+        self.assertIn("Hidden Snare", list(thieves_plan.hazards or []))
+
+    def test_faction_package_can_set_enemy_surprise_without_overriding_player_surprise(self) -> None:
+        character = Character(id=641, name="Rook", location_id=1, level=2)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Alleys")}),
+            world_repo=InMemoryWorldRepository(seed=131),
+        )
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", return_value=10):
+            service._apply_faction_encounter_package(
+                EncounterPlan(enemies=[Entity(id=9003, name="Bandit", level=2)], hazards=[]),
+                faction_bias="thieves_guild",
+                character_id=character.id,
+                world_turn=8,
+                location_id=1,
+            )
+
+        saved = character_repo.get(character.id)
+        self.assertIsNotNone(saved)
+        self.assertEqual("enemy", str(saved.flags.get("next_explore_surprise", "")))
+
+        saved.flags["next_explore_surprise"] = "player"
+        character_repo.save(saved)
+
+        with mock.patch("rpg.application.services.game_service.derive_seed", return_value=1):
+            service._apply_faction_encounter_package(
+                EncounterPlan(enemies=[Entity(id=9004, name="Bandit", level=2)], hazards=[]),
+                faction_bias="thieves_guild",
+                character_id=character.id,
+                world_turn=9,
+                location_id=1,
+            )
+
+        preserved = character_repo.get(character.id)
+        self.assertIsNotNone(preserved)
+        self.assertEqual("player", str(preserved.flags.get("next_explore_surprise", "")))
+
     def test_apply_encounter_reward_intent_applies_faction_money_tilt(self) -> None:
         world_repo = InMemoryWorldRepository(seed=31)
         character = Character(id=65, name="Nara", location_id=1, xp=0, money=0)

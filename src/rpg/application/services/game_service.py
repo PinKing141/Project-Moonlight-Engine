@@ -128,6 +128,15 @@ class GameService:
         "broker_silas": "npc_silas",
         "captain_ren": "captain_ren",
     }
+    _FACTION_DISPLAY_NAME_ALIASES = {
+        "conclave_council": "Arcane Council",
+        "tower_crimson": "Tower of Evocation",
+        "tower_cobalt": "Tower of Enchantment",
+        "tower_emerald": "Tower of Transmutation",
+        "tower_aurelian": "Tower of Divination",
+        "tower_obsidian": "Tower of Necromancy",
+        "tower_alabaster": "Tower of Abjuration",
+    }
     _NPC_FACTION_AFFINITY = {
         "captain_ren": "the_crown",
         "broker_silas": "thieves_guild",
@@ -418,10 +427,42 @@ class GameService:
         "ra",
     )
     _FACTION_ENCOUNTER_PACKAGES = {
-        "wardens": {"hazard": "Checkpoint Barricade", "money_bonus": 0, "bonus_item": "Whetstone"},
-        "wild": {"hazard": "Predator Trails", "money_bonus": 0, "bonus_item": "Antitoxin"},
-        "thieves_guild": {"hazard": "Hidden Snare", "money_bonus": 2, "bonus_item": ""},
-        "the_crown": {"hazard": "Patrol Sweep", "money_bonus": 1, "bonus_item": "Torch"},
+        "wardens": {
+            "hazard": "Checkpoint Barricade",
+            "hazard_chance": 55,
+            "hazard_chance_if_existing": 35,
+            "money_bonus": 0,
+            "bonus_item": "Whetstone",
+            "ambush_surprise": "",
+            "ambush_chance": 0,
+        },
+        "wild": {
+            "hazard": "Predator Trails",
+            "hazard_chance": 72,
+            "hazard_chance_if_existing": 45,
+            "money_bonus": 0,
+            "bonus_item": "Antitoxin",
+            "ambush_surprise": "enemy",
+            "ambush_chance": 35,
+        },
+        "thieves_guild": {
+            "hazard": "Hidden Snare",
+            "hazard_chance": 82,
+            "hazard_chance_if_existing": 55,
+            "money_bonus": 2,
+            "bonus_item": "",
+            "ambush_surprise": "enemy",
+            "ambush_chance": 65,
+        },
+        "the_crown": {
+            "hazard": "Patrol Sweep",
+            "hazard_chance": 62,
+            "hazard_chance_if_existing": 40,
+            "money_bonus": 1,
+            "bonus_item": "Torch",
+            "ambush_surprise": "",
+            "ambush_chance": 0,
+        },
     }
     _RISK_DESCRIPTORS = {
         1: "Safe",
@@ -546,7 +587,7 @@ class GameService:
         "thieves_guild": "Encrypted chalk symbols mark caches and messenger paths.",
         "the_crown": "Military survey stakes map defensible ground for rapid mustering.",
         "wild": "Predator totems and bone markers signal territorial boundaries.",
-        "tower_obsidian": "Obsidian etchings imply ritual study of battlefield remains.",
+        "tower_obsidian": "Necromantic etchings imply ritual study of battlefield remains.",
     }
     _NPC_ROUTINES = {
         "innkeeper_mara": {
@@ -613,7 +654,7 @@ class GameService:
         },
         "npc_vael": {
             "name": "Vael",
-            "description": "An Obsidian Cabal necromancer forged by forbidden fieldwork.",
+            "description": "A Tower of Necromancy battle-mage forged by forbidden fieldwork.",
             "class_name": "wizard",
             "faction_id": "tower_obsidian",
             "hp_max": 15,
@@ -627,7 +668,7 @@ class GameService:
         },
         "npc_seraphine": {
             "name": "Seraphine",
-            "description": "An Alabaster Sanctum battle-cleric sworn to bind dangerous magic.",
+            "description": "A Tower of Abjuration battle-cleric sworn to bind dangerous magic.",
             "class_name": "cleric",
             "faction_id": "tower_alabaster",
             "hp_max": 17,
@@ -3554,7 +3595,7 @@ class GameService:
         else:
             self.character_repo.save(character)
 
-        faction_label = normalized_faction.replace("_", " ").title()
+        faction_label = self._faction_display_name_from_repo(self.faction_repo, normalized_faction)
         return ActionResult(
             messages=[
                 f"You lay low around {faction_label} contacts.",
@@ -5211,6 +5252,32 @@ class GameService:
         package = self._FACTION_ENCOUNTER_PACKAGES.get(faction_id)
         if not isinstance(package, dict):
             return
+
+        ambush_surprise = str(package.get("ambush_surprise", "") or "").strip().lower()
+        ambush_chance = max(0, min(100, int(package.get("ambush_chance", 0) or 0)))
+        if ambush_surprise in {"player", "enemy"} and ambush_chance > 0 and list(getattr(plan, "enemies", []) or []):
+            ambush_seed = derive_seed(
+                namespace="encounter.faction_ambush",
+                context={
+                    "character_id": int(character_id),
+                    "world_turn": int(world_turn),
+                    "location_id": int(location_id),
+                    "faction": faction_id,
+                    "enemy_ids": [int(getattr(enemy, "id", 0) or 0) for enemy in list(getattr(plan, "enemies", []) or [])],
+                },
+            )
+            if int(ambush_seed) % 100 < ambush_chance:
+                character = self.character_repo.get(int(character_id))
+                if character is not None:
+                    flags = getattr(character, "flags", None)
+                    if not isinstance(flags, dict):
+                        flags = {}
+                        character.flags = flags
+                    current = str(flags.get("next_explore_surprise", "") or "").strip().lower()
+                    if current in {"", "none"}:
+                        flags["next_explore_surprise"] = ambush_surprise
+                        self.character_repo.save(character)
+
         hazard_name = str(package.get("hazard", "") or "").strip()
         if not hazard_name:
             return
@@ -5231,7 +5298,11 @@ class GameService:
             },
         )
         roll = int(seed) % 100
-        threshold = 85 if not existing_hazards else 65
+        if existing_hazards:
+            threshold = int(package.get("hazard_chance_if_existing", package.get("hazard_chance", 65)) or 65)
+        else:
+            threshold = int(package.get("hazard_chance", 85) or 85)
+        threshold = max(0, min(100, threshold))
         if roll >= threshold:
             return
 
@@ -5345,7 +5416,10 @@ class GameService:
             ac = int(getattr(enemy, "armour_class", 10) or 10)
             return f"Codex: Observed profile — estimated armor around {ac}."
         level = int(getattr(enemy, "level", 1) or 1)
-        faction = str(getattr(enemy, "faction_id", "unaffiliated") or "unaffiliated").replace("_", " ")
+        faction = self._faction_display_name_from_repo(
+            self.faction_repo,
+            str(getattr(enemy, "faction_id", "unaffiliated") or "unaffiliated"),
+        )
         return f"Codex: Known profile — level {level}, commonly tied to {faction}."
 
     def combat_player_stats_intent(self, player: Character) -> dict:
@@ -6251,11 +6325,14 @@ class GameService:
 
     @staticmethod
     def _faction_display_name_from_repo(faction_repo: FactionRepository | None, faction_id: str) -> str:
+        normalized = str(faction_id or "").strip().lower()
         if faction_repo:
-            row = faction_repo.get(str(faction_id))
+            row = faction_repo.get(normalized)
             if row is not None and str(getattr(row, "name", "")).strip():
                 return str(getattr(row, "name"))
-        return str(faction_id).replace("_", " ").title()
+        if normalized in GameService._FACTION_DISPLAY_NAME_ALIASES:
+            return str(GameService._FACTION_DISPLAY_NAME_ALIASES[normalized])
+        return normalized.replace("_", " ").title() if normalized else ""
 
     def _companion_lead_rumour_item(self, character: Character) -> RumourItemView | None:
         unlocked_ids = self._unlocked_companion_ids(character, persist_defaults=True)
@@ -7017,7 +7094,10 @@ class GameService:
         elif current_notes == 2:
             body = f"Repeated encounter confirms level {int(getattr(monster, 'level', 1) or 1)} combat profile."
         else:
-            faction_text = str(getattr(monster, "faction_id", "unknown") or "unknown").replace("_", " ")
+            faction_text = self._faction_display_name_from_repo(
+                self.faction_repo,
+                str(getattr(monster, "faction_id", "unknown") or "unknown"),
+            )
             body = f"Field notes expanded. Likely operating alongside {faction_text} elements."
         self._record_codex_entry(
             character,
@@ -7286,20 +7366,20 @@ class GameService:
             return "Moderate"
         return "Low"
 
-    @classmethod
-    def _faction_pressure_display(cls, character: Character) -> tuple[str, list[str]]:
-        state = cls._faction_heat_state(character)
+    def _faction_pressure_display(self, character: Character) -> tuple[str, list[str]]:
+        state = self._faction_heat_state(character)
         if not state:
             return "Pressure: Stable", []
         ordered = sorted(state.items(), key=lambda item: (-int(item[1]), str(item[0])))
         top_faction, top_score = ordered[0]
-        pressure = cls._faction_heat_pressure(character)
+        pressure = self._faction_heat_pressure(character)
+        top_label = self._faction_display_name_from_repo(self.faction_repo, str(top_faction))
         summary = (
-            f"Pressure: {cls._faction_heat_band(int(top_score))} "
-            f"({str(top_faction).replace('_', ' ')} heat {int(top_score)}, +{int(pressure)} risk)"
+            f"Pressure: {self._faction_heat_band(int(top_score))} "
+            f"({top_label} heat {int(top_score)}, +{int(pressure)} risk)"
         )
         lines = [
-            f"{str(faction_id).replace('_', ' ').title()}: {int(score)} ({cls._faction_heat_band(int(score))})"
+            f"{self._faction_display_name_from_repo(self.faction_repo, str(faction_id))}: {int(score)} ({self._faction_heat_band(int(score))})"
             for faction_id, score in ordered[:3]
         ]
         return summary, lines
@@ -7335,6 +7415,10 @@ class GameService:
             for faction_id, score in self.faction_standings_intent(character_id).items()
             if faction_id in discovered_factions
         }
+        faction_names = {
+            faction_id: self._faction_display_name_from_repo(self.faction_repo, faction_id)
+            for faction_id in standings.keys()
+        }
         descriptions: dict[str, str] = {}
         if self.faction_repo:
             for faction in self.faction_repo.list_all():
@@ -7349,7 +7433,12 @@ class GameService:
         empty_state_hint = (
             "No standings tracked yet. Build reputation by resolving encounters and quests tied to local factions, then check back here."
         )
-        return FactionStandingsView(standings=standings, descriptions=descriptions, empty_state_hint=empty_state_hint)
+        return FactionStandingsView(
+            standings=standings,
+            faction_names=faction_names,
+            descriptions=descriptions,
+            empty_state_hint=empty_state_hint,
+        )
 
     def make_choice(self, player_id: int, choice: str) -> ActionResult:
         choice = choice.strip().lower()
@@ -8093,7 +8182,7 @@ class GameService:
             world,
             kind="combat_morale_break",
             message=(
-                f"{dominant_faction.replace('_', ' ').title()} lines waver after your victory; "
+                f"{self._faction_display_name_from_repo(self.faction_repo, dominant_faction)} lines waver after your victory; "
                 "local patrol pressure eases."
             ),
             severity="minor",
@@ -8230,7 +8319,7 @@ class GameService:
         severity = str(row.get("severity_band", "moderate")).replace("_", " ")
         text = f"[Flashpoint Echo] Day {turn}: {resolution or 'unsettled'} resolution after {channel} intervention. Severity: {severity}."
         if bias:
-            text = f"{text} {bias.title()} influence is most discussed."
+            text = f"{text} {self._faction_display_name_from_repo(self.faction_repo, bias)} influence is most discussed."
         return to_rumour_item_view(
             rumour_id=f"flashpoint:{turn}:{channel}",
             text=text,
@@ -9075,7 +9164,10 @@ class GameService:
 
     @staticmethod
     def _faction_label(faction_id: str) -> str:
-        return str(faction_id or "").replace("_", " ").title()
+        normalized = str(faction_id or "").strip().lower()
+        if normalized in GameService._FACTION_DISPLAY_NAME_ALIASES:
+            return str(GameService._FACTION_DISPLAY_NAME_ALIASES[normalized])
+        return normalized.replace("_", " ").title() if normalized else ""
 
     @classmethod
     def _diplomacy_route_note(cls, *, diplomacy_state: dict[str, object], location: Location | None) -> str:

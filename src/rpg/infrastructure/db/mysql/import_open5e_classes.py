@@ -14,18 +14,46 @@ from rpg.infrastructure.content_provider_factory import create_import_content_cl
 
 def _ensure_class_table_columns(session) -> None:
     """Backfill optional columns if the table was created before this import existed."""
-    session.execute(
-        text(
-            """
-            ALTER TABLE class
-                ADD COLUMN IF NOT EXISTS hit_die VARCHAR(8) NULL,
-                ADD COLUMN IF NOT EXISTS primary_ability VARCHAR(32) NULL,
-                ADD COLUMN IF NOT EXISTS source VARCHAR(32) NULL,
-                ADD COLUMN IF NOT EXISTS open5e_slug VARCHAR(128) NULL,
-                ADD UNIQUE KEY IF NOT EXISTS uk_class_open5e_slug (open5e_slug)
-            """
-        )
-    )
+    def _column_exists(column_name: str) -> bool:
+        count = session.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'class'
+                  AND COLUMN_NAME = :column_name
+                """
+            ),
+            {"column_name": column_name},
+        ).scalar()
+        return bool(count)
+
+    def _index_exists(index_name: str) -> bool:
+        count = session.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'class'
+                  AND INDEX_NAME = :index_name
+                """
+            ),
+            {"index_name": index_name},
+        ).scalar()
+        return bool(count)
+
+    if not _column_exists("hit_die"):
+        session.execute(text("ALTER TABLE class ADD COLUMN hit_die VARCHAR(8) NULL"))
+    if not _column_exists("primary_ability"):
+        session.execute(text("ALTER TABLE class ADD COLUMN primary_ability VARCHAR(32) NULL"))
+    if not _column_exists("source"):
+        session.execute(text("ALTER TABLE class ADD COLUMN source VARCHAR(32) NULL"))
+    if not _column_exists("open5e_slug"):
+        session.execute(text("ALTER TABLE class ADD COLUMN open5e_slug VARCHAR(128) NULL"))
+    if not _index_exists("uk_class_open5e_slug"):
+        session.execute(text("ALTER TABLE class ADD UNIQUE KEY uk_class_open5e_slug (open5e_slug)"))
 
 
 def import_classes(pages: int = 1, source: str = "open5e") -> None:
