@@ -300,9 +300,10 @@ def _render_town_header(town_view) -> None:
             print(f"- {line}")
 
 
-def _render_faction_standings(standings, descriptions=None, empty_state_hint: str = "") -> None:
+def _render_faction_standings(standings, descriptions=None, empty_state_hint: str = "", faction_names=None) -> None:
     clear_screen()
     descriptions = descriptions or {}
+    faction_names = faction_names or {}
     if _CONSOLE is not None and Panel is not None and Table is not None:
         if not standings:
             _CONSOLE.print(
@@ -320,7 +321,8 @@ def _render_faction_standings(standings, descriptions=None, empty_state_hint: st
         table.add_column("Score", justify="right")
         table.add_column("Description")
         for faction_id, score in standings.items():
-            table.add_row(str(faction_id), str(score), str(descriptions.get(str(faction_id), "")))
+            label = str(faction_names.get(str(faction_id), str(faction_id)))
+            table.add_row(label, str(score), str(descriptions.get(str(faction_id), "")))
         _CONSOLE.print(
             Panel.fit(
                 table,
@@ -337,11 +339,12 @@ def _render_faction_standings(standings, descriptions=None, empty_state_hint: st
         print(empty_state_hint or "No standings tracked yet.")
     else:
         for faction_id, score in standings.items():
+            label = str(faction_names.get(str(faction_id), str(faction_id)))
             description = str(descriptions.get(str(faction_id), "") or "").strip()
             if description:
-                print(f"- {faction_id}: {score} — {description}")
+                print(f"- {label}: {score} — {description}")
             else:
-                print(f"- {faction_id}: {score}")
+                print(f"- {label}: {score}")
 
 
 def _render_shop_header(shop, location_name: str = "Town") -> None:
@@ -1153,6 +1156,7 @@ def _run_town(game_service, character_id: int):
                 standings_view.standings,
                 standings_view.descriptions,
                 standings_view.empty_state_hint,
+                standings_view.faction_names,
             )
             _prompt_continue()
             continue

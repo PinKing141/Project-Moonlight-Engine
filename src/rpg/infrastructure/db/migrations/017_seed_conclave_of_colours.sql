@@ -1,29 +1,29 @@
 INSERT INTO faction (name, slug, alignment, influence)
-SELECT 'The Grand Conclave', 'conclave_council', 'lawful', 5
+SELECT 'Arcane Council', 'conclave_council', 'lawful', 5
 WHERE NOT EXISTS (SELECT 1 FROM faction WHERE LOWER(COALESCE(slug, '')) = 'conclave_council');
 
 INSERT INTO faction (name, slug, alignment, influence)
-SELECT 'The Crimson Spire', 'tower_crimson', 'neutral', 4
+SELECT 'Tower of Evocation', 'tower_crimson', 'neutral', 4
 WHERE NOT EXISTS (SELECT 1 FROM faction WHERE LOWER(COALESCE(slug, '')) = 'tower_crimson');
 
 INSERT INTO faction (name, slug, alignment, influence)
-SELECT 'The Cobalt Ward', 'tower_cobalt', 'neutral', 4
+SELECT 'Tower of Enchantment', 'tower_cobalt', 'neutral', 4
 WHERE NOT EXISTS (SELECT 1 FROM faction WHERE LOWER(COALESCE(slug, '')) = 'tower_cobalt');
 
 INSERT INTO faction (name, slug, alignment, influence)
-SELECT 'The Emerald Circle', 'tower_emerald', 'neutral', 4
+SELECT 'Tower of Transmutation', 'tower_emerald', 'neutral', 4
 WHERE NOT EXISTS (SELECT 1 FROM faction WHERE LOWER(COALESCE(slug, '')) = 'tower_emerald');
 
 INSERT INTO faction (name, slug, alignment, influence)
-SELECT 'The Aurelian Order', 'tower_aurelian', 'neutral', 4
+SELECT 'Tower of Divination', 'tower_aurelian', 'neutral', 4
 WHERE NOT EXISTS (SELECT 1 FROM faction WHERE LOWER(COALESCE(slug, '')) = 'tower_aurelian');
 
 INSERT INTO faction (name, slug, alignment, influence)
-SELECT 'The Obsidian Cabal', 'tower_obsidian', 'neutral', 4
+SELECT 'Tower of Necromancy', 'tower_obsidian', 'neutral', 4
 WHERE NOT EXISTS (SELECT 1 FROM faction WHERE LOWER(COALESCE(slug, '')) = 'tower_obsidian');
 
 INSERT INTO faction (name, slug, alignment, influence)
-SELECT 'The Alabaster Sanctum', 'tower_alabaster', 'lawful', 5
+SELECT 'Tower of Abjuration', 'tower_alabaster', 'lawful', 5
 WHERE NOT EXISTS (SELECT 1 FROM faction WHERE LOWER(COALESCE(slug, '')) = 'tower_alabaster');
 
 INSERT INTO faction_relationship (faction_id, other_faction_id, alignment_score, updated_turn)

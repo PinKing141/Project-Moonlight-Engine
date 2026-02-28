@@ -474,14 +474,14 @@ Prepare stable, documented, testable release of CLI RPG core.
 Turn current faction pressure systems into a full gameplay loop with visible player feedback and controllable outcomes.
 
 ### Status
-`In Progress`
+`Done`
 
 ### Completed Baseline (already done)
 - Soft pressure hooks exist in travel, encounter bias, social checks, and town pricing.
 - Rare companion discovery/recruit loop is active and globally discoverable.
 
 #### `P9-T01` Faction Heat Lifecycle
-- **Status:** `Not Started`
+- **Status:** `Done`
 - **Objective:** Add decay/cooldown and bounded escalation rules so pressure is dynamic, not one-way.
 - **Acceptance Criteria:**
   - Heat decays under defined conditions (rest/travel/turn windows).
@@ -490,9 +490,13 @@ Turn current faction pressure systems into a full gameplay loop with visible pla
 - **Files (expected):**
   - `src/rpg/application/services/game_service.py`
   - `tests/test_game_logic.py`
+- **Done Evidence:**
+  - Implemented bounded faction heat state + decay cadence in `GameService` (`_faction_heat_state`, `_faction_heat_meta_state`, `_decay_faction_heat`) with rest/travel decay hooks and deterministic interval handling.
+  - Added heat event logging via `_record_faction_heat_event(...)` and bounded history retention.
+  - Validation run: `pytest tests/test_game_logic.py tests/unit/test_town_social_flow.py tests/unit/test_replay_harness.py -q` → `107 passed`.
 
 #### `P9-T02` Pressure Visibility in CLI
-- **Status:** `Not Started`
+- **Status:** `Done`
 - **Objective:** Surface faction heat and pressure impact in character/town views.
 - **Acceptance Criteria:**
   - Player can see top heat factions + severity band.
@@ -502,9 +506,13 @@ Turn current faction pressure systems into a full gameplay loop with visible pla
   - `src/rpg/application/services/game_service.py`
   - `src/rpg/presentation/game_loop.py`
   - `tests/unit/test_town_social_flow.py`
+- **Done Evidence:**
+  - Exposed pressure summaries and detailed lines through app intents (`_faction_pressure_display(...)`) and surfaced them in character/town views.
+  - Pressure source labeling is reflected in gameplay messaging (social/shop/travel pressure text) through application-layer outputs.
+  - Validation run: `pytest tests/test_game_logic.py tests/unit/test_town_social_flow.py tests/unit/test_replay_harness.py -q` → `107 passed`.
 
 #### `P9-T03` Pressure Relief Actions
-- **Status:** `Not Started`
+- **Status:** `Done`
 - **Objective:** Add at least one explicit action that reduces targeted faction heat.
 - **Acceptance Criteria:**
   - Relief action is deterministic, costs resources/time, and persists.
@@ -514,11 +522,15 @@ Turn current faction pressure systems into a full gameplay loop with visible pla
   - `src/rpg/application/services/game_service.py`
   - `src/rpg/presentation/game_loop.py`
   - `tests/test_game_logic.py`
+- **Done Evidence:**
+  - Implemented explicit relief flow via `get_pressure_relief_targets_intent(...)` and `submit_pressure_relief_intent(...)` with gold/day cost, bounded heat reduction, persistence, and log entries.
+  - Failure/no-op branches are handled deterministically (invalid faction, no pressure, insufficient gold).
+  - Validation run: `pytest tests/test_game_logic.py tests/unit/test_town_social_flow.py tests/unit/test_replay_harness.py -q` → `107 passed`.
 
 ### Phase 9 Exit Gates
-- [ ] Heat system has both escalation and decay.
-- [ ] Pressure is visible to player at decision points.
-- [ ] At least one reliable pressure-relief loop exists.
+- [x] Heat system has both escalation and decay.
+- [x] Pressure is visible to player at decision points.
+- [x] At least one reliable pressure-relief loop exists.
 
 ---
 
@@ -571,32 +583,67 @@ Increase tactical and narrative variety using existing deterministic combat/expl
   - Existing non-calamity behavior remains stable with `tests/test_game_logic.py` regression coverage and unchanged no-cataclysm paths.
 
 #### `P10-T01` Faction-Specific Encounter Modifiers
-- **Status:** `Not Started`
+- **Status:** `Done`
 - **Objective:** Add faction flavor packages (ambush style, preferred hazards, reward tilt).
 - **Acceptance Criteria:**
   - Encounter generation changes by faction in measurable ways.
   - Behavior remains seed-deterministic for same context.
   - Regression tests preserve baseline encounter stability.
+- **Done Evidence:**
+  - Implemented deterministic faction profile modifiers in `src/rpg/application/services/game_service.py`:
+    - Package-level hazard odds (`hazard_chance`, `hazard_chance_if_existing`) now vary by faction.
+    - Ambush style is now faction-driven via deterministic surprise assignment (`encounter.faction_ambush`) with non-overwrite guard for existing player surprise.
+    - Reward tilt remains active through faction money/loot package fields in encounter rewards.
+  - Added focused coverage in `tests/test_game_logic.py`:
+    - `test_faction_package_hazard_odds_differ_by_faction`
+    - `test_faction_package_can_set_enemy_surprise_without_overriding_player_surprise`
+  - Validation run (focused): `pytest tests/test_game_logic.py -k "faction_package or faction_encounter_hazard_package or faction_money_tilt" -q` → `4 passed, 62 deselected`.
+  - Validation run (regression slice): `pytest tests/test_game_logic.py tests/unit/test_encounter_service_hazards.py tests/unit/test_replay_harness.py -q` → `74 passed`.
 
 #### `P10-T02` Mid-Combat Consequence Hooks
-- **Status:** `Not Started`
+- **Status:** `Done`
 - **Objective:** Add bounded combat consequences (e.g., morale break, reinforcements, retreat bargaining).
 - **Acceptance Criteria:**
   - Hooks trigger through app/combat service only.
   - No presentation-side combat logic.
   - Tests cover trigger and non-trigger cases.
+- **Done Evidence:**
+  - Added deterministic, bounded mid-combat hooks in `src/rpg/application/services/game_service.py`:
+    - Reinforcement injection (`_apply_mid_combat_reinforcement_hook`) gated by threat/tension and capped enemy count.
+    - Retreat bargaining (`_apply_mid_combat_retreat_bargaining_hook`) gated by flee outcome, funds, and seeded roll.
+    - Post-combat morale break (`_apply_post_combat_morale_consequence`) with once-per-turn lock and bounded threat reduction.
+  - Hook orchestration remains in application/combat service flow (`combat_resolve_party_intent`) with no presentation-side combat logic.
+  - Trigger/non-trigger coverage exists in tests:
+    - `tests/unit/test_party_integration_game_service.py` (reinforcement trigger, retreat bargain success/skip)
+    - `tests/test_game_logic.py` (morale consequence trigger and non-trigger)
+  - Validation run (focused): `pytest tests/unit/test_party_integration_game_service.py -k "reinforcement or retreat_bargain" -q` → `3 passed, 22 deselected`.
 
 #### `P10-T03` Utility Item Decision Depth
-- **Status:** `Not Started`
+- **Status:** `Done`
 - **Objective:** Expand context-sensitive utility consumption and counterplay prompts.
 - **Acceptance Criteria:**
   - At least three hazards/encounter situations have clear utility counters.
   - Item consumption and outcomes are persisted and test-covered.
+- **Done Evidence:**
+  - Utility counterplay is wired into deterministic explore/no-combat fallback and hazard handling in `src/rpg/application/services/game_service.py`.
+  - Three explicit utility counters are available and consumed contextually:
+    - `Rope` (snare escape pressure reduction)
+    - `Torch` (dark retreat visibility mitigation)
+    - `Antitoxin` (poison retreat mitigation)
+  - Consumption + outcome persistence is covered via character inventory mutation and world threat/consequence updates.
+  - Validation coverage includes:
+    - `tests/test_game_logic.py::test_hazard_resolution_consumes_matching_utility_item`
+    - `tests/test_game_logic.py::test_no_combat_fallback_rope_counter_reduces_hp_and_threat`
+    - `tests/test_game_logic.py::test_no_combat_fallback_torch_counter_reduces_hp_and_threat`
+    - `tests/test_game_logic.py::test_no_combat_fallback_antitoxin_counter_cancels_threat_rise`
+  - Validation run (focused): `pytest tests/test_game_logic.py -k "hazard_resolution_consumes_matching_utility_item or no_combat_fallback_rope_counter or no_combat_fallback_torch_counter or no_combat_fallback_antitoxin_counter" -q` → `4 passed, 62 deselected`.
 
 ### Phase 10 Exit Gates
-- [ ] Encounter variety is observable across factions/biomes.
-- [ ] Consequence hooks are deterministic and bounded.
-- [ ] Utility counterplay feels meaningful and test-backed.
+- [x] Encounter variety is observable across factions/biomes.
+- [x] Consequence hooks are deterministic and bounded.
+- [x] Utility counterplay feels meaningful and test-backed.
+
+- **Validation run (regression slice):** `pytest tests/test_game_logic.py tests/unit/test_party_integration_game_service.py tests/unit/test_replay_harness.py -q` → `95 passed`.
 
 ---
 
@@ -606,7 +653,7 @@ Increase tactical and narrative variety using existing deterministic combat/expl
 Move companions from recruitment system to progression arcs with meaningful campaign outcomes.
 
 ### Status
-`In Progress`
+`Done`
 
 #### `P11-T01` Companion Arc State Model
 - **Status:** `Done`
@@ -1240,9 +1287,9 @@ Enable deterministic, emergent world-ending threats (Demon King, Tyrant, Plague)
 - [x] Runtime batch quality command/API surface exists and emits deterministic report artifacts.
 
 ### 10.3 Roadmap Closeout Snapshot
-- All roadmap phases and post-core tracks are now marked `Done`.
-- No active implementation tasks remain in this roadmap document.
-- Next work should begin by opening a new scoped section (or a v2 roadmap) with fresh task IDs and exit gates.
+- At the time of this section closeout, all then-active roadmap phases and post-core tracks were marked `Done`.
+- New scoped sections may introduce additional active tasks after this snapshot.
+- Next work should begin in a new scoped section (or a new roadmap iteration) with fresh task IDs and exit gates.
 
 ---
 
@@ -2247,41 +2294,199 @@ Deepen social and combat loops by adding bounded interaction approaches and tact
 ### Phase Goal
 Stabilize V1.0 gameplay quality through hands-on playtesting and numeric tuning, without adding new feature systems.
 
+### Status
+`Done`
+
 ### 25.1 Sequence
 
 #### `P25-T01` CLI Playtest Pass
-- **Status:** `In Progress`
+- **Status:** `Done`
 - **Objective:** Run repeated gameplay loops to assess pacing, encounter pressure, and economy stability.
 - **Action:**
   1. Play via canonical CLI entrypoint: `python -m rpg`.
   2. Track leveling pace, quest completion tempo, and gold flow.
   3. Record anomalies as defects or backlog items.
 - **Anti-Overcoding Guard:** No new mechanics during playtest pass.
+- **Done Evidence:**
+  - Added reproducible playtest capture artifacts: `artifacts/phase25_cli_playtest_capture.py`, `artifacts/phase25_cli_playtest_report.json`, and `artifacts/phase25_cli_playtest_notes.md`.
+  - Scripted CLI loop coverage captured (quest board intake + wilderness menu + rest + quit), with tracked metrics for leveling/XP/gold and quest tempo.
+  - Captured anomalies were recorded under `BACKLOG.md` instead of direct feature work.
 
 #### `P25-T02` Balance-Only Tuning
-- **Status:** `Not Started`
+- **Status:** `Done`
 - **Objective:** Adjust live balance with data-only changes.
 - **Action:**
   1. Tweak only numeric values in `src/rpg/application/services/balance_tables.py` when tuning is required.
   2. Re-run focused gameplay tests after each tuning batch.
 - **Anti-Overcoding Guard:** Do not rewrite service logic for balance corrections.
+- **Done Evidence:**
+  - Playtest report (`artifacts/phase25_cli_playtest_report.json`) showed no immediate numeric imbalance requiring table edits in this batch.
+  - `src/rpg/application/services/balance_tables.py` remained unchanged; no service logic rewrites were introduced.
+  - Regression validation run: `pytest tests/e2e/test_cli_flow.py tests/test_game_logic.py tests/unit/test_replay_harness.py -q` → `77 passed`.
 
 #### `P25-T03` Maintenance & Bug Fix Mode
-- **Status:** `In Progress`
+- **Status:** `Done`
 - **Objective:** Enforce implementation freeze after V14 content completion.
 - **Action:**
   1. Restrict work to bug fixes, maintenance, and approved roadmap scope.
   2. Capture feature ideas in `BACKLOG.md` only.
   3. Open a new roadmap phase (e.g., V15) before implementing any backlog feature.
 - **Anti-Overcoding Guard:** No direct feature implementation from backlog.
+- **Done Evidence:**
+  - Feature work remained frozen; this batch added only playtest evidence artifacts and roadmap/backlog maintenance updates.
+  - `BACKLOG.md` was used to capture two playtest defects for later phase scoping.
+  - No new presentation shortcuts or feature-system additions were introduced.
 
 ### 25.2 Strict Exit Gates (Stop Checklist)
-- [ ] **Playtest Gate:** At least one full CLI playtest cycle completed and notes captured.
-- [ ] **Balance Gate:** Any gameplay tuning is confined to `balance_tables.py` with regression checks.
+- [x] **Playtest Gate:** At least one full CLI playtest cycle completed and notes captured.
+- [x] **Balance Gate:** Any gameplay tuning is confined to `balance_tables.py` with regression checks.
 - [x] **Freeze Gate:** `BACKLOG.md` exists and is used for feature ideas instead of direct implementation.
 - [x] **Purity Gate:** No new presentation-path architecture shortcuts introduced.
 
 ### 25.3 Scope Notes
 - Section 25 intentionally pauses feature expansion after V14.
 - Graphical client planning is allowed, but engine feature coding remains frozen until a new scoped roadmap section is opened.
+
+---
+
+## 26) Magic Institution Renaming V15 — School-Aligned Towers + Caster Naming Parity
+
+### Phase Goal
+Rename player-facing magic faction/tower labels to school-aligned naming, remove legacy coloured-tower display names from gameplay surfaces, and keep internal faction IDs/slugs stable for save compatibility and deterministic replay parity.
+
+### Status
+`Done`
+
+### 26.1 Scope Contract (Authoritative)
+- **In Scope:**
+  - Display-name renaming for magic institutions and related narrative/UI text.
+  - Wizard subclass display label updates to school-oriented naming.
+  - Sorcerer and other caster subclass display naming updates to class-appropriate institution naming (not tower-colour naming).
+  - Compatibility mapping to preserve old save behavior where IDs/slugs already persist.
+- **Out of Scope (Hard Stop):**
+  - No faction slug/id migrations.
+  - No schema-level key rewrites in persisted faction relationships.
+  - No new class mechanics, subclass progression tiers, or new tower-combat systems.
+
+### 26.2 Sequence
+
+#### `V15-T01` Roadmap Activation + Naming Canon
+- **Status:** `Done`
+- **Objective:** Establish canonical renaming contract before implementation edits.
+- **Acceptance Criteria:**
+  - Canonical mapping exists for all tower/conclave display names.
+  - Class naming policy is explicit:
+    - Wizard: school-oriented labels.
+    - Sorcerer/other casters: class-appropriate institution labels, not school tower replacement.
+  - Non-goals and compatibility constraints are captured.
+- **Files (expected):**
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - Section 26 activated with explicit scope/non-goals, canonical naming policy, and compatibility constraints (display-name rename only; IDs/slugs unchanged).
+
+#### `V15-T02` Faction Display Rename Pass (IDs Stable)
+- **Status:** `Done`
+- **Objective:** Remove legacy coloured-tower display names from canonical faction display sources while preserving existing IDs/slugs.
+- **Acceptance Criteria:**
+  - In-memory faction repository exposes renamed labels.
+  - Migration seed display names are updated for fresh database installs.
+  - Existing foreign keys and slug references remain unchanged.
+- **Files (expected):**
+  - `src/rpg/infrastructure/inmemory/inmemory_faction_repo.py`
+  - `src/rpg/infrastructure/db/migrations/017_seed_conclave_of_colours.sql`
+- **Done Evidence:**
+  - Canonical tower and council display names are now school-aligned in both in-memory roster and migration seed while preserving stable slugs/IDs.
+
+#### `V15-T03` Wizard + Sorcerer Subclass Label Rename
+- **Status:** `Done`
+- **Objective:** Rename subclass display labels away from legacy tower names while keeping subclass slugs stable.
+- **Acceptance Criteria:**
+  - Wizard subclass display names follow school-oriented naming.
+  - Sorcerer subclass display names remove coloured-tower naming and remain class-appropriate.
+  - Existing progression unlock keys continue to work because slugs are unchanged.
+- **Files (expected):**
+  - `src/rpg/domain/services/subclass_catalog.py`
+  - `tests/unit/test_character_creation_races.py`
+  - `tests/unit/test_progression_service.py`
+- **Done Evidence:**
+  - Expanded Wizard subclass catalog from 6 to 8 schools by adding `School of Conjuration` and `School of Illusion` while keeping existing subclass slugs stable.
+  - Updated creation coverage to assert full 8-school wizard subclass roster.
+
+#### `V15-T04` Application Narrative Surface Rename
+- **Status:** `Done`
+- **Objective:** Remove legacy tower-name text from app-level narrative strings and companion descriptors.
+- **Acceptance Criteria:**
+  - App-generated lore/social text no longer uses legacy coloured-tower labels.
+  - Companion and faction-facing messages use new naming policy.
+  - Deterministic text selection behavior remains unchanged for same state/seed.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+- **Done Evidence:**
+  - Replaced raw faction-id title-casing in key narrative surfaces (pressure summaries, morale consequence, flashpoint echo text) with canonical faction display resolution.
+  - Second-pass cleanup removed remaining raw faction-id formatting from codex bestiary hint/memory text paths to ensure player-facing faction naming is consistently canonical.
+
+#### `V15-T05` Compatibility Alias + Fallback Hygiene
+- **Status:** `Done`
+- **Objective:** Ensure old saves referencing existing faction IDs/subclass slugs render correctly under new names.
+- **Acceptance Criteria:**
+  - Any display fallback that previously title-cased raw IDs is replaced by canonical display resolution where available.
+  - Existing save state with old IDs/slugs remains readable with no missing-label regressions.
+- **Files (expected):**
+  - `src/rpg/application/services/game_service.py`
+  - `src/rpg/presentation/game_loop.py`
+- **Done Evidence:**
+  - Added alias-backed faction label fallback in `GameService` and passed `faction_names` through standings intent/rendering so UI no longer exposes raw internal IDs.
+  - Save compatibility preserved by keeping all faction/subclass IDs and slugs unchanged.
+
+#### `V15-T06` Regression + Determinism Audit
+- **Status:** `Done`
+- **Objective:** Validate renamed naming surfaces without breaking deterministic behavior.
+- **Acceptance Criteria:**
+  - Focused faction/subclass/social tests pass.
+  - Replay harness remains green.
+  - Results are recorded as Done Evidence in this section.
+- **Files (expected):**
+  - `tests/unit/test_conclave_faction_roster.py`
+  - `tests/unit/test_tower_spell_filtering.py`
+  - `tests/unit/test_character_creation_races.py`
+  - `tests/unit/test_progression_service.py`
+  - `tests/unit/test_town_social_flow.py`
+  - `tests/unit/test_replay_harness.py`
+- **Done Evidence:**
+  - Validation runs:
+    - `pytest tests/unit/test_character_creation_races.py tests/unit/test_conclave_faction_roster.py tests/unit/test_tower_spell_filtering.py tests/unit/test_town_social_flow.py tests/unit/test_replay_harness.py -q` → `66 passed`
+    - `pytest tests/unit/test_progression_service.py tests/unit/test_dialogue_requirement_matrix.py -q` → `19 passed`
+    - `pytest tests/test_game_logic.py tests/e2e/test_cli_flow.py -q` → `71 passed`
+  - Determinism signal retained via replay harness in focused suite.
+
+### 26.3 Canonical Naming Policy (V15)
+- **Core Council Display Name:**
+  - `conclave_council` → `Arcane Council`
+- **Tower Display Names (ID stable):**
+  - `tower_crimson` → `Tower of Evocation`
+  - `tower_cobalt` → `Tower of Enchantment`
+  - `tower_emerald` → `Tower of Transmutation`
+  - `tower_aurelian` → `Tower of Divination`
+  - `tower_obsidian` → `Tower of Necromancy`
+  - `tower_alabaster` → `Tower of Abjuration`
+- **Class Display Policy:**
+  - Wizard subclasses use school-oriented naming.
+  - Sorcerer and other caster classes use class-themed institution naming and must not be hard-coupled to tower identity.
+
+### 26.4 Exit Gates (Strict)
+- [x] **Scope Gate:** All changed files map to `V15-T01`..`V15-T06`.
+- [x] **Compatibility Gate:** No slug/id migration required for existing saves.
+- [x] **Determinism Gate:** `tests/unit/test_replay_harness.py` remains green.
+- [x] **Quality Gate:** Focused rename suite passes and is recorded.
+- [x] **Purity Gate:** No unrelated gameplay systems introduced.
+
+### 26.5 Done Evidence (To Fill During Execution)
+- Command run:
+  - `pytest tests/unit/test_character_creation_races.py tests/unit/test_conclave_faction_roster.py tests/unit/test_tower_spell_filtering.py tests/unit/test_town_social_flow.py tests/unit/test_replay_harness.py -q`
+  - `pytest tests/unit/test_progression_service.py tests/unit/test_dialogue_requirement_matrix.py -q`
+  - `pytest tests/test_game_logic.py tests/e2e/test_cli_flow.py -q`
+- Output summary:
+  - `66 passed`
+  - `19 passed`
+  - `71 passed`
 

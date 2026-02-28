@@ -20,6 +20,8 @@ Purpose: Capture feature ideas discovered during playtesting without violating t
 - Stealth mechanic system.
 - Crafting and resource loop.
 - Graphical client front-end.
+- Playtest defect: investigate zero turn advancement in short scripted CLI cycle (`artifacts/phase25_cli_playtest_report.json`).
+- Playtest defect: verify travel destination selection path when loop coverage reports zero travel hops.
 
 ## Prioritization Queue
 - (empty)

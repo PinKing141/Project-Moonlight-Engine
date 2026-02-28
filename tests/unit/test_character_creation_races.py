@@ -513,9 +513,13 @@ class CharacterCreationRacesTests(unittest.TestCase):
 
         subclasses = service.list_subclasses_for_class("wizard")
         names = [row.name for row in subclasses]
-        self.assertEqual(6, len(subclasses))
-        self.assertIn("School of the Crimson Spire", names)
-        self.assertIn("School of the Aurelian Order", names)
+        self.assertEqual(8, len(subclasses))
+        self.assertIn("School of Abjuration", names)
+        self.assertIn("School of Conjuration", names)
+        self.assertIn("School of Evocation", names)
+        self.assertIn("School of Illusion", names)
+        self.assertIn("School of Necromancy", names)
+        self.assertIn("School of Divination", names)
 
     def test_create_character_persists_selected_subclass_in_flags(self) -> None:
         class_repo = _FakeClassRepo(
