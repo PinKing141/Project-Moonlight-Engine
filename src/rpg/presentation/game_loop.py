@@ -517,7 +517,10 @@ def _render_character_sheet(sheet) -> None:
             "Race/Class",
             f"{(sheet.race or 'Unknown')} {(sheet.class_name or 'Adventurer').title()}",
         )
+        table.add_row("Alignment", str(getattr(sheet, "alignment", "True Neutral") or "True Neutral"))
         table.add_row("Level", str(sheet.level))
+        if str(getattr(sheet, "class_levels_line", "") or "").strip():
+            table.add_row("Class Levels", str(sheet.class_levels_line))
         table.add_row("XP", f"{sheet.xp}/{sheet.next_level_xp}")
         table.add_row("To Next", str(sheet.xp_to_next_level))
         table.add_row("HP", f"{sheet.hp_current}/{sheet.hp_max}")
@@ -541,6 +544,9 @@ def _render_character_sheet(sheet) -> None:
     print("=== Character ===")
     print(f"Name: {sheet.name}")
     print(f"Race/Class: {(sheet.race or 'Unknown')} {(sheet.class_name or 'Adventurer').title()}")
+    print(f"Alignment: {str(getattr(sheet, 'alignment', 'True Neutral') or 'True Neutral')}")
+    if str(getattr(sheet, "class_levels_line", "") or "").strip():
+        print(f"Class Levels: {sheet.class_levels_line}")
     print(f"Level: {sheet.level}")
     print(f"XP: {sheet.xp}/{sheet.next_level_xp} (to next: {sheet.xp_to_next_level})")
     print(f"HP: {sheet.hp_current}/{sheet.hp_max}")
@@ -897,7 +903,24 @@ def run_game_loop(game_service, character_id: int):
             selection = arrow_menu("Choose Growth", choices)
             if selection not in {-1, len(choices) - 1}:
                 chosen_kind = str(pending_level_up.growth_choices[selection])
-                result = game_service.submit_level_up_choice_intent(character_id, chosen_kind)
+                class_choice = None
+                class_options = list(getattr(pending_level_up, "class_options", []) or [])
+                if class_options:
+                    class_labels = []
+                    class_levels = dict(getattr(pending_level_up, "class_levels", {}) or {})
+                    for slug in class_options:
+                        current_level = int(class_levels.get(str(slug).strip().lower(), 0) or 0)
+                        if current_level > 0:
+                            class_labels.append(f"{str(slug).title()} (current {current_level})")
+                        else:
+                            class_labels.append(f"{str(slug).title()} (new multiclass)")
+                    class_labels.append("Cancel")
+                    class_pick = arrow_menu("Choose Class to Advance", class_labels)
+                    if class_pick in {-1, len(class_labels) - 1}:
+                        continue
+                    class_choice = str(class_options[class_pick])
+
+                result = game_service.submit_level_up_choice_intent(character_id, chosen_kind, option=class_choice)
                 clear_screen()
                 _render_message_panel(
                     "Level Up Result",

@@ -87,6 +87,7 @@ def _render_character_summary(summary) -> None:
         lines = [
             "[dim]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/dim]",
             f"[bold]{summary.name}[/bold], level {summary.level} {summary.class_name}",
+            f"Alignment: {summary.alignment}",
             f"Race: {summary.race} (Speed {summary.speed})",
             f"Background: {summary.background}",
             f"Difficulty: {summary.difficulty}",
@@ -117,6 +118,7 @@ def _render_character_summary(summary) -> None:
     print(f"You created: {summary.name}, a level {summary.level} {summary.class_name}.")
     if getattr(summary, "subclass_name", ""):
         print(f"Subclass: {summary.subclass_name}")
+    print(f"Alignment: {summary.alignment}")
     print(f"Race: {summary.race} (Speed {summary.speed})")
     print(f"Background: {summary.background}")
     print(f"Difficulty: {summary.difficulty}")
@@ -269,6 +271,19 @@ def _choose_difficulty(creation_service):
             _show_creation_reference_library(creation_service)
             continue
         return difficulties[idx]
+
+
+def _choose_alignment(creation_service):
+    alignments = creation_service.list_alignments()
+    while True:
+        options = creation_service.alignment_option_labels() + ["Help: Creation Reference Library"]
+        idx = arrow_menu("Alignment", options, footer_hint=_CREATION_HELP_HINT)
+        if idx < 0:
+            return None
+        if idx == len(options) - 1:
+            _show_creation_reference_library(creation_service)
+            continue
+        return alignments[idx]
 
 
 def _show_creation_reference_library(creation_service) -> bool:
@@ -585,6 +600,10 @@ def run_character_creation(game_service):
                     if difficulty is None:
                         continue
 
+                    alignment = _choose_alignment(creation_service)
+                    if alignment is None:
+                        continue
+
                     character = creation_service.create_character(
                         name=name,
                         class_index=idx,
@@ -594,6 +613,7 @@ def run_character_creation(game_service):
                         background=background,
                         difficulty=difficulty,
                         subclass_slug=selected_subclass_slug,
+                        alignment=alignment,
                     )
                     summary = game_service.build_character_creation_summary(character)
 

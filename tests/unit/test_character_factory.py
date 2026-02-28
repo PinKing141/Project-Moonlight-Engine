@@ -5,6 +5,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from rpg.domain.models.character_class import CharacterClass
+from rpg.domain.models.character import CharacterAlignment
 from rpg.domain.models.character_options import Background, DifficultyPreset, Race
 from rpg.domain.services.character_factory import create_new_character
 
@@ -55,6 +56,15 @@ class CharacterFactoryTests(unittest.TestCase):
         self.assertIn("alliance", character.flags.get("faction_affinity", ""))
         self.assertIn("Spellbook", character.inventory)
         self.assertEqual({"strength": 10, "dexterity": 12, "intelligence": 14}, character.base_attributes)
+
+    def test_defaults_alignment_when_not_provided(self) -> None:
+        character = create_new_character(
+            name="Mira",
+            cls=self.wizard,
+            ability_scores={"STR": 10, "DEX": 12, "INT": 14},
+        )
+
+        self.assertEqual(CharacterAlignment.TRUE_NEUTRAL.value, character.alignment)
 
 
 if __name__ == "__main__":

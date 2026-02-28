@@ -201,7 +201,7 @@ def bootstrap_inmemory() -> tuple[GameService, CharacterCreationService]:
         }
     )
     progression = WorldProgression(world_repo, entity_repo, event_bus)
-    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo)
+    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo, character_repo=char_repo)
     register_quest_handlers(event_bus, world_repo=world_repo, character_repo=char_repo)
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo)
 
@@ -246,7 +246,7 @@ def bootstrap_mysql() -> tuple[GameService, CharacterCreationService]:
     spell_repo = MysqlSpellRepository()
     ensure_mysql_seed()
     progression = WorldProgression(world_repo, entity_repo, event_bus)
-    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo)
+    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo, character_repo=char_repo)
     register_quest_handlers(event_bus, world_repo=world_repo, character_repo=char_repo)
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo)
 

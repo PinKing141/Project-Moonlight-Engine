@@ -2362,6 +2362,24 @@ class GameService:
         character = self._require_character(character_id)
         level = max(1, int(getattr(character, "level", 1) or 1))
         xp = max(0, int(getattr(character, "xp", 0) or 0))
+        class_levels_line = ""
+        class_levels = getattr(character, "class_levels", None)
+        if isinstance(class_levels, dict):
+            normalized: list[tuple[str, int]] = []
+            for raw_slug, raw_level in class_levels.items():
+                slug = str(raw_slug or "").strip().lower()
+                if not slug:
+                    continue
+                try:
+                    level_value = int(raw_level or 0)
+                except Exception:
+                    continue
+                if level_value <= 0:
+                    continue
+                normalized.append((slug, level_value))
+            if normalized:
+                normalized.sort(key=lambda item: (-int(item[1]), item[0]))
+                class_levels_line = " / ".join(f"{slug.title()} {int(level_value)}" for slug, level_value in normalized)
         if level >= LEVEL_CAP:
             next_level_xp = xp_required_for_level(level)
             xp_to_next = 0
@@ -2374,6 +2392,7 @@ class GameService:
             name=character.name,
             race=character.race or "",
             class_name=character.class_name or "Adventurer",
+            alignment=str(getattr(character, "alignment", "true_neutral") or "true_neutral").replace("_", " ").title(),
             difficulty=character.difficulty or "normal",
             level=level,
             xp=xp,
@@ -2381,13 +2400,20 @@ class GameService:
             xp_to_next_level=int(xp_to_next),
             hp_current=int(character.hp_current),
             hp_max=int(character.hp_max),
+            class_levels_line=class_levels_line,
             pressure_summary=pressure_summary,
             pressure_lines=pressure_lines,
         )
 
     def get_level_up_pending_intent(self, character_id: int) -> LevelUpPendingView | None:
         character = self._require_character(character_id)
-        return self.progression_service.preview_pending(character)
+        available_classes: list[str] = []
+        if self.class_repo is not None:
+            try:
+                available_classes = [str(getattr(row, "slug", "") or "").strip().lower() for row in self.class_repo.list_playable()]
+            except Exception:
+                available_classes = []
+        return self.progression_service.preview_pending(character, available_classes=available_classes)
 
     def submit_level_up_choice_intent(
         self,
@@ -2405,6 +2431,7 @@ class GameService:
             level_messages = self.progression_service.apply_level_progression(
                 character,
                 growth_choice=growth_choice,
+                class_choice=option,
             )
         except ValueError as exc:
             return ActionResult(messages=[str(exc)], game_over=False)
@@ -6899,6 +6926,7 @@ class GameService:
             name=character.name,
             level=character.level,
             class_name=(character.class_name or "adventurer").title(),
+            alignment=str(getattr(character, "alignment", "true_neutral") or "true_neutral").replace("_", " ").title(),
             race=character.race or "Unknown",
             speed=getattr(character, "speed", 30),
             background=character.background or "None",
@@ -7284,8 +7312,8 @@ class GameService:
         faction_id, score = max(state.items(), key=lambda item: (int(item[1]), item[0]))
         return str(faction_id), int(score)
 
-    def _apply_level_progression(self, character: Character) -> list[str]:
-        return self.progression_service.apply_level_progression(character)
+    def _apply_level_progression(self, character: Character, class_choice: str | None = None) -> list[str]:
+        return self.progression_service.apply_level_progression(character, class_choice=class_choice)
 
     def faction_standings_intent(self, character_id: int) -> dict[str, int]:
         if not self.faction_repo:

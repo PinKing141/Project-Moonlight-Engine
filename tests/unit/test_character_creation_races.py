@@ -5,6 +5,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from rpg.application.services.character_creation_service import CharacterCreationService
+from rpg.domain.models.character import CharacterAlignment
 from rpg.domain.models.character_class import CharacterClass
 from rpg.domain.models.location import Location
 
@@ -281,6 +282,56 @@ class CharacterCreationRacesTests(unittest.TestCase):
         self.assertIn("INT 16", detail.recommended_line)
         self.assertEqual(["Choose this class", "Back"], detail.options)
 
+    def test_alignment_options_include_true_neutral_and_expected_count(self) -> None:
+        class_repo = _FakeClassRepo(
+            [
+                CharacterClass(
+                    id=1,
+                    name="Fighter",
+                    slug="fighter",
+                    hit_die="d10",
+                    primary_ability="strength",
+                    base_attributes={"STR": 15, "CON": 14, "DEX": 12},
+                )
+            ]
+        )
+        service = CharacterCreationService(
+            _FakeCharacterRepo(), class_repo, _FakeLocationRepo(), open5e_client=None
+        )
+
+        alignments = service.list_alignments()
+        labels = service.alignment_option_labels()
+
+        self.assertEqual(9, len(alignments))
+        self.assertEqual(9, len(labels))
+        self.assertIn(CharacterAlignment.TRUE_NEUTRAL.value, alignments)
+        self.assertIn("True Neutral", labels)
+
+    def test_create_character_persists_selected_alignment(self) -> None:
+        class_repo = _FakeClassRepo(
+            [
+                CharacterClass(
+                    id=1,
+                    name="Fighter",
+                    slug="fighter",
+                    hit_die="d10",
+                    primary_ability="strength",
+                    base_attributes={"STR": 15, "CON": 14, "DEX": 12},
+                )
+            ]
+        )
+        char_repo = _FakeCharacterRepo()
+        service = CharacterCreationService(
+            char_repo, class_repo, _FakeLocationRepo(), open5e_client=None
+        )
+
+        created = service.create_character(
+            name="Riven",
+            class_index=0,
+            alignment="Chaotic Good",
+        )
+
+        self.assertEqual(CharacterAlignment.CHAOTIC_GOOD.value, created.alignment)
     def test_loads_creation_reference_categories_from_generic_endpoint(self) -> None:
         class_repo = _FakeClassRepo(
             [

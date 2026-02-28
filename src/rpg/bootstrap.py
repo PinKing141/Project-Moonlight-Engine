@@ -147,7 +147,7 @@ def _build_inmemory_game_service() -> GameService:
     progression = WorldProgression(world_repo, entity_repo, event_bus)
     encounter_intro_builder = _build_encounter_intro_builder()
     mechanical_flavour_builder = _build_mechanical_flavour_builder()
-    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo)
+    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo, character_repo=char_repo)
     register_quest_handlers(event_bus, world_repo=world_repo, character_repo=char_repo)
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo)
 
@@ -203,7 +203,7 @@ def _build_mysql_game_service():
 
     event_bus = EventBus()
     progression = WorldProgression(world_repo, entity_repo, event_bus)
-    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo)
+    register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo, character_repo=char_repo)
     register_quest_handlers(event_bus, world_repo=world_repo, character_repo=char_repo)
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo)
 

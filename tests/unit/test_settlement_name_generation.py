@@ -156,7 +156,7 @@ class SettlementNameGenerationTests(unittest.TestCase):
     def test_character_creation_summary_uses_generated_location_name(self):
         event_bus = EventBus()
         world_repo = InMemoryWorldRepository(seed=21)
-        character = Character(id=1, name="Ari", location_id=1)
+        character = Character(id=1, name="Ari", location_id=1, alignment="lawful_good")
         character_repo = InMemoryCharacterRepository({character.id: character})
         entity_repo = InMemoryEntityRepository([])
         location_repo = InMemoryLocationRepository(
@@ -179,6 +179,7 @@ class SettlementNameGenerationTests(unittest.TestCase):
 
         self.assertEqual(expected, summary.starting_location_name)
         self.assertNotEqual("Starting Town", summary.starting_location_name)
+        self.assertEqual("Lawful Good", summary.alignment)
 
 
 if __name__ == "__main__":

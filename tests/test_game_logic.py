@@ -679,6 +679,7 @@ class GameServiceTests(unittest.TestCase):
             name="Vale",
             location_id=1,
             class_name="fighter",
+            alignment="lawful_good",
             level=2,
             xp=42,
             hp_max=18,
@@ -702,6 +703,7 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual(42, sheet.xp)
         self.assertEqual(50, sheet.next_level_xp)
         self.assertEqual(8, sheet.xp_to_next_level)
+        self.assertEqual("Lawful Good", sheet.alignment)
 
     def test_character_sheet_includes_faction_pressure_summary(self) -> None:
         world_repo = InMemoryWorldRepository(seed=26)

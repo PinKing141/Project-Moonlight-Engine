@@ -8,12 +8,12 @@ from rpg.application.services.event_bus import EventBus
 from rpg.application.services.faction_influence_service import FactionInfluenceService
 from rpg.application.services.game_service import GameService
 from rpg.application.services.world_progression import WorldProgression
-from rpg.domain.events import MonsterSlain
+from rpg.domain.events import FactionReputationChangedEvent, MonsterSlain
 from rpg.domain.models.character import Character
 from rpg.domain.models.entity import Entity
 from rpg.domain.models.location import Location
 from rpg.domain.models.faction import Faction
-from rpg.domain.repositories import EntityRepository, FactionRepository
+from rpg.domain.repositories import CharacterRepository, EntityRepository, FactionRepository
 from rpg.infrastructure.db.inmemory.repos import (
     InMemoryCharacterRepository,
     InMemoryEntityRepository,
@@ -51,6 +51,28 @@ class _StubFactionRepository(FactionRepository):
 
     def save(self, faction: Faction) -> None:
         self._factions[faction.id] = faction
+
+
+class _StubCharacterRepository(CharacterRepository):
+    def __init__(self, characters: dict[int, Character]) -> None:
+        self._characters = characters
+
+    def get(self, character_id: int):
+        return self._characters.get(character_id)
+
+    def list_all(self):
+        return list(self._characters.values())
+
+    def save(self, character: Character) -> None:
+        if character.id is None:
+            return
+        self._characters[int(character.id)] = character
+
+    def find_by_location(self, location_id: int):
+        return []
+
+    def create(self, character: Character, location_id: int) -> Character:
+        return character
 
 
 class FactionInfluenceTests(unittest.TestCase):
@@ -91,6 +113,57 @@ class FactionInfluenceTests(unittest.TestCase):
         self.assertIsNotNone(wild)
         self.assertEqual({}, wild.reputation)
         self.assertEqual(3, wild.influence)
+
+    def test_alignment_affinity_applies_once_on_first_reputation_event(self) -> None:
+        bus = EventBus()
+        faction_repo = _StubFactionRepository(
+            {
+                "guild": Faction(
+                    id="guild",
+                    name="Criminal Syndicate",
+                    influence=5,
+                    alignment_affinities={"lawful_good": -3},
+                )
+            }
+        )
+        entity_repo = _StubEntityRepository({})
+        character_repo = _StubCharacterRepository(
+            {
+                12: Character(
+                    id=12,
+                    name="Iris",
+                    alignment="lawful_good",
+                )
+            }
+        )
+
+        service = FactionInfluenceService(faction_repo, entity_repo, bus, character_repo=character_repo)
+        service.register_handlers()
+
+        bus.publish(
+            FactionReputationChangedEvent(
+                faction_id="guild",
+                character_id=12,
+                delta=1,
+                reason="first_contact",
+                changed_turn=1,
+            )
+        )
+        bus.publish(
+            FactionReputationChangedEvent(
+                faction_id="guild",
+                character_id=12,
+                delta=1,
+                reason="follow_up",
+                changed_turn=2,
+            )
+        )
+
+        guild = faction_repo.get("guild")
+        self.assertIsNotNone(guild)
+        assert guild is not None
+        self.assertEqual(-1, int(guild.reputation.get("character:12", 0) or 0))
+        self.assertEqual(7, int(guild.influence))
 
 
 class FactionStandingsViewIntentTests(unittest.TestCase):
