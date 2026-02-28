@@ -7,9 +7,11 @@ from rpg.application.dtos import CharacterClassDetailView
 from rpg.application.mappers.character_creation_mapper import to_character_class_detail_view
 from rpg.application.services.balance_tables import DIFFICULTY_PRESET_PROFILES
 from rpg.domain.models.character_class import CharacterClass
+from rpg.domain.models.class_subclass import ClassSubclass
 from rpg.domain.models.character_options import Background, DifficultyPreset, Race, Subrace
 from rpg.domain.repositories import CharacterRepository, ClassRepository, FeatureRepository, LocationRepository
 from rpg.domain.services.character_factory import ABILITY_ALIASES, create_new_character
+from rpg.domain.services.subclass_catalog import resolve_subclass, subclasses_for_class
 
 
 ABILITY_ORDER = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
@@ -24,6 +26,7 @@ class CharacterCreationService:
         ("races", "Races"),
         ("subraces", "Subraces"),
         ("classes", "Classes"),
+        ("subclasses", "Subclasses"),
         ("spells", "Spells"),
         ("equipment", "Equipment"),
         ("backgrounds", "Backgrounds"),
@@ -99,6 +102,9 @@ class CharacterCreationService:
 
     def list_class_names(self) -> List[str]:
         return [cls.name for cls in self.list_classes()]
+
+    def list_subclasses_for_class(self, class_slug_or_name: str | None) -> List[ClassSubclass]:
+        return list(subclasses_for_class(class_slug_or_name))
 
     def list_creation_reference_categories(self) -> List[str]:
         return [label for _, label in self.CREATION_REFERENCE_CATEGORIES]
@@ -178,6 +184,7 @@ class CharacterCreationService:
         subrace: Subrace | None = None,
         background: Background | None = None,
         difficulty: DifficultyPreset | None = None,
+        subclass_slug: str | None = None,
     ) -> "Character":
         provided_name = (name or "").strip()
         if not provided_name and self.name_generator is not None:
@@ -220,6 +227,17 @@ class CharacterCreationService:
             difficulty=difficulty,
             starting_equipment=starting_equipment,
         )
+
+        selected_subclass = resolve_subclass(chosen.slug, subclass_slug)
+        if subclass_slug and selected_subclass is None:
+            raise ValueError("Invalid subclass selection.")
+        if selected_subclass is not None:
+            flags = getattr(character, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                character.flags = flags
+            flags["subclass_slug"] = selected_subclass.slug
+            flags["subclass_name"] = selected_subclass.name
 
         starting_location = self.location_repo.get_starting_location()
         character.location_id = starting_location.id if starting_location else None
@@ -354,6 +372,7 @@ class CharacterCreationService:
             "races": [race.name for race in self._default_races()],
             "subraces": subrace_names,
             "classes": self._playable_class_names(),
+            "subclasses": self._playable_subclass_names(),
             "spells": [],
             "equipment": [],
             "backgrounds": [row.name for row in self._default_backgrounds()],
@@ -380,6 +399,23 @@ class CharacterCreationService:
             names.append(name)
         return names
 
+    def _playable_subclass_names(self) -> List[str]:
+        names: List[str] = []
+        seen: set[str] = set()
+        try:
+            class_rows = self.list_classes()
+        except Exception:
+            class_rows = []
+        for class_row in class_rows:
+            class_key = getattr(class_row, "slug", None) or getattr(class_row, "name", None)
+            for row in self.list_subclasses_for_class(class_key):
+                key = str(getattr(row, "name", "")).strip().lower()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                names.append(str(row.name))
+        return names
+
     def _load_creation_reference(self, client, races: List[Race]) -> Dict[str, List[str]]:
         reference = self._default_creation_reference()
         if races:
@@ -404,6 +440,8 @@ class CharacterCreationService:
         # Always preserve playable-class list as minimum fallback visibility.
         if not reference.get("classes"):
             reference["classes"] = self._playable_class_names()
+        if not reference.get("subclasses"):
+            reference["subclasses"] = self._playable_subclass_names()
         if not reference.get("backgrounds"):
             reference["backgrounds"] = [row.name for row in self.backgrounds]
         if not reference.get("races"):

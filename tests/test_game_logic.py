@@ -526,6 +526,30 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual("player", first)
         self.assertIsNone(second)
 
+    def test_wilderness_scout_in_rain_applies_disadvantage_message(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=110)
+        character = Character(id=411, name="Vale", location_id=1)
+        character.attributes["wisdom"] = 12
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Pines", biome="forest")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        with mock.patch.object(
+            GameService,
+            "_world_immersion_state",
+            return_value={"weather": "Rain", "time_label": "Day 1, Morning (06:00)", "phase": "Morning", "day": 1, "hour": 6},
+        ), mock.patch("rpg.application.services.game_service.derive_seed", return_value=1), mock.patch("random.Random.randint", return_value=12):
+            result = service.wilderness_action_intent(character.id, "scout")
+
+        self.assertTrue(any("disadvantage" in line.lower() for line in result.messages))
+
     def test_apply_encounter_reward_intent_levels_up_when_threshold_crossed(self) -> None:
         world_repo = InMemoryWorldRepository(seed=9)
         character = Character(id=14, name="Ryn", location_id=1, level=1, xp=20, hp_max=10, hp_current=7)
@@ -1550,6 +1574,35 @@ class GameServiceTests(unittest.TestCase):
         self.assertTrue(str(view.time_label).startswith("Day "))
         self.assertTrue(bool(str(view.weather_label).strip()))
 
+    def test_biome_severity_influences_weather_distribution(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=411)
+        world = world_repo.load_default()
+        world.threat_level = 1
+        world_repo.save(world)
+
+        character = Character(id=790, name="Ari", location_id=1)
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        harsh = {"Rain", "Fog", "Storm", "Blizzard"}
+        glacier_harsh = 0
+        grassland_harsh = 0
+        for turn in range(0, 72, 6):
+            world.current_turn = turn
+            glacier_label = str(service._world_immersion_state(world, biome_name="glacier").get("weather", "Unknown"))
+            grassland_label = str(service._world_immersion_state(world, biome_name="grassland").get("weather", "Unknown"))
+            if glacier_label in harsh:
+                glacier_harsh += 1
+            if grassland_label in harsh:
+                grassland_harsh += 1
+
+        self.assertGreaterEqual(glacier_harsh, grassland_harsh)
+
     def test_camp_activity_requires_rations(self) -> None:
         world_repo = InMemoryWorldRepository(seed=42)
         character = Character(id=80, name="Ari", location_id=1, hp_current=7, hp_max=20)
@@ -1717,6 +1770,51 @@ class GameServiceTests(unittest.TestCase):
         self.assertIsNotNone(saved_long)
         self.assertLess(int(saved_short.hp_current), int(saved_long.hp_current))
         self.assertLess(int(saved_short.spell_slots_current), int(saved_long.spell_slots_current))
+
+    def test_wilderness_short_rest_with_rations_reduces_exhaustion_and_consumes_item(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=470)
+        character = Character(id=860, name="Ari", location_id=1, hp_current=7, hp_max=20)
+        character.inventory = ["Sturdy Rations"]
+        character.flags = {"survival": {"travel_exhaustion_level": 2}}
+        repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Wild Route", biome="forest")}),
+            world_repo=world_repo,
+        )
+
+        result = service.short_rest_intent(character.id)
+
+        saved = repo.get(character.id)
+        self.assertIsNotNone(saved)
+        flags = saved.flags if isinstance(saved.flags, dict) else {}
+        survival = flags.get("survival", {}) if isinstance(flags.get("survival", {}), dict) else {}
+        self.assertEqual(1, int(survival.get("travel_exhaustion_level", 0) or 0))
+        self.assertNotIn("Sturdy Rations", list(saved.inventory))
+        self.assertTrue(any("consume sturdy rations" in line.lower() for line in result.messages))
+
+    def test_wilderness_long_rest_without_rations_only_partially_reduces_exhaustion(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=471)
+        character = Character(id=861, name="Ari", location_id=1, hp_current=7, hp_max=20)
+        character.inventory = []
+        character.flags = {"survival": {"travel_exhaustion_level": 3}}
+        repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Wild Route", biome="forest")}),
+            world_repo=world_repo,
+        )
+
+        result = service.long_rest_intent(character.id)
+
+        saved = repo.get(character.id)
+        self.assertIsNotNone(saved)
+        flags = saved.flags if isinstance(saved.flags, dict) else {}
+        survival = flags.get("survival", {}) if isinstance(flags.get("survival", {}), dict) else {}
+        self.assertEqual(2, int(survival.get("travel_exhaustion_level", 0) or 0))
+        self.assertTrue(any("lacked sturdy rations" in line.lower() for line in result.messages))
 
     def test_codex_bestiary_tier_progresses_unknown_to_known(self) -> None:
         world_repo = InMemoryWorldRepository(seed=48)

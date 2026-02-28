@@ -40,6 +40,48 @@
             ]
           },
           {
+            "id": "persuasion check",
+            "label": "Persuade Him",
+            "requires": [],
+            "response": "You frame your request as mutual survival.",
+            "skill_check": {
+              "skill": "persuasion",
+              "dc": 13,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "Silas softens and opens the next layer of his network.",
+              "failure_response": "Silas shrugs off the appeal and keeps you at arm's length."
+            }
+          },
+          {
+            "id": "deception check",
+            "label": "Deceive Him",
+            "requires": [],
+            "response": "You spin a convenient lie about rival movements.",
+            "skill_check": {
+              "skill": "deception",
+              "dc": 14,
+              "success_stage": "resolve",
+              "failure_stage": "opening",
+              "success_response": "Silas buys the lie and commits to immediate action.",
+              "failure_response": "Silas catches a crack in the story and resets the conversation."
+            }
+          },
+          {
+            "id": "intimidation check",
+            "label": "Pressure Him",
+            "requires": [],
+            "response": "You let the threat linger between each sentence.",
+            "skill_check": {
+              "skill": "intimidation",
+              "dc": 15,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "Silas relents and gives you high-risk details.",
+              "failure_response": "Silas hardens, signaling that force won't open this door."
+            }
+          },
+          {
             "id": "intimidate",
             "label": "Intimidate",
             "requires": [],
@@ -161,6 +203,48 @@
                 "requires": ["faction_heat_wardens_high"]
               }
             ]
+          },
+          {
+            "id": "persuasion check",
+            "label": "Persuade the Captain",
+            "requires": [],
+            "response": "You argue that cooperation now prevents blood later.",
+            "skill_check": {
+              "skill": "persuasion",
+              "dc": 14,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "Ren gives you a narrow nod and agrees to hear your evidence.",
+              "failure_response": "Ren dismisses the pitch and returns to routine watch protocol."
+            }
+          },
+          {
+            "id": "deception check",
+            "label": "Bluff the Captain",
+            "requires": [],
+            "response": "You claim to carry confirmed movement reports from the outer lanes.",
+            "skill_check": {
+              "skill": "deception",
+              "dc": 15,
+              "success_stage": "resolve",
+              "failure_stage": "opening",
+              "success_response": "Ren accepts the report and jumps straight to a decision point.",
+              "failure_response": "Ren spots inconsistencies and restarts the exchange from scratch."
+            }
+          },
+          {
+            "id": "intimidation check",
+            "label": "Pressure the Captain",
+            "requires": [],
+            "response": "You press hard, implying consequences if she stalls.",
+            "skill_check": {
+              "skill": "intimidation",
+              "dc": 16,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "Ren yields ground and asks what you want done first.",
+              "failure_response": "Ren hardens, and nearby wardens tighten around the post."
+            }
           },
           { "id": "friendly", "label": "Friendly", "requires": [] },
           { "id": "intimidate", "label": "Intimidate", "requires": [] }
@@ -354,6 +438,48 @@
             ]
           },
           {
+            "id": "persuasion check",
+            "label": "Persuade Mara",
+            "requires": [],
+            "response": "You frame your request as protection for her patrons.",
+            "skill_check": {
+              "skill": "persuasion",
+              "dc": 12,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "Mara trusts your intent and shares the next layer of tavern intel.",
+              "failure_response": "Mara keeps the talk shallow and returns to serving the room."
+            }
+          },
+          {
+            "id": "deception check",
+            "label": "Deceive Mara",
+            "requires": [],
+            "response": "You present a polished half-truth about who sent you.",
+            "skill_check": {
+              "skill": "deception",
+              "dc": 13,
+              "success_stage": "resolve",
+              "failure_stage": "opening",
+              "success_response": "Mara buys the story and commits to an immediate arrangement.",
+              "failure_response": "Mara catches the spin and forces the talk back to square one."
+            }
+          },
+          {
+            "id": "intimidation check",
+            "label": "Pressure Mara",
+            "requires": [],
+            "response": "You let the threat of unrest do part of the talking.",
+            "skill_check": {
+              "skill": "intimidation",
+              "dc": 14,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "Mara relents and gives you guarded but valuable details.",
+              "failure_response": "Mara refuses to be bullied and the room cools against you."
+            }
+          },
+          {
             "id": "direct",
             "label": "Direct",
             "requires": [],
@@ -451,6 +577,261 @@
               }
             ]
           }
+        ]
+      }
+    },
+    "template:commerce": {
+      "opening": {
+        "line": "The trader studies your purse and your posture in equal measure.",
+        "choices": [
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "They relax and talk margins without games." },
+          {
+            "id": "persuasion check",
+            "label": "Persuade",
+            "requires": [],
+            "response": "You pitch a fair arrangement that helps both sides.",
+            "skill_check": {
+              "skill": "persuasion",
+              "dc": 12,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "The trader nods and opens the books a little wider.",
+              "failure_response": "They keep terms tight and non-committal."
+            }
+          },
+          {
+            "id": "deception check",
+            "label": "Deceive",
+            "requires": [],
+            "response": "You lean on a convenient half-truth about market pressure.",
+            "skill_check": {
+              "skill": "deception",
+              "dc": 13,
+              "success_stage": "resolve",
+              "failure_stage": "opening",
+              "success_response": "They bite, and the deal jumps straight to final terms.",
+              "failure_response": "They catch the spin and reset the negotiation."
+            }
+          }
+        ]
+      },
+      "probe": {
+        "line": "They ask what exactly you can offer besides words.",
+        "choices": [
+          { "id": "direct", "label": "Direct", "requires": [], "response": "You set terms plainly and ask for reciprocity." },
+          { "id": "bribe", "label": "Bribe", "requires": ["has_gold_8"], "response": "Coin changes hands and resistance fades." },
+          { "id": "invoke faction", "label": "Invoke Faction", "requires": [], "response": "You reference faction ties to secure leverage." }
+        ]
+      },
+      "resolve": {
+        "line": "The trader decides whether to trust this arrangement.",
+        "choices": [
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "They accept and keep the lane open for future trade." },
+          { "id": "make amends", "label": "Make Amends", "requires": ["recent_rebuff"], "response": "They accept the apology and restore cautious business." }
+        ]
+      }
+    },
+    "template:authority": {
+      "opening": {
+        "line": "The official listens, weighing order against disruption.",
+        "choices": [
+          { "id": "direct", "label": "Direct", "requires": [], "response": "They demand concise facts and immediate relevance." },
+          {
+            "id": "persuasion check",
+            "label": "Persuade",
+            "requires": [],
+            "response": "You frame cooperation as the safest path for the district.",
+            "skill_check": {
+              "skill": "persuasion",
+              "dc": 14,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "They grant you a narrow hearing and continue.",
+              "failure_response": "They cut the pitch short and revert to protocol."
+            }
+          },
+          {
+            "id": "intimidation check",
+            "label": "Intimidate",
+            "requires": [],
+            "response": "You push hard, testing how much pressure they tolerate.",
+            "skill_check": {
+              "skill": "intimidation",
+              "dc": 15,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "They concede a little ground to avoid escalation.",
+              "failure_response": "They harden and signal nearby guards."
+            }
+          }
+        ]
+      },
+      "probe": {
+        "line": "They ask for concrete proof and actionable steps.",
+        "choices": [
+          { "id": "address flashpoint", "label": "Address Flashpoint", "requires": ["flashpoint_present"], "response": "You connect your case to the latest civic fracture." },
+          { "id": "invoke faction", "label": "Invoke Faction", "requires": [], "response": "You press your standing as a reason to be trusted." },
+          { "id": "direct", "label": "Direct", "requires": [], "response": "You keep it precise and operational." }
+        ]
+      },
+      "resolve": {
+        "line": "The official's ruling will shift local order.",
+        "choices": [
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "They choose cooperation with strict oversight." },
+          { "id": "make amends", "label": "Make Amends", "requires": ["recent_rebuff"], "response": "They accept contrition but note it in their records." }
+        ]
+      }
+    },
+    "template:underworld": {
+      "opening": {
+        "line": "A wary contact waits for your first mistake.",
+        "choices": [
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "They answer, but keep one eye on exits." },
+          {
+            "id": "deception check",
+            "label": "Deceive",
+            "requires": [],
+            "response": "You claim you've already paid the right people.",
+            "skill_check": {
+              "skill": "deception",
+              "dc": 14,
+              "success_stage": "resolve",
+              "failure_stage": "opening",
+              "success_response": "They accept the bluff and move to terms immediately.",
+              "failure_response": "They catch your angle and pull back hard."
+            }
+          },
+          {
+            "id": "intimidation check",
+            "label": "Intimidate",
+            "requires": [],
+            "response": "You threaten consequences for non-cooperation.",
+            "skill_check": {
+              "skill": "intimidation",
+              "dc": 15,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "They relent and hand over limited intel.",
+              "failure_response": "They vanish from the lane before you finish speaking."
+            }
+          }
+        ]
+      },
+      "probe": {
+        "line": "They ask what this job is worth to you.",
+        "choices": [
+          { "id": "bribe", "label": "Bribe", "requires": ["has_gold_8"], "response": "Coin settles the question quickly." },
+          { "id": "leverage rumour", "label": "Leverage Rumour", "requires": ["recent_rumour"], "response": "You trade whispers for access." },
+          { "id": "direct", "label": "Direct", "requires": [], "response": "You state your need and your limit." }
+        ]
+      },
+      "resolve": {
+        "line": "They decide whether your name is useful or dangerous.",
+        "choices": [
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "They keep the channel open, for now." },
+          { "id": "make amends", "label": "Make Amends", "requires": ["recent_rebuff"], "response": "They forgive the slight and reopen contact." }
+        ]
+      }
+    },
+    "template:arcane": {
+      "opening": {
+        "line": "The occult expert studies you as if reading a difficult text.",
+        "choices": [
+          { "id": "direct", "label": "Direct", "requires": [], "response": "They ask for precision, not bravado." },
+          {
+            "id": "persuasion check",
+            "label": "Persuade",
+            "requires": [],
+            "response": "You frame your request as a matter of public safety.",
+            "skill_check": {
+              "skill": "persuasion",
+              "dc": 13,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "They concede and share careful guidance.",
+              "failure_response": "They retreat behind doctrine and caution."
+            }
+          },
+          {
+            "id": "deception check",
+            "label": "Deceive",
+            "requires": [],
+            "response": "You pretend to carry sanctioned authority.",
+            "skill_check": {
+              "skill": "deception",
+              "dc": 14,
+              "success_stage": "resolve",
+              "failure_stage": "opening",
+              "success_response": "They believe you and move to immediate terms.",
+              "failure_response": "They detect the fraud and close ranks."
+            }
+          }
+        ]
+      },
+      "probe": {
+        "line": "They test your intent before sharing dangerous knowledge.",
+        "choices": [
+          { "id": "address flashpoint", "label": "Address Flashpoint", "requires": ["flashpoint_present"], "response": "You link arcane risk to the latest civic fracture." },
+          { "id": "urgent appeal", "label": "Urgent Appeal", "requires": ["tension_high"], "response": "You insist there is no time for ritual caution." },
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "You keep the tone respectful and measured." }
+        ]
+      },
+      "resolve": {
+        "line": "A final judgement is cast on your request.",
+        "choices": [
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "They agree to help under strict constraints." },
+          { "id": "make amends", "label": "Make Amends", "requires": ["recent_rebuff"], "response": "They accept your apology and reopen counsel." }
+        ]
+      }
+    },
+    "template:social": {
+      "opening": {
+        "line": "A local pauses their routine, deciding whether to trust your tone.",
+        "choices": [
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "They relax and speak openly for a moment." },
+          {
+            "id": "persuasion check",
+            "label": "Persuade",
+            "requires": [],
+            "response": "You make a calm case for mutual help.",
+            "skill_check": {
+              "skill": "persuasion",
+              "dc": 12,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "They trust you enough to continue the conversation.",
+              "failure_response": "They keep things short and guarded."
+            }
+          },
+          {
+            "id": "intimidation check",
+            "label": "Intimidate",
+            "requires": [],
+            "response": "You push for answers through pressure.",
+            "skill_check": {
+              "skill": "intimidation",
+              "dc": 14,
+              "success_stage": "probe",
+              "failure_stage": "opening",
+              "success_response": "They yield and answer quickly.",
+              "failure_response": "They recoil and stop engaging."
+            }
+          }
+        ]
+      },
+      "probe": {
+        "line": "They test whether you're helping the town or using it.",
+        "choices": [
+          { "id": "leverage rumour", "label": "Leverage Rumour", "requires": ["recent_rumour"], "response": "You use recent whispers to steer the exchange." },
+          { "id": "direct", "label": "Direct", "requires": [], "response": "You ask plainly and wait for a plain answer." },
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "You keep the exchange steady and respectful." }
+        ]
+      },
+      "resolve": {
+        "line": "The local decides whether to vouch for you going forward.",
+        "choices": [
+          { "id": "friendly", "label": "Friendly", "requires": [], "response": "They promise to speak well of you in the district." },
+          { "id": "make amends", "label": "Make Amends", "requires": ["recent_rebuff"], "response": "They agree to a clean slate, cautiously." }
         ]
       }
     }

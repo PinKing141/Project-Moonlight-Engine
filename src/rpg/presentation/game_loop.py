@@ -102,6 +102,99 @@ def _render_message_panel(
         print(row)
 
 
+def _run_skill_training_flow(game_service, character_id: int, *, title: str = "Skill Training") -> None:
+    try:
+        status = game_service.get_skill_training_status_intent(character_id)
+    except Exception:
+        return
+
+    current_intent = [str(row) for row in list(status.get("intent", []))]
+    while True:
+        try:
+            rows = list(game_service.list_granular_skills_intent(character_id) or [])
+        except Exception:
+            rows = []
+        options: list[str] = []
+        toggles: list[str] = []
+        for row in rows:
+            if not bool(row.get("eligible_new", False)):
+                continue
+            slug = str(row.get("slug", "") or "")
+            if not slug:
+                continue
+            label = str(row.get("label", slug)).strip() or slug
+            current = int(row.get("current", 0) or 0)
+            checked = "[x]" if slug in current_intent else "[ ]"
+            options.append(f"{checked} {label} (current +{current})")
+            toggles.append(slug)
+
+        options.extend(["Continue to Spending", "Skip Skill Training"])
+        selection = arrow_menu(f"{title} — Declare Intent", options)
+        if selection in {-1, len(options) - 1, len(options) - 2}:
+            break
+        slug = toggles[selection]
+        if slug in current_intent:
+            current_intent = [value for value in current_intent if value != slug]
+        else:
+            current_intent.append(slug)
+
+    try:
+        intent_result = game_service.declare_skill_training_intent_intent(character_id, current_intent)
+        if list(intent_result.messages or []):
+            clear_screen()
+            _render_message_panel(
+                title,
+                list(intent_result.messages or []),
+                border_style=_BORDER_CHARACTER,
+                panel_key="character",
+            )
+            _prompt_continue()
+    except Exception:
+        pass
+
+    while True:
+        try:
+            status = game_service.get_skill_training_status_intent(character_id)
+            points = int(status.get("points_available", 0) or 0)
+        except Exception:
+            points = 0
+        if points <= 0:
+            return
+
+        try:
+            rows = list(game_service.list_granular_skills_intent(character_id) or [])
+        except Exception:
+            rows = []
+        options: list[str] = []
+        slugs: list[str] = []
+        for row in rows:
+            current = int(row.get("current", 0) or 0)
+            if current <= 0 and not bool(row.get("eligible_new", False)):
+                continue
+            slug = str(row.get("slug", "") or "")
+            if not slug:
+                continue
+            label = str(row.get("label", slug)).strip() or slug
+            options.append(f"{label} (+{current})")
+            slugs.append(slug)
+        options.append("Finish")
+
+        choice = arrow_menu(f"{title} — Spend Points ({points} left)", options)
+        if choice in {-1, len(options) - 1}:
+            return
+
+        selected_slug = slugs[choice]
+        result = game_service.spend_skill_proficiency_points_intent(character_id, {selected_slug: 1})
+        clear_screen()
+        _render_message_panel(
+            title,
+            list(result.messages or ["No changes applied."]),
+            border_style=_BORDER_CHARACTER,
+            panel_key="character",
+        )
+        _prompt_continue()
+
+
 def _render_loop_header(context, view, descriptor: str, diff_label: str, world_line: str, party_lines: list[str] | None = None) -> None:
     party_lines = [str(line) for line in list(party_lines or []) if str(line).strip()]
     if _CONSOLE is not None and Panel is not None and Table is not None:
@@ -813,6 +906,7 @@ def run_game_loop(game_service, character_id: int):
                     panel_key="character",
                 )
                 _prompt_continue()
+                _run_skill_training_flow(game_service, character_id, title="Level-Up Skill Training")
                 continue
 
         clear_screen()
@@ -865,7 +959,15 @@ def run_game_loop(game_service, character_id: int):
                 mode = _choose_travel_mode(context.current_location_name)
                 if mode is None:
                     continue
-                result = game_service.travel_intent(character_id, destination_id=destination.location_id, travel_mode=mode)
+                pace = _choose_travel_pace(context.current_location_name)
+                if pace is None:
+                    continue
+                result = game_service.travel_intent(
+                    character_id,
+                    destination_id=destination.location_id,
+                    travel_mode=mode,
+                    travel_pace=pace,
+                )
             else:
                 result = game_service.travel_intent(character_id)
             messages = result.messages if result.messages else ["You travel onward."]
@@ -916,8 +1018,11 @@ def run_game_loop(game_service, character_id: int):
 
         elif choice == 3:
             while True:
-                char_choice = arrow_menu(f"Character — {view.name}", ["View Sheet", "Quest Journal", "Equipment", "Party", "Codex", "Back"])
-                if char_choice in {-1, 5}:
+                char_choice = arrow_menu(
+                    f"Character — {view.name}",
+                    ["View Sheet", "Quest Journal", "Equipment", "Party", "Skill Training", "Codex", "Back"],
+                )
+                if char_choice in {-1, 6}:
                     break
                 if char_choice == 0:
                     character_sheet = game_service.get_character_sheet_intent(character_id)
@@ -933,6 +1038,9 @@ def run_game_loop(game_service, character_id: int):
                     _run_party_management(game_service, character_id, view.name)
                     continue
                 if char_choice == 4:
+                    _run_skill_training_flow(game_service, character_id, title="Skill Training")
+                    continue
+                if char_choice == 5:
                     _run_codex(game_service, character_id)
                     continue
 
@@ -1479,7 +1587,7 @@ def _choose_party_target(actor, allies, foes, round_no, scene_ctx, action):
     _ = round_no
     _ = scene_ctx
     normalized_action = str(action or "").strip().lower()
-    if normalized_action in {"flee", "dash", "dodge", "use item"}:
+    if normalized_action in {"flee", "dash", "disengage", "dodge", "hide", "use item"}:
         return 0
 
     if normalized_action == "cast spell":
@@ -1592,6 +1700,19 @@ def _choose_travel_mode(location_name: str | None = None) -> str | None:
     if selected in {-1, len(options) - 1}:
         return None
     return ("road", "stealth", "caravan")[selected]
+
+
+def _choose_travel_pace(location_name: str | None = None) -> str | None:
+    options = [
+        "Cautious (safer, slower)",
+        "Steady (balanced)",
+        "Hurried (faster, exhausting)",
+        "Back",
+    ]
+    selected = arrow_menu(f"Travel Pace — {location_name or 'Journey'}", options)
+    if selected in {-1, len(options) - 1}:
+        return None
+    return ("cautious", "steady", "hurried")[selected]
 
 
 def _generate_scene():

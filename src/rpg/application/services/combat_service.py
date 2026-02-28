@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Tuple
 
 from rpg.application.services.feature_effect_registry import (
+    ConditionEffect,
     FeatureEffectContext,
     default_feature_effect_registry,
 )
@@ -115,6 +116,14 @@ def _slugify_spell_name(name: str) -> str:
 
 
 class CombatService:
+    _RANGE_ALIAS: Dict[str, str] = {
+        "engaged": "engaged",
+        "close": "engaged",
+        "near": "near",
+        "mid": "near",
+        "far": "far",
+    }
+
     _BACKLINE_CLASSES: Tuple[str, ...] = ("wizard", "sorcerer", "warlock", "bard")
     _BACKLINE_NAME_KEYWORDS: Tuple[str, ...] = (
         "archer",
@@ -124,6 +133,17 @@ class CombatService:
         "witch",
         "priest",
         "acolyte",
+    )
+    _BOSS_NAME_KEYWORDS: Tuple[str, ...] = (
+        "dragon",
+        "tyrant",
+        "lord",
+        "queen",
+        "king",
+        "ancient",
+        "demon",
+        "lich",
+        "boss",
     )
 
     def __init__(
@@ -216,10 +236,33 @@ class CombatService:
         "burning": "Burning",
         "blessed": "Blessed",
         "stunned": "Stunned",
+        "blinded": "Blinded",
+        "charmed": "Charmed",
+        "deafened": "Deafened",
+        "paralysed": "Paralysed",
+        "frightened": "Frightened",
+        "grappled": "Grappled",
+        "incapacitated": "Incapacitated",
+        "invisible": "Invisible",
+        "petrified": "Petrified",
+        "prone": "Prone",
+        "restrained": "Restrained",
+        "exhaustion": "Exhaustion",
+        "unconscious": "Unconscious",
     }
     _STATUS_ATTACK_ROLL_SHIFT: Dict[str, int] = {
         "poisoned": -2,
         "blessed": 2,
+    }
+    _TACTICAL_LABELS: Dict[str, str] = {
+        "concealed": "Concealed",
+        "cover": "Cover",
+        "high_ground": "High Ground",
+        "hidden_strike": "Hidden Strike",
+        "helped": "Helped",
+        "exposed": "Exposed",
+        "dodging": "Dodging",
+        "disengaged": "Disengaged",
     }
 
     @staticmethod
@@ -251,6 +294,8 @@ class CombatService:
                 "id": str(row.get("id", "")).strip().lower(),
                 "rounds": max(0, int(row.get("rounds", 0) or 0)),
                 "potency": max(1, int(row.get("potency", 1) or 1)),
+                "source_id": int(row.get("source_id", 0) or 0),
+                "source_name": str(row.get("source_name", "") or "").strip(),
             }
             for row in statuses
             if str(row.get("id", "")).strip()
@@ -268,6 +313,173 @@ class CombatService:
         key = str(status_id or "").strip().lower()
         return any(str(row.get("id", "")).strip().lower() == key and int(row.get("rounds", 0) or 0) > 0 for row in self._actor_statuses(actor))
 
+    def _has_status_from_source(self, actor, status_id: str, source_actor) -> bool:
+        key = str(status_id or "").strip().lower()
+        source_id = int(getattr(source_actor, "id", 0) or 0)
+        source_name = str(getattr(source_actor, "name", "") or "").strip().lower()
+        for row in self._actor_statuses(actor):
+            row_key = str(row.get("id", "")).strip().lower()
+            rounds = int(row.get("rounds", 0) or 0)
+            if row_key != key or rounds <= 0:
+                continue
+            row_source_id = int(row.get("source_id", 0) or 0)
+            row_source_name = str(row.get("source_name", "") or "").strip().lower()
+            if source_id and row_source_id == source_id:
+                return True
+            if source_name and row_source_name and row_source_name == source_name:
+                return True
+        return False
+
+    def _status_potency(self, actor, status_id: str) -> int:
+        key = str(status_id or "").strip().lower()
+        best = 0
+        for row in self._actor_statuses(actor):
+            row_key = str(row.get("id", "")).strip().lower()
+            rounds = int(row.get("rounds", 0) or 0)
+            if row_key != key or rounds <= 0:
+                continue
+            best = max(best, int(row.get("potency", 1) or 1))
+        return int(best)
+
+    def _exhaustion_level(self, actor) -> int:
+        return int(self._status_potency(actor, "exhaustion") or 0)
+
+    def _movement_blocked(self, actor) -> bool:
+        if (
+            self._has_status(actor, "stunned")
+            or self._has_status(actor, "paralysed")
+            or self._has_status(actor, "restrained")
+            or self._has_status(actor, "grappled")
+            or self._has_status(actor, "incapacitated")
+            or self._has_status(actor, "petrified")
+            or self._has_status(actor, "unconscious")
+        ):
+            return True
+        return self._exhaustion_level(actor) >= 5
+
+    def _turn_blocked(self, actor) -> bool:
+        if (
+            self._has_status(actor, "stunned")
+            or self._has_status(actor, "paralysed")
+            or self._has_status(actor, "incapacitated")
+            or self._has_status(actor, "petrified")
+            or self._has_status(actor, "unconscious")
+        ):
+            return True
+        return self._exhaustion_level(actor) >= 6
+
+    def _ability_check_disadvantage(self, actor, *, requires_sight: bool = False, requires_hearing: bool = False) -> bool:
+        if requires_sight and self._has_status(actor, "blinded"):
+            return True
+        if requires_hearing and self._has_status(actor, "deafened"):
+            return True
+        if self._has_status(actor, "poisoned") or self._has_status(actor, "frightened"):
+            return True
+        return self._exhaustion_level(actor) >= 1
+
+    def _ability_check_roll(self, actor, modifier: int, *, requires_sight: bool = False, requires_hearing: bool = False) -> int:
+        if self._ability_check_disadvantage(actor, requires_sight=requires_sight, requires_hearing=requires_hearing):
+            roll = min(self.rng.randint(1, 20), self.rng.randint(1, 20))
+        else:
+            roll = self.rng.randint(1, 20)
+        return int(roll + int(modifier))
+
+    @staticmethod
+    def _combine_advantage(base: Optional[str], delta: int) -> Optional[str]:
+        score = 0
+        if base == "advantage":
+            score += 1
+        elif base == "disadvantage":
+            score -= 1
+        score += int(delta)
+        if score > 0:
+            return "advantage"
+        if score < 0:
+            return "disadvantage"
+        return None
+
+    def _condition_advantage_delta(self, attacker, defender, *, distance: str = "close") -> int:
+        delta = 0
+        if self._has_status(attacker, "blinded"):
+            delta -= 1
+        if self._has_status(attacker, "restrained"):
+            delta -= 1
+        if self._has_status(attacker, "paralysed"):
+            delta -= 1
+        if self._has_status(attacker, "stunned"):
+            delta -= 1
+        if self._has_status(attacker, "prone"):
+            delta -= 1
+        if self._has_status(attacker, "poisoned"):
+            delta -= 1
+        if self._has_status(attacker, "frightened"):
+            delta -= 1
+        if self._exhaustion_level(attacker) >= 3:
+            delta -= 1
+        if self._has_status(attacker, "invisible"):
+            delta += 1
+
+        if self._has_status(defender, "blinded"):
+            delta += 1
+        if self._has_status(defender, "restrained"):
+            delta += 1
+        if self._has_status(defender, "paralysed"):
+            delta += 1
+        if self._has_status(defender, "stunned"):
+            delta += 1
+        if self._has_status(defender, "incapacitated"):
+            delta += 1
+        if self._has_status(defender, "unconscious"):
+            delta += 1
+        if self._has_status(defender, "petrified"):
+            delta += 1
+        if self._has_status(defender, "invisible"):
+            delta -= 1
+        if self._has_status(defender, "prone"):
+            if self._is_melee_range(distance):
+                delta += 1
+            else:
+                delta -= 1
+        return int(delta)
+
+    @staticmethod
+    def _is_melee_range(distance: str | None) -> bool:
+        normalized = str(distance or "engaged").strip().lower()
+        return CombatService._RANGE_ALIAS.get(normalized, "engaged") == "engaged"
+
+    @classmethod
+    def _normalize_range_band(cls, distance: str | None) -> str:
+        normalized = str(distance or "engaged").strip().lower()
+        return cls._RANGE_ALIAS.get(normalized, "engaged")
+
+    @classmethod
+    def _range_label(cls, distance: str | None) -> str:
+        band = cls._normalize_range_band(distance)
+        labels = {"engaged": "Engaged", "near": "Near", "far": "Far"}
+        return labels.get(band, "Engaged")
+
+    @classmethod
+    def _step_toward_engagement(cls, distance: str | None) -> str:
+        band = cls._normalize_range_band(distance)
+        if band == "far":
+            return "near"
+        if band == "near":
+            return "engaged"
+        return "engaged"
+
+    @classmethod
+    def _is_attack_viable_for_range(cls, *, is_melee_attack: bool, distance: str | None) -> bool:
+        band = cls._normalize_range_band(distance)
+        if is_melee_attack:
+            return band == "engaged"
+        return band in {"engaged", "near", "far"}
+
+    def _modify_incoming_damage(self, target, damage: int) -> int:
+        total = max(0, int(damage))
+        if self._has_status(target, "petrified"):
+            total = max(1, total // 2)
+        return max(total, 0)
+
     def _apply_status(
         self,
         *,
@@ -277,6 +489,7 @@ class CombatService:
         log: List[CombatLogEntry],
         potency: int = 1,
         source_name: str = "Effect",
+        source_actor=None,
     ) -> None:
         key = str(status_id or "").strip().lower()
         if key not in self._STATUS_LABELS:
@@ -285,12 +498,36 @@ class CombatService:
         next_potency = max(1, int(potency or 1))
         statuses = self._actor_statuses(actor)
         existing = next((row for row in statuses if str(row.get("id", "")).strip().lower() == key), None)
+        source_id = int(getattr(source_actor, "id", 0) or 0)
+        source_label = str(getattr(source_actor, "name", "") or "").strip() or str(source_name or "")
         if existing is not None:
             existing["rounds"] = max(int(existing.get("rounds", 0) or 0), next_rounds)
             existing["potency"] = max(int(existing.get("potency", 1) or 1), next_potency)
+            if source_id:
+                existing["source_id"] = source_id
+            if source_label:
+                existing["source_name"] = source_label
         else:
-            statuses.append({"id": key, "rounds": next_rounds, "potency": next_potency})
+            statuses.append(
+                {
+                    "id": key,
+                    "rounds": next_rounds,
+                    "potency": next_potency,
+                    "source_id": source_id,
+                    "source_name": source_label,
+                }
+            )
             self._log(log, f"{source_name}: {getattr(actor, 'name', 'Target')} is now {self._STATUS_LABELS[key]} ({next_rounds} rounds).", level="compact")
+            if key == "unconscious" and not self._has_status(actor, "prone"):
+                statuses.append(
+                    {
+                        "id": "prone",
+                        "rounds": max(next_rounds, 1),
+                        "potency": 1,
+                        "source_id": source_id,
+                        "source_name": source_label,
+                    }
+                )
         self._set_actor_statuses(actor, statuses)
 
     def _status_attack_roll_shift(self, actor) -> int:
@@ -318,12 +555,26 @@ class CombatService:
                 continue
             if key == "burning":
                 damage = sum(roll_die("d4", rng=self.rng) for _ in range(potency))
+                damage = self._modify_incoming_damage(actor, damage)
                 hp_now = max(0, hp_now - damage)
                 self._log(log, f"{getattr(actor, 'name', 'Target')} burns for {damage} damage ({hp_now}/{hp_max}).", level="compact")
             elif key == "poisoned":
+                if self._has_status(actor, "petrified"):
+                    continue
                 damage = max(1, potency)
+                damage = self._modify_incoming_damage(actor, damage)
                 hp_now = max(0, hp_now - damage)
                 self._log(log, f"{getattr(actor, 'name', 'Target')} suffers {damage} poison damage ({hp_now}/{hp_max}).", level="compact")
+            elif key == "exhaustion":
+                if potency >= 6:
+                    hp_now = 0
+                    self._log(log, f"{getattr(actor, 'name', 'Target')} collapses from exhaustion.", level="compact")
+                    break
+                if potency >= 4:
+                    cap = max(1, hp_max // 2)
+                    if hp_now > cap:
+                        hp_now = cap
+                        self._log(log, f"{getattr(actor, 'name', 'Target')} is drained by exhaustion ({hp_now}/{hp_max}).", level="compact")
         actor.hp_current = hp_now
 
     def _tick_actor_statuses_end_turn(self, actor, log: List[CombatLogEntry]) -> None:
@@ -340,21 +591,140 @@ class CombatService:
                 label = self._STATUS_LABELS.get(key, key.title())
                 self._log(log, f"{getattr(actor, 'name', 'Target')} is no longer {label}.", level="normal")
                 continue
-            remaining.append({"id": key, "rounds": rounds, "potency": potency})
+            remaining.append(
+                {
+                    "id": key,
+                    "rounds": rounds,
+                    "potency": potency,
+                    "source_id": int(row.get("source_id", 0) or 0),
+                    "source_name": str(row.get("source_name", "") or "").strip(),
+                }
+            )
         self._set_actor_statuses(actor, remaining)
+
+    def _actor_tactical_tags(self, actor) -> Dict[str, int]:
+        if isinstance(actor, Character):
+            flags = getattr(actor, "flags", None)
+            if not isinstance(flags, dict):
+                return {}
+            payload = flags.get("combat_tactical_tags")
+        else:
+            payload = getattr(actor, "_combat_tactical_tags", None)
+        if not isinstance(payload, dict):
+            return {}
+
+        normalized: Dict[str, int] = {}
+        for key, value in payload.items():
+            slug = str(key or "").strip().lower()
+            rounds = int(value or 0)
+            if slug and rounds > 0:
+                normalized[slug] = rounds
+        return normalized
+
+    def _set_actor_tactical_tags(self, actor, tags: Dict[str, int]) -> None:
+        normalized: Dict[str, int] = {}
+        for key, value in tags.items():
+            slug = str(key or "").strip().lower()
+            rounds = int(value or 0)
+            if slug and rounds > 0:
+                normalized[slug] = rounds
+        if isinstance(actor, Character):
+            flags = getattr(actor, "flags", None)
+            if not isinstance(flags, dict):
+                return
+            if normalized:
+                flags["combat_tactical_tags"] = normalized
+            else:
+                flags.pop("combat_tactical_tags", None)
+            return
+        setattr(actor, "_combat_tactical_tags", normalized)
+
+    def _add_tactical_tag(self, actor, *, tag: str, rounds: int) -> None:
+        key = str(tag or "").strip().lower()
+        if not key:
+            return
+        next_rounds = max(1, int(rounds or 1))
+        tags = self._actor_tactical_tags(actor)
+        tags[key] = max(int(tags.get(key, 0) or 0), next_rounds)
+        self._set_actor_tactical_tags(actor, tags)
+
+    def _has_tactical_tag(self, actor, tag: str) -> bool:
+        key = str(tag or "").strip().lower()
+        return key in self._actor_tactical_tags(actor)
+
+    def _consume_tactical_tag(self, actor, tag: str) -> bool:
+        key = str(tag or "").strip().lower()
+        tags = self._actor_tactical_tags(actor)
+        if key not in tags:
+            return False
+        tags.pop(key, None)
+        self._set_actor_tactical_tags(actor, tags)
+        return True
+
+    def _tick_actor_tactical_tags_end_turn(self, actor) -> None:
+        tags = self._actor_tactical_tags(actor)
+        remaining: Dict[str, int] = {}
+        for key, rounds in tags.items():
+            next_rounds = int(rounds) - 1
+            if next_rounds > 0:
+                remaining[key] = next_rounds
+        self._set_actor_tactical_tags(actor, remaining)
+
+    def _clear_actor_tactical_tags(self, actor) -> None:
+        self._set_actor_tactical_tags(actor, {})
+
+    def _terrain_supports_hiding(self, *, terrain: str, distance: str) -> bool:
+        terrain_key = str(terrain or "").strip().lower()
+        if terrain_key in {"forest", "jungle", "woodland", "swamp", "wetland", "marsh", "bog", "cramped"}:
+            return True
+        return self._normalize_range_band(distance) != "engaged"
+
+    def _tactical_advantage_delta(self, *, attacker, defender) -> int:
+        delta = 0
+        if self._has_tactical_tag(attacker, "high_ground"):
+            delta += 1
+        if self._has_tactical_tag(attacker, "hidden_strike"):
+            delta += 1
+        if self._has_tactical_tag(attacker, "helped"):
+            delta += 1
+
+        if self._has_tactical_tag(defender, "cover"):
+            delta -= 1
+        if self._has_tactical_tag(defender, "concealed"):
+            delta -= 1
+        if self._has_tactical_tag(defender, "dodging"):
+            delta -= 1
+        if self._has_tactical_tag(defender, "disengaged"):
+            delta -= 1
+        if self._has_tactical_tag(defender, "exposed"):
+            delta += 1
+        return int(delta)
+
+    def _entity_grapple_mod(self, actor) -> int:
+        if isinstance(actor, Character):
+            scores = self._ability_scores(actor)
+            return max(scores.strength_mod, scores.dexterity_mod)
+        return max(0, int(int(getattr(actor, "attack_bonus", 0) or 0) // 2))
+
+    def _resolve_contested_grapple(self, *, attacker, defender) -> bool:
+        attacker_mod = self._entity_grapple_mod(attacker)
+        defender_mod = self._entity_grapple_mod(defender)
+        attacker_total = self._ability_check_roll(attacker, attacker_mod, requires_sight=False)
+        defender_total = self._ability_check_roll(defender, defender_mod, requires_sight=False)
+        return int(attacker_total) >= int(defender_total)
 
     def _apply_spell_status_effects(self, *, caster: Character, target, definition, log: List[CombatLogEntry]) -> None:
         damage_type = str(getattr(definition, "damage_type", "") or "").strip().lower()
         if int(getattr(target, "hp_current", 0) or 0) <= 0:
             return
         if damage_type == "fire" and self.rng.randint(1, 100) <= 35:
-            self._apply_status(actor=target, status_id="burning", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"))
+            self._apply_status(actor=target, status_id="burning", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster)
         elif damage_type == "healing":
-            self._apply_status(actor=target, status_id="blessed", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"))
+            self._apply_status(actor=target, status_id="blessed", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster)
         elif damage_type == "psychic" and self.rng.randint(1, 100) <= 20:
-            self._apply_status(actor=target, status_id="stunned", rounds=1, potency=1, log=log, source_name=getattr(caster, "name", "Spell"))
+            self._apply_status(actor=target, status_id="stunned", rounds=1, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster)
         elif damage_type in {"poison", "acid", "necrotic"} and self.rng.randint(1, 100) <= 30:
-            self._apply_status(actor=target, status_id="poisoned", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"))
+            self._apply_status(actor=target, status_id="poisoned", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster)
 
     def _primary_attack_mod(self, player: Character) -> int:
         scores = self._ability_scores(player)
@@ -481,6 +851,8 @@ class CombatService:
         enemy: Entity,
         round_number: int,
         is_crit: bool = False,
+        target_actor=None,
+        log: Optional[List[CombatLogEntry]] = None,
     ) -> tuple[int, int, int]:
         initiative_bonus = 0
         attack_bonus = 0
@@ -509,6 +881,23 @@ class CombatService:
             initiative_bonus += added_initiative
             attack_bonus += added_attack
             bonus_damage += added_damage
+
+            for effect in tuple(outcome.condition_effects or ()):
+                if not isinstance(effect, ConditionEffect):
+                    continue
+                target_key = str(getattr(effect, "target", "target") or "target").strip().lower()
+                actor = player if target_key == "self" else target_actor
+                if actor is None:
+                    continue
+                self._apply_status(
+                    actor=actor,
+                    status_id=str(getattr(effect, "status_id", "") or ""),
+                    rounds=max(1, int(getattr(effect, "rounds", 1) or 1)),
+                    potency=max(1, int(getattr(effect, "potency", 1) or 1)),
+                    log=log if log is not None else [],
+                    source_name=str(feature.name or feature.slug or "Feature"),
+                    source_actor=player,
+                )
 
         return initiative_bonus, attack_bonus, bonus_damage
 
@@ -650,6 +1039,50 @@ class CombatService:
         # aggressive default
         return "attack", None
 
+    def _select_enemy_tactical_action(
+        self,
+        *,
+        intent: str,
+        actor,
+        target,
+        terrain: str,
+        distance: str,
+        default_action: str,
+    ) -> str:
+        base = str(default_action or "attack").strip().lower()
+        if base not in {"attack", "reckless"}:
+            return base
+
+        intent_key = str(intent or "").strip().lower()
+        roll = self.rng.randint(1, 100)
+        is_melee_actor = self._is_melee_actor(actor)
+        engaged = self._is_melee_range(distance)
+        can_hide = self._terrain_supports_hiding(terrain=str(terrain), distance=str(distance))
+        hp_max = max(1, int(getattr(actor, "hp_max", getattr(actor, "hp", 1)) or 1))
+        hp_now = int(getattr(actor, "hp_current", hp_max) or hp_max)
+        hp_ratio = float(hp_now) / float(hp_max)
+        threatened = engaged and not self._movement_blocked(actor)
+
+        if threatened and not is_melee_actor and intent_key in {"cautious", "skirmisher", "ambusher"} and roll <= 75:
+            return "disengage"
+
+        if threatened and hp_ratio <= 0.45 and intent_key in {"cautious", "skirmisher", "ambusher"} and roll <= 50:
+            return "disengage"
+
+        if intent_key == "ambusher" and can_hide and not self._has_tactical_tag(actor, "hidden_strike") and roll <= 45:
+            return "hide"
+
+        if is_melee_actor and engaged:
+            if intent_key in {"brute", "aggressive"} and not self._has_status(target, "grappled") and roll <= 35:
+                return "grapple"
+            if intent_key in {"cautious", "skirmisher"} and not self._has_status(target, "prone") and roll <= 30:
+                return "shove"
+
+        if intent_key in {"cautious", "skirmisher"} and can_hide and not engaged and roll <= 30:
+            return "hide"
+
+        return base
+
     def _roll_d20(self, advantage: Optional[str] = None) -> tuple[int, int, int]:
         """Return (roll, alt_roll, chosen) where alt_roll is 0 when unused."""
         first = self.rng.randint(1, 20)
@@ -754,6 +1187,8 @@ class CombatService:
             player=player,
             enemy=foe,
             round_number=1,
+            target_actor=foe,
+            log=log,
         )
         initiative_player = _roll_initiative(surprise == "player", scores.initiative + initiative_bonus)
         initiative_enemy = _roll_initiative(surprise == "enemy", getattr(foe, "attack_bonus", 0))
@@ -763,7 +1198,7 @@ class CombatService:
 
         round_no = 1
         fled = False
-        distance = (scene or {}).get("distance", "close")
+        distance = self._normalize_range_band((scene or {}).get("distance", "engaged"))
         terrain = (scene or {}).get("terrain", "open")
         weather = str((scene or {}).get("weather", "") or "")
         flavour_tracker: dict[str, bool] = {}
@@ -771,6 +1206,19 @@ class CombatService:
             if player.class_name == "rogue":
                 sneak_available = True
             self._log(log, f"-- Round {round_no} --", level="debug")
+            self._apply_round_lair_action(
+                log=log,
+                round_no=round_no,
+                terrain=str(terrain),
+                allies=[player],
+                enemies=[foe],
+                scene=scene if isinstance(scene, dict) else None,
+            )
+            player_hp = int(getattr(player, "hp_current", player_hp) or player_hp)
+            if int(getattr(foe, "hp_current", 0) or 0) <= 0:
+                break
+            if player_hp <= 0:
+                break
             intent = self._intent_for_enemy(foe)
             round_flavour_used = False
             for actor in turn_order:
@@ -783,9 +1231,30 @@ class CombatService:
                     if self._has_status(player, "stunned"):
                         self._log(log, f"{player.name} is stunned and loses the turn.", level="compact")
                         self._tick_actor_statuses_end_turn(player, log)
+                        self._tick_actor_tactical_tags_end_turn(player)
+                        continue
+                    if self._turn_blocked(player):
+                        self._log(log, f"{player.name} is incapacitated and loses the turn.", level="compact")
+                        self._tick_actor_statuses_end_turn(player, log)
+                        self._tick_actor_tactical_tags_end_turn(player)
                         continue
                     advantage_state = "advantage" if player_has_opening and round_no == 1 else None
-                    options = ["Attack", "Dash", "Dodge", "Use Item", "Flee"]
+                    advantage_state = self._combine_advantage(
+                        advantage_state,
+                        self._condition_advantage_delta(player, foe, distance=str(distance)),
+                    )
+                    options = [
+                        "Attack",
+                        "Dash",
+                        "Disengage",
+                        "Dodge",
+                        "Hide",
+                        "Help",
+                        "Grapple",
+                        "Shove",
+                        "Use Item",
+                        "Flee",
+                    ]
                     has_magic = (getattr(player, "spell_slots_current", 0) > 0) or bool(getattr(player, "cantrips", []))
                     if has_magic:
                         options.insert(1, "Cast Spell")
@@ -804,6 +1273,16 @@ class CombatService:
                         action = "Attack"
 
                     if action == "Attack":
+                        if not self._is_attack_viable_for_range(is_melee_attack=self._is_melee_actor(player), distance=distance):
+                            self._log(log, f"Target is out of melee range ({self._range_label(distance)}). Dash to close distance.", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
+                        if self._has_status_from_source(player, "charmed", foe):
+                            self._log(log, f"{player.name} cannot attack {foe.name} while charmed.", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
                         sneak_die = "d6" if sneak_available else None
                         _, roll_attack_bonus, _ = self._resolve_feature_trigger(
                             features=features,
@@ -811,21 +1290,38 @@ class CombatService:
                             player=player,
                             enemy=foe,
                             round_number=round_no,
+                            target_actor=foe,
+                            log=log,
                         )
                         weather_shift = self._weather_attack_shift(weather=weather, attacker=player, action="attack")
+                        weather_advantage = self._weather_attack_advantage(weather=weather, attacker=player, action="attack")
                         if weather_shift:
                             self._log(log, f"Weather pressure ({weather}) applies {weather_shift} to your strike.", level="compact")
+                        if weather_advantage == "disadvantage":
+                            self._log(log, f"Weather pressure ({weather}) imposes disadvantage on your ranged attack.", level="compact")
+                        attack_advantage_state = self._combine_advantage(
+                            advantage_state,
+                            -1 if weather_advantage == "disadvantage" else 0,
+                        )
+                        attack_advantage_state = self._combine_advantage(
+                            attack_advantage_state,
+                            self._tactical_advantage_delta(attacker=player, defender=foe),
+                        )
                         hit, is_crit, _, _ = self._attack_roll(
                             roll_attack_bonus + self._status_attack_roll_shift(player) + int(weather_shift),
                             prof,
                             attack_mod,
                             foe.armour_class,
-                            advantage_state,
+                            attack_advantage_state,
                             log,
                             player.name,
                             foe.name,
                         )
                         if hit:
+                            if self._has_status(foe, "paralysed") and self._is_melee_range(distance):
+                                is_crit = True
+                            if self._has_status(foe, "unconscious") and self._is_melee_range(distance):
+                                is_crit = True
                             dmg = self._deal_damage(
                                 derived["damage_die"],
                                 derived["damage_mod"],
@@ -840,16 +1336,25 @@ class CombatService:
                                 enemy=foe,
                                 round_number=round_no,
                                 is_crit=is_crit,
+                                target_actor=foe,
+                                log=log,
                             )
                             dmg += hit_bonus_damage
                             dmg += whetstone_bonus
+                            dmg = self._modify_incoming_damage(foe, dmg)
                             foe.hp_current = max(0, foe.hp_current - dmg)
                             self._log(log, f"You deal {dmg} damage to {foe.name} ({foe.hp_current}/{foe.hp_max}).", level="compact")
                             sneak_available = False
+                            self._consume_tactical_tag(player, "hidden_strike")
+                            self._consume_tactical_tag(player, "helped")
+                            self._consume_tactical_tag(foe, "exposed")
                             if foe.hp_current <= 0:
                                 break
                         else:
                             self._log(log, "Your strike fails to connect.", level="compact")
+                            self._consume_tactical_tag(player, "hidden_strike")
+                            self._consume_tactical_tag(player, "helped")
+                            self._consume_tactical_tag(foe, "exposed")
                         self._add_mechanical_flavour(
                             log,
                             actor="player",
@@ -860,12 +1365,27 @@ class CombatService:
                         )
 
                     elif action == "Cast Spell":
+                        if not self._is_attack_viable_for_range(is_melee_attack=False, distance=distance):
+                            self._log(log, f"Target is out of spell range ({self._range_label(distance)}).", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
+                        if self._has_status_from_source(player, "charmed", foe):
+                            self._log(log, f"{player.name} cannot target {foe.name} with harmful magic while charmed.", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
                         weather_shift = self._weather_attack_shift(weather=weather, attacker=player, action="cast_spell")
+                        weather_advantage = self._weather_attack_advantage(weather=weather, attacker=player, action="cast_spell")
                         if weather_shift:
                             self._log(log, f"Weather pressure ({weather}) disrupts casting aim ({weather_shift} to hit).", level="compact")
+                        if weather_advantage == "disadvantage":
+                            self._log(log, f"Weather pressure ({weather}) imposes disadvantage on ranged spell attacks.", level="compact")
                         player.flags["combat_weather_shift"] = int(weather_shift)
+                        player.flags["combat_weather_advantage"] = str(weather_advantage or "")
                         self._resolve_spell_cast(player, foe, action_payload, mental_mod, prof, log)
                         player.flags.pop("combat_weather_shift", None)
+                        player.flags.pop("combat_weather_advantage", None)
                         player_hp = int(getattr(player, "hp_current", player_hp) or player_hp)
                         self._add_mechanical_flavour(
                             log,
@@ -881,7 +1401,88 @@ class CombatService:
                     elif action == "Dodge":
                         player_dodge = True
                         player.flags["dodging"] = 1
+                        self._add_tactical_tag(player, tag="dodging", rounds=2)
                         self._log(log, "You focus on defense; incoming attacks have disadvantage.", level="compact")
+
+                    elif action == "Disengage":
+                        if self._movement_blocked(player):
+                            self._log(log, "You cannot disengage while restrained or incapacitated.", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
+                        self._add_tactical_tag(player, tag="disengaged", rounds=2)
+                        if self._is_dense_cover_terrain(str(terrain)):
+                            self._add_tactical_tag(player, tag="cover", rounds=2)
+                            self._log(log, "You disengage into cover.", level="compact")
+                        else:
+                            self._log(log, "You disengage and deny a clean strike.", level="compact")
+
+                    elif action == "Hide":
+                        if self._movement_blocked(player):
+                            self._log(log, "You cannot hide while restrained or incapacitated.", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
+                        if not self._terrain_supports_hiding(terrain=str(terrain), distance=str(distance)):
+                            self._log(log, "There is nowhere to hide here.", level="compact")
+                        else:
+                            stealth_total = self._ability_check_roll(player, scores.dexterity_mod, requires_sight=False)
+                            if stealth_total >= 12:
+                                self._add_tactical_tag(player, tag="concealed", rounds=2)
+                                self._add_tactical_tag(player, tag="hidden_strike", rounds=2)
+                                self._log(log, "You slip from sight and line up a hidden strike.", level="compact")
+                            else:
+                                self._add_tactical_tag(player, tag="exposed", rounds=1)
+                                self._log(log, "You fail to hide and reveal your position.", level="compact")
+
+                    elif action == "Help":
+                        self._add_tactical_tag(player, tag="helped", rounds=2)
+                        self._log(log, "You feint and read the foe, preparing your next strike.", level="compact")
+
+                    elif action == "Grapple":
+                        if not self._is_melee_range(distance):
+                            self._log(log, f"You must be engaged to grapple ({self._range_label(distance)}).", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
+                        if self._resolve_contested_grapple(attacker=player, defender=foe):
+                            self._apply_status(
+                                actor=foe,
+                                status_id="grappled",
+                                rounds=2,
+                                potency=1,
+                                log=log,
+                                source_name=player.name,
+                                source_actor=player,
+                            )
+                            self._add_tactical_tag(foe, tag="exposed", rounds=2)
+                            self._log(log, f"You grapple {foe.name} and control their movement.", level="compact")
+                        else:
+                            self._log(log, f"{foe.name} slips free of your grapple attempt.", level="compact")
+
+                    elif action == "Shove":
+                        if not self._is_melee_range(distance):
+                            self._log(log, f"You must be engaged to shove ({self._range_label(distance)}).", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
+                        if self._resolve_contested_grapple(attacker=player, defender=foe):
+                            if not self._has_status(foe, "prone"):
+                                self._apply_status(
+                                    actor=foe,
+                                    status_id="prone",
+                                    rounds=1,
+                                    potency=1,
+                                    log=log,
+                                    source_name=player.name,
+                                    source_actor=player,
+                                )
+                                self._log(log, f"You shove {foe.name} to the ground.", level="compact")
+                            else:
+                                distance = "near" if self._normalize_range_band(distance) == "engaged" else "far"
+                                self._log(log, f"You drive {foe.name} back to {self._range_label(distance)}.", level="compact")
+                        else:
+                            self._log(log, f"{foe.name} resists your shove.", level="compact")
 
                     elif action == "Use Item":
                         player_hp, whetstone_bonus = self._resolve_use_item(
@@ -894,14 +1495,26 @@ class CombatService:
                         player.hp_current = int(player_hp)
 
                     elif action == "Dash":
-                        if distance == "far":
-                            distance = "mid"
-                        elif distance == "mid":
-                            distance = "close"
-                        self._log(log, f"You dash forward. Distance is now {distance}.", level="compact")
+                        if self._has_status_from_source(player, "frightened", foe):
+                            self._log(log, "Fear holds you in place; you cannot move closer to the source.", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
+                        if self._movement_blocked(player):
+                            self._log(log, "You cannot dash while restrained or incapacitated.", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
+                        distance = self._step_toward_engagement(distance)
+                        self._log(log, f"You dash forward. Distance is now {self._range_label(distance)}.", level="compact")
 
                     elif action == "Flee":
-                        flee_roll = self.rng.randint(1, 20) + attack_mod
+                        if self._movement_blocked(player):
+                            self._log(log, "You cannot flee while restrained or incapacitated.", level="compact")
+                            self._tick_actor_statuses_end_turn(player, log)
+                            self._tick_actor_tactical_tags_end_turn(player)
+                            continue
+                        flee_roll = self._ability_check_roll(player, attack_mod, requires_sight=False)
                         if flee_roll >= 12:
                             self._log(log, "You slip away from the fight!", level="compact")
                             fled = True
@@ -909,8 +1522,10 @@ class CombatService:
                             player.flags.pop("temp_ac_bonus", None)
                             player.flags.pop("shield_rounds", None)
                             player.flags.pop("combat_statuses", None)
+                            player.flags.pop("combat_tactical_tags", None)
                             if "rage_rounds" in player.flags:
                                 player.flags["rage_rounds"] = 0
+                            self._clear_actor_tactical_tags(foe)
                             player.hp_current = player_hp
                             player.alive = player_hp > 0
                             return CombatResult(player, foe, log, player_won=False, fled=True)
@@ -918,6 +1533,7 @@ class CombatService:
                             self._log(log, "You fail to escape.", level="compact")
 
                     self._tick_actor_statuses_end_turn(player, log)
+                    self._tick_actor_tactical_tags_end_turn(player)
 
                 else:  # enemy turn
                     self._apply_start_turn_statuses(foe, log)
@@ -926,23 +1542,107 @@ class CombatService:
                     if self._has_status(foe, "stunned"):
                         self._log(log, f"{foe.name} is stunned and loses the turn.", level="compact")
                         self._tick_actor_statuses_end_turn(foe, log)
+                        self._tick_actor_tactical_tags_end_turn(foe)
+                        continue
+                    if self._turn_blocked(foe):
+                        self._log(log, f"{foe.name} is incapacitated and loses the turn.", level="compact")
+                        self._tick_actor_statuses_end_turn(foe, log)
+                        self._tick_actor_tactical_tags_end_turn(foe)
                         continue
                     if not round_flavour_used:
                         self._add_flavour(log, flavour_tracker, f"intent_{round_no}", self._intent_flavour(intent))
                         round_flavour_used = True
                     enemy_action, enemy_advantage = self._select_enemy_action(intent, foe, round_no, terrain)
+                    enemy_action = self._select_enemy_tactical_action(
+                        intent=intent,
+                        actor=foe,
+                        target=player,
+                        terrain=str(terrain),
+                        distance=str(distance),
+                        default_action=str(enemy_action),
+                    )
                     if enemy_action == "flee":
                         self._log(log, f"{foe.name} tries to flee the battle!", level="compact")
                         foe.hp_current = 0
                         break
 
-                    if distance == "far":
-                        self._log(log, f"{foe.name} closes in.", level="compact")
-                        distance = "mid"
+                    enemy_is_melee = self._is_melee_actor(foe)
+                    if enemy_is_melee and not self._is_attack_viable_for_range(is_melee_attack=True, distance=distance):
+                        next_band = self._step_toward_engagement(distance)
+                        if next_band != distance:
+                            distance = next_band
+                            self._log(log, f"{foe.name} closes in. Distance is now {self._range_label(distance)}.", level="compact")
                         continue
-                    elif distance == "mid" and enemy_action == "attack":
-                        # ranged not modeled; treat as disadvantaged strike
+                    if (not enemy_is_melee) and self._normalize_range_band(distance) == "engaged" and enemy_action == "attack":
                         enemy_advantage = "disadvantage"
+
+                    if enemy_action == "disengage":
+                        if not self._movement_blocked(foe):
+                            if self._normalize_range_band(distance) == "engaged":
+                                distance = "near"
+                            elif self._normalize_range_band(distance) == "near":
+                                distance = "far"
+                            self._add_tactical_tag(foe, tag="disengaged", rounds=2)
+                            if self._is_dense_cover_terrain(str(terrain)):
+                                self._add_tactical_tag(foe, tag="cover", rounds=2)
+                            self._log(log, f"{foe.name} disengages to {self._range_label(distance)} and resets footing.", level="compact")
+                        else:
+                            self._log(log, f"{foe.name} tries to disengage but cannot move.", level="compact")
+                        self._tick_actor_statuses_end_turn(foe, log)
+                        self._tick_actor_tactical_tags_end_turn(foe)
+                        continue
+
+                    if enemy_action == "hide":
+                        if self._terrain_supports_hiding(terrain=str(terrain), distance=str(distance)):
+                            self._add_tactical_tag(foe, tag="concealed", rounds=2)
+                            self._add_tactical_tag(foe, tag="hidden_strike", rounds=2)
+                            self._log(log, f"{foe.name} slips into concealment.", level="compact")
+                        else:
+                            self._log(log, f"{foe.name} searches for cover but stays exposed.", level="compact")
+                        self._tick_actor_statuses_end_turn(foe, log)
+                        self._tick_actor_tactical_tags_end_turn(foe)
+                        continue
+
+                    if enemy_action == "grapple":
+                        if self._resolve_contested_grapple(attacker=foe, defender=player):
+                            self._apply_status(
+                                actor=player,
+                                status_id="grappled",
+                                rounds=2,
+                                potency=1,
+                                log=log,
+                                source_name=foe.name,
+                                source_actor=foe,
+                            )
+                            self._add_tactical_tag(player, tag="exposed", rounds=2)
+                            self._log(log, f"{foe.name} grapples you and locks your movement.", level="compact")
+                        else:
+                            self._log(log, f"{foe.name} lunges to grapple, but you slip free.", level="compact")
+                        self._tick_actor_statuses_end_turn(foe, log)
+                        self._tick_actor_tactical_tags_end_turn(foe)
+                        continue
+
+                    if enemy_action == "shove":
+                        if self._resolve_contested_grapple(attacker=foe, defender=player):
+                            if not self._has_status(player, "prone"):
+                                self._apply_status(
+                                    actor=player,
+                                    status_id="prone",
+                                    rounds=1,
+                                    potency=1,
+                                    log=log,
+                                    source_name=foe.name,
+                                    source_actor=foe,
+                                )
+                                self._log(log, f"{foe.name} shoves you to the ground.", level="compact")
+                            else:
+                                distance = "near" if self._normalize_range_band(distance) == "engaged" else "far"
+                                self._log(log, f"{foe.name} drives you back to {self._range_label(distance)}.", level="compact")
+                        else:
+                            self._log(log, f"{foe.name} tries to shove you, but you hold your footing.", level="compact")
+                        self._tick_actor_statuses_end_turn(foe, log)
+                        self._tick_actor_tactical_tags_end_turn(foe)
+                        continue
 
                     target_ac = player.armour_class
                     if enemy_action == "reckless":
@@ -952,18 +1652,35 @@ class CombatService:
                         self._log(log, f"{foe.name} fights recklessly, leaving openings.", level="compact")
 
                     advantage_state = "disadvantage" if player_dodge else enemy_advantage
+                    advantage_state = self._combine_advantage(
+                        advantage_state,
+                        self._condition_advantage_delta(foe, player, distance=str(distance)),
+                    )
+                    advantage_state = self._combine_advantage(
+                        advantage_state,
+                        self._tactical_advantage_delta(attacker=foe, defender=player),
+                    )
                     weather_shift = self._weather_attack_shift(weather=weather, attacker=foe, action=enemy_action)
+                    weather_advantage = self._weather_attack_advantage(weather=weather, attacker=foe, action=enemy_action)
+                    attack_advantage_state = self._combine_advantage(
+                        advantage_state,
+                        -1 if weather_advantage == "disadvantage" else 0,
+                    )
                     hit, is_crit, _, _ = self._attack_roll(
                         int(getattr(foe, "attack_bonus", 0) or 0) + self._status_attack_roll_shift(foe) + int(weather_shift),
                         0,
                         0,
                         target_ac,
-                        advantage_state,
+                        attack_advantage_state,
                         log,
                         foe.name,
                         player.name,
                     )
                     if hit:
+                        if self._has_status(player, "paralysed") and self._is_melee_range(distance):
+                            is_crit = True
+                        if self._has_status(player, "unconscious") and self._is_melee_range(distance):
+                            is_crit = True
                         dmg = self._deal_damage(
                             foe.damage_die,
                             0,
@@ -971,10 +1688,17 @@ class CombatService:
                             None,
                             0,
                         )
+                        dmg = self._modify_incoming_damage(player, dmg)
                         player_hp = max(0, player_hp - dmg)
                         self._log(log, f"{foe.name} hits you for {dmg} damage ({player_hp}/{player.hp_max}).", level="compact")
+                        self._consume_tactical_tag(foe, "hidden_strike")
+                        self._consume_tactical_tag(foe, "helped")
+                        self._consume_tactical_tag(player, "exposed")
                     else:
                         self._log(log, f"{foe.name} misses you.", level="compact")
+                        self._consume_tactical_tag(foe, "hidden_strike")
+                        self._consume_tactical_tag(foe, "helped")
+                        self._consume_tactical_tag(player, "exposed")
                     self._add_mechanical_flavour(
                         log,
                         actor="enemy",
@@ -984,6 +1708,7 @@ class CombatService:
                         round_no=round_no,
                     )
                     self._tick_actor_statuses_end_turn(foe, log)
+                    self._tick_actor_tactical_tags_end_turn(foe)
 
             player_dodge = False
             player.flags.pop("dodging", None)
@@ -1000,6 +1725,7 @@ class CombatService:
                 player.flags.pop("temp_ac_bonus", None)
                 player.flags.pop("shield_rounds", None)
                 player.flags.pop("combat_statuses", None)
+                player.flags.pop("combat_tactical_tags", None)
                 if "rage_rounds" in player.flags:
                     player.flags["rage_rounds"] = 0
                 player.hp_current = player_hp
@@ -1017,8 +1743,10 @@ class CombatService:
         player.flags.pop("temp_ac_bonus", None)
         player.flags.pop("shield_rounds", None)
         player.flags.pop("combat_statuses", None)
+        player.flags.pop("combat_tactical_tags", None)
         if "rage_rounds" in player.flags:
             player.flags["rage_rounds"] = 0
+        self._clear_actor_tactical_tags(foe)
 
         if foe.hp_current <= 0:
             xp_gain = max(getattr(foe, "level", 1) * 5, 1)
@@ -1070,7 +1798,7 @@ class CombatService:
             )
 
         terrain = str((scene or {}).get("terrain", "open"))
-        distance = str((scene or {}).get("distance", "close"))
+        distance = self._normalize_range_band(str((scene or {}).get("distance", "engaged")))
         weather = str((scene or {}).get("weather", "") or "")
         surprise = (scene or {}).get("surprise")
         player_actor_id = int(getattr(active_allies[0], "id", 0) or 0)
@@ -1120,6 +1848,7 @@ class CombatService:
                 terrain=terrain,
                 allies=active_allies,
                 enemies=active_enemies,
+                scene=scene if isinstance(scene, dict) else None,
             )
             round_engagements: dict[int, set[int]] = {}
 
@@ -1142,12 +1871,29 @@ class CombatService:
                     if self._has_status(actor_character, "stunned"):
                         self._log(log, f"{actor_character.name} is stunned and loses the turn.", level="compact")
                         self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
+                        continue
+                    if self._turn_blocked(actor_character):
+                        self._log(log, f"{actor_character.name} is incapacitated and loses the turn.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
                         continue
                     is_player_actor = int(getattr(actor_character, "id", 0) or 0) == player_actor_id
                     if is_player_actor:
                         preview_targets = self._combat_target_pool(attacker=actor_character, opponents=living_enemies, action="Attack")
                         target = preview_targets[0] if preview_targets else living_enemies[0]
-                        options = ["Attack", "Dash", "Dodge", "Use Item", "Flee"]
+                        options = [
+                            "Attack",
+                            "Dash",
+                            "Disengage",
+                            "Dodge",
+                            "Hide",
+                            "Help",
+                            "Grapple",
+                            "Shove",
+                            "Use Item",
+                            "Flee",
+                        ]
                         has_magic = (getattr(actor_character, "spell_slots_current", 0) > 0) or bool(getattr(actor_character, "cantrips", []))
                         if has_magic:
                             options.insert(1, "Cast Spell")
@@ -1191,17 +1937,34 @@ class CombatService:
                     target = target_candidates[target_index]
 
                     if str(action) == "Flee":
+                        if self._movement_blocked(actor_character):
+                            self._log(log, f"{actor_character.name} cannot flee while restrained or incapacitated.", level="compact")
+                            self._tick_actor_statuses_end_turn(actor_character, log)
+                            self._tick_actor_tactical_tags_end_turn(actor_character)
+                            continue
                         flee_scores = self._ability_scores(actor_character)
-                        flee_roll = self.rng.randint(1, 20) + int(flee_scores.initiative)
+                        flee_roll = self._ability_check_roll(actor_character, int(flee_scores.initiative), requires_sight=False)
                         if flee_roll >= 12:
                             fled = True
                             self._log(log, f"{actor_character.name} orders a retreat and escapes.", level="compact")
                             break
                         self._log(log, f"{actor_character.name} fails to disengage.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
                         continue
 
                     if str(action) == "Cast Spell":
+                        if not self._is_attack_viable_for_range(is_melee_attack=False, distance=distance):
+                            self._log(log, f"{actor_character.name} cannot cast at {self._range_label(distance)} range.", level="compact")
+                            self._tick_actor_statuses_end_turn(actor_character, log)
+                            self._tick_actor_tactical_tags_end_turn(actor_character)
+                            continue
                         derived = self.derive_player_stats(actor_character)
+                        weather_spell_advantage = self._weather_attack_advantage(
+                            weather=weather,
+                            attacker=actor_character,
+                            action="cast_spell",
+                        )
                         self._resolve_spell_cast_party(
                             caster=actor_character,
                             target=target,
@@ -1213,48 +1976,175 @@ class CombatService:
                                 attacker=actor_character,
                                 action="cast_spell",
                             ) + self._weather_attack_shift(weather=weather, attacker=actor_character, action="cast_spell"),
+                            attack_advantage=weather_spell_advantage,
                             log=log,
                         )
                         self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
                         continue
 
                     if str(action) == "Use Item":
                         hp_after, _ = self._resolve_use_item(actor_character, int(getattr(actor_character, "hp_current", 1) or 1), log, preferred_item=action_payload, whetstone_bonus=0)
                         actor_character.hp_current = hp_after
                         self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
                         continue
 
                     if str(action) == "Dash":
+                        if self._has_status_from_source(actor_character, "frightened", target):
+                            self._log(log, f"{actor_character.name} cannot move closer while frightened.", level="compact")
+                            self._tick_actor_statuses_end_turn(actor_character, log)
+                            self._tick_actor_tactical_tags_end_turn(actor_character)
+                            continue
+                        if self._movement_blocked(actor_character):
+                            self._log(log, f"{actor_character.name} cannot reposition while restrained or incapacitated.", level="compact")
+                            self._tick_actor_statuses_end_turn(actor_character, log)
+                            self._tick_actor_tactical_tags_end_turn(actor_character)
+                            continue
                         if self._is_treacherous_ground(terrain):
                             dex_mod = self._ability_scores(actor_character).dexterity_mod
-                            check_total = self.rng.randint(1, 20) + dex_mod
+                            check_total = self._ability_check_roll(actor_character, dex_mod, requires_sight=True)
                             if check_total < 12:
                                 self._log(log, f"{actor_character.name} slips on treacherous ground and loses momentum.", level="compact")
                                 self._tick_actor_statuses_end_turn(actor_character, log)
+                                self._tick_actor_tactical_tags_end_turn(actor_character)
                                 continue
-                        self._log(log, f"{actor_character.name} repositions.", level="compact")
+                        distance = self._step_toward_engagement(distance)
+                        if self._is_treacherous_ground(terrain):
+                            self._add_tactical_tag(actor_character, tag="high_ground", rounds=2)
+                            self._log(log, f"{actor_character.name} secures high ground.", level="compact")
+                        self._log(log, f"{actor_character.name} repositions to {self._range_label(distance)}.", level="compact")
                         self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
+                        continue
+
+                    if str(action) == "Disengage":
+                        if self._movement_blocked(actor_character):
+                            self._log(log, f"{actor_character.name} cannot disengage while restrained or incapacitated.", level="compact")
+                            self._tick_actor_statuses_end_turn(actor_character, log)
+                            self._tick_actor_tactical_tags_end_turn(actor_character)
+                            continue
+                        self._add_tactical_tag(actor_character, tag="disengaged", rounds=2)
+                        if self._is_dense_cover_terrain(terrain):
+                            self._add_tactical_tag(actor_character, tag="cover", rounds=2)
+                            self._log(log, f"{actor_character.name} disengages into cover.", level="compact")
+                        else:
+                            self._log(log, f"{actor_character.name} disengages safely.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
+                        continue
+
+                    if str(action) == "Hide":
+                        if self._movement_blocked(actor_character):
+                            self._log(log, f"{actor_character.name} cannot hide while restrained or incapacitated.", level="compact")
+                            self._tick_actor_statuses_end_turn(actor_character, log)
+                            self._tick_actor_tactical_tags_end_turn(actor_character)
+                            continue
+                        if not self._terrain_supports_hiding(terrain=terrain, distance=distance):
+                            self._log(log, f"{actor_character.name} has nowhere to hide.", level="compact")
+                        else:
+                            dex_mod = self._ability_scores(actor_character).dexterity_mod
+                            stealth_total = self._ability_check_roll(actor_character, dex_mod, requires_sight=False)
+                            if stealth_total >= 12:
+                                self._add_tactical_tag(actor_character, tag="concealed", rounds=2)
+                                self._add_tactical_tag(actor_character, tag="hidden_strike", rounds=2)
+                                self._log(log, f"{actor_character.name} vanishes into concealment.", level="compact")
+                            else:
+                                self._add_tactical_tag(actor_character, tag="exposed", rounds=1)
+                                self._log(log, f"{actor_character.name} fails to hide and is exposed.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
+                        continue
+
+                    if str(action) == "Help":
+                        self._add_tactical_tag(target, tag="exposed", rounds=2)
+                        self._log(log, f"{actor_character.name} distracts {target.name}, opening their guard.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
+                        continue
+
+                    if str(action) == "Grapple":
+                        if not self._is_melee_range(distance):
+                            self._log(log, f"{actor_character.name} must be engaged to grapple.", level="compact")
+                            self._tick_actor_statuses_end_turn(actor_character, log)
+                            self._tick_actor_tactical_tags_end_turn(actor_character)
+                            continue
+                        if self._resolve_contested_grapple(attacker=actor_character, defender=target):
+                            self._apply_status(
+                                actor=target,
+                                status_id="grappled",
+                                rounds=2,
+                                potency=1,
+                                log=log,
+                                source_name=actor_character.name,
+                                source_actor=actor_character,
+                            )
+                            self._add_tactical_tag(target, tag="exposed", rounds=2)
+                            self._log(log, f"{actor_character.name} grapples {target.name}.", level="compact")
+                        else:
+                            self._log(log, f"{target.name} slips free of {actor_character.name}'s grapple.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
+                        continue
+
+                    if str(action) == "Shove":
+                        if not self._is_melee_range(distance):
+                            self._log(log, f"{actor_character.name} must be engaged to shove.", level="compact")
+                            self._tick_actor_statuses_end_turn(actor_character, log)
+                            self._tick_actor_tactical_tags_end_turn(actor_character)
+                            continue
+                        if self._resolve_contested_grapple(attacker=actor_character, defender=target):
+                            if not self._has_status(target, "prone"):
+                                self._apply_status(
+                                    actor=target,
+                                    status_id="prone",
+                                    rounds=1,
+                                    potency=1,
+                                    log=log,
+                                    source_name=actor_character.name,
+                                    source_actor=actor_character,
+                                )
+                                self._log(log, f"{actor_character.name} shoves {target.name} prone.", level="compact")
+                            else:
+                                distance = "near" if self._normalize_range_band(distance) == "engaged" else "far"
+                                self._log(log, f"{actor_character.name} forces {target.name} back to {self._range_label(distance)}.", level="compact")
+                        else:
+                            self._log(log, f"{target.name} holds position against the shove.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
                         continue
 
                     if str(action) == "Dodge":
                         if self._is_treacherous_ground(terrain):
                             dex_mod = self._ability_scores(actor_character).dexterity_mod
-                            check_total = self.rng.randint(1, 20) + dex_mod
+                            check_total = self._ability_check_roll(actor_character, dex_mod, requires_sight=True)
                             if check_total < 12:
                                 self._log(log, f"{actor_character.name} stumbles while dodging and loses the turn.", level="compact")
                                 self._tick_actor_statuses_end_turn(actor_character, log)
+                                self._tick_actor_tactical_tags_end_turn(actor_character)
                                 continue
+                        self._add_tactical_tag(actor_character, tag="dodging", rounds=2)
                         self._log(log, f"{actor_character.name} braces defensively.", level="compact")
                         self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
                         continue
 
                     derived = self.derive_player_stats(actor_character)
+                    if not self._is_attack_viable_for_range(
+                        is_melee_attack=self._is_melee_actor(actor_character),
+                        distance=distance,
+                    ):
+                        self._log(log, f"{actor_character.name} cannot make a melee attack at {self._range_label(distance)} range.", level="compact")
+                        self._tick_actor_statuses_end_turn(actor_character, log)
+                        self._tick_actor_tactical_tags_end_turn(actor_character)
+                        continue
                     terrain_attack_shift = self._terrain_ranged_attack_shift(
                         terrain=terrain,
                         attacker=actor_character,
                         action="attack",
                     )
                     weather_attack_shift = self._weather_attack_shift(weather=weather, attacker=actor_character, action="attack")
+                    weather_attack_advantage = self._weather_attack_advantage(weather=weather, attacker=actor_character, action="attack")
                     target_key = self._combat_actor_key(target)
                     actor_key = self._combat_actor_key(actor_character)
                     engaged = round_engagements.setdefault(target_key, set())
@@ -1266,17 +2156,33 @@ class CombatService:
                         self._log(log, f"Dense cover disrupts line of sight ({terrain_attack_shift} to hit).", level="compact")
                     if weather_attack_shift:
                         self._log(log, f"Weather pressure ({weather}) applies {weather_attack_shift} to hit.", level="compact")
+                    if weather_attack_advantage == "disadvantage":
+                        self._log(log, f"Weather pressure ({weather}) imposes disadvantage on ranged attacks.", level="compact")
+                    hit_advantage_state = self._combine_advantage(
+                        self._combine_advantage(
+                            self._combine_advantage(
+                                "advantage" if flank_active else None,
+                                self._condition_advantage_delta(actor_character, target, distance=str(distance)),
+                            ),
+                            -1 if weather_attack_advantage == "disadvantage" else 0,
+                        ),
+                        self._tactical_advantage_delta(attacker=actor_character, defender=target),
+                    )
                     hit, is_crit, _, _ = self._attack_roll(
                         int(terrain_attack_shift) + int(weather_attack_shift) + self._status_attack_roll_shift(actor_character),
                         int(derived.get("proficiency", 2)),
                         int(derived.get("weapon_mod", 0)),
                         int(getattr(target, "armour_class", 10) or 10),
-                        "advantage" if flank_active else None,
+                        hit_advantage_state,
                         log,
                         str(getattr(actor_character, "name", "Ally")),
                         str(getattr(target, "name", "Enemy")),
                     )
                     if hit:
+                        if self._has_status(target, "paralysed") and self._is_melee_range(distance):
+                            is_crit = True
+                        if self._has_status(target, "unconscious") and self._is_melee_range(distance):
+                            is_crit = True
                         sneak_die = "d6" if flank_active and str(getattr(actor_character, "class_name", "")).lower() == "rogue" else None
                         dmg = self._deal_damage(
                             str(derived.get("damage_die", "d6")),
@@ -1287,9 +2193,14 @@ class CombatService:
                         )
                         if flank_active:
                             dmg += 2
+                        dmg = self._modify_incoming_damage(target, dmg)
                         target.hp_current = max(0, int(getattr(target, "hp_current", 0) or 0) - dmg)
                         self._log(log, f"{actor_character.name} hits {target.name} for {dmg} damage ({target.hp_current}/{target.hp_max}).", level="compact")
+                    self._consume_tactical_tag(actor_character, "hidden_strike")
+                    self._consume_tactical_tag(actor_character, "helped")
+                    self._consume_tactical_tag(target, "exposed")
                     self._tick_actor_statuses_end_turn(actor_character, log)
+                    self._tick_actor_tactical_tags_end_turn(actor_character)
                     continue
 
                 enemy_actor = actor
@@ -1299,6 +2210,12 @@ class CombatService:
                 if self._has_status(enemy_actor, "stunned"):
                     self._log(log, f"{enemy_actor.name} is stunned and loses the turn.", level="compact")
                     self._tick_actor_statuses_end_turn(enemy_actor, log)
+                    self._tick_actor_tactical_tags_end_turn(enemy_actor)
+                    continue
+                if self._turn_blocked(enemy_actor):
+                    self._log(log, f"{enemy_actor.name} is incapacitated and loses the turn.", level="compact")
+                    self._tick_actor_statuses_end_turn(enemy_actor, log)
+                    self._tick_actor_tactical_tags_end_turn(enemy_actor)
                     continue
                 targets = [a for a in active_allies if int(getattr(a, "hp_current", 0) or 0) > 0]
                 if not targets:
@@ -1312,9 +2229,95 @@ class CombatService:
                 if not target_pool:
                     target_pool = targets
                 target = self._lowest_hp_target(target_pool)
+                enemy_action = self._select_enemy_tactical_action(
+                    intent=self._intent_for_enemy(enemy_actor),
+                    actor=enemy_actor,
+                    target=target,
+                    terrain=str(terrain),
+                    distance=str(distance),
+                    default_action=str(enemy_action),
+                )
                 if str(enemy_action).lower() == "flee":
                     enemy_actor.hp_current = 0
                     self._log(log, f"{enemy_actor.name} flees.", level="compact")
+                    continue
+
+                enemy_is_melee = self._is_melee_actor(enemy_actor)
+                if enemy_is_melee and not self._is_attack_viable_for_range(is_melee_attack=True, distance=distance):
+                    next_band = self._step_toward_engagement(distance)
+                    if next_band != distance:
+                        distance = next_band
+                        self._log(log, f"{enemy_actor.name} advances to {self._range_label(distance)} range.", level="compact")
+                    self._tick_actor_statuses_end_turn(enemy_actor, log)
+                    self._tick_actor_tactical_tags_end_turn(enemy_actor)
+                    continue
+
+                if str(enemy_action).lower() == "disengage":
+                    if not self._movement_blocked(enemy_actor):
+                        if self._normalize_range_band(distance) == "engaged":
+                            distance = "near"
+                        elif self._normalize_range_band(distance) == "near":
+                            distance = "far"
+                        self._add_tactical_tag(enemy_actor, tag="disengaged", rounds=2)
+                        if self._is_dense_cover_terrain(str(terrain)):
+                            self._add_tactical_tag(enemy_actor, tag="cover", rounds=2)
+                        self._log(log, f"{enemy_actor.name} disengages to {self._range_label(distance)} range.", level="compact")
+                    else:
+                        self._log(log, f"{enemy_actor.name} tries to disengage but cannot move.", level="compact")
+                    self._tick_actor_statuses_end_turn(enemy_actor, log)
+                    self._tick_actor_tactical_tags_end_turn(enemy_actor)
+                    continue
+
+                if str(enemy_action).lower() == "hide":
+                    if self._terrain_supports_hiding(terrain=str(terrain), distance=str(distance)):
+                        self._add_tactical_tag(enemy_actor, tag="concealed", rounds=2)
+                        self._add_tactical_tag(enemy_actor, tag="hidden_strike", rounds=2)
+                        self._log(log, f"{enemy_actor.name} melts into concealment.", level="compact")
+                    else:
+                        self._log(log, f"{enemy_actor.name} cannot find enough cover to hide.", level="compact")
+                    self._tick_actor_statuses_end_turn(enemy_actor, log)
+                    self._tick_actor_tactical_tags_end_turn(enemy_actor)
+                    continue
+
+                if str(enemy_action).lower() == "grapple":
+                    if self._resolve_contested_grapple(attacker=enemy_actor, defender=target):
+                        self._apply_status(
+                            actor=target,
+                            status_id="grappled",
+                            rounds=2,
+                            potency=1,
+                            log=log,
+                            source_name=str(getattr(enemy_actor, "name", "Enemy")),
+                            source_actor=enemy_actor,
+                        )
+                        self._add_tactical_tag(target, tag="exposed", rounds=2)
+                        self._log(log, f"{enemy_actor.name} grapples {target.name}.", level="compact")
+                    else:
+                        self._log(log, f"{enemy_actor.name} fails to secure a grapple on {target.name}.", level="compact")
+                    self._tick_actor_statuses_end_turn(enemy_actor, log)
+                    self._tick_actor_tactical_tags_end_turn(enemy_actor)
+                    continue
+
+                if str(enemy_action).lower() == "shove":
+                    if self._resolve_contested_grapple(attacker=enemy_actor, defender=target):
+                        if not self._has_status(target, "prone"):
+                            self._apply_status(
+                                actor=target,
+                                status_id="prone",
+                                rounds=1,
+                                potency=1,
+                                log=log,
+                                source_name=str(getattr(enemy_actor, "name", "Enemy")),
+                                source_actor=enemy_actor,
+                            )
+                            self._log(log, f"{enemy_actor.name} shoves {target.name} prone.", level="compact")
+                        else:
+                            distance = "near" if self._normalize_range_band(distance) == "engaged" else "far"
+                            self._log(log, f"{enemy_actor.name} forces {target.name} back to {self._range_label(distance)}.", level="compact")
+                    else:
+                        self._log(log, f"{target.name} resists {enemy_actor.name}'s shove.", level="compact")
+                    self._tick_actor_statuses_end_turn(enemy_actor, log)
+                    self._tick_actor_tactical_tags_end_turn(enemy_actor)
                     continue
 
                 target_ac = self._derive_ac(target)
@@ -1324,6 +2327,7 @@ class CombatService:
                     action=enemy_action,
                 )
                 weather_enemy_shift = self._weather_attack_shift(weather=weather, attacker=enemy_actor, action=enemy_action)
+                weather_enemy_advantage = self._weather_attack_advantage(weather=weather, attacker=enemy_actor, action=enemy_action)
                 hit, is_crit, _, _ = self._attack_roll(
                     int(getattr(enemy_actor, "attack_bonus", 0) or 0)
                     + int(enemy_attack_shift)
@@ -1332,12 +2336,25 @@ class CombatService:
                     0,
                     0,
                     int(target_ac),
-                    None,
+                    self._combine_advantage(
+                        self._combine_advantage(
+                            self._combine_advantage(
+                                None,
+                                self._condition_advantage_delta(enemy_actor, target, distance=str(distance)),
+                            ),
+                            -1 if weather_enemy_advantage == "disadvantage" else 0,
+                        ),
+                        self._tactical_advantage_delta(attacker=enemy_actor, defender=target),
+                    ),
                     log,
                     str(getattr(enemy_actor, "name", "Enemy")),
                     str(getattr(target, "name", "Ally")),
                 )
                 if hit:
+                    if self._has_status(target, "paralysed") and self._is_melee_range(distance):
+                        is_crit = True
+                    if self._has_status(target, "unconscious") and self._is_melee_range(distance):
+                        is_crit = True
                     dmg = self._deal_damage(
                         str(getattr(enemy_actor, "damage_die", "d4") or "d4"),
                         0,
@@ -1345,11 +2362,16 @@ class CombatService:
                         None,
                         0,
                     )
+                    dmg = self._modify_incoming_damage(target, dmg)
                     target.hp_current = max(0, int(getattr(target, "hp_current", 0) or 0) - dmg)
                     self._log(log, f"{enemy_actor.name} hits {target.name} for {dmg} damage ({target.hp_current}/{target.hp_max}).", level="compact")
                 else:
                     self._log(log, f"{enemy_actor.name} misses {target.name}.", level="compact")
+                self._consume_tactical_tag(enemy_actor, "hidden_strike")
+                self._consume_tactical_tag(enemy_actor, "helped")
+                self._consume_tactical_tag(target, "exposed")
                 self._tick_actor_statuses_end_turn(enemy_actor, log)
+                self._tick_actor_tactical_tags_end_turn(enemy_actor)
 
             if fled:
                 break
@@ -1365,10 +2387,13 @@ class CombatService:
         for ally in active_allies:
             if isinstance(getattr(ally, "flags", None), dict):
                 ally.flags.pop("combat_statuses", None)
+                ally.flags.pop("combat_tactical_tags", None)
         for enemy in active_enemies:
             try:
                 if hasattr(enemy, "_combat_statuses"):
                     delattr(enemy, "_combat_statuses")
+                if hasattr(enemy, "_combat_tactical_tags"):
+                    delattr(enemy, "_combat_tactical_tags")
             except Exception:
                 pass
         return PartyCombatResult(
@@ -1480,6 +2505,19 @@ class CombatService:
         if normalized_weather == "blizzard":
             return -3 if not is_melee else -2
         return 0
+
+    def _weather_attack_advantage(self, *, weather: str, attacker, action: str) -> Optional[str]:
+        normalized_weather = str(weather or "").strip().lower()
+        if normalized_weather not in {"rain", "storm", "blizzard"}:
+            return None
+
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in {"attack", "cast_spell", "reckless"}:
+            return None
+
+        if self._is_melee_actor(attacker):
+            return None
+        return "disadvantage"
 
     def _is_heavy_armor_user(self, actor: Character) -> bool:
         equipment = self._equipment_state(actor)
@@ -1593,29 +2631,135 @@ class CombatService:
         terrain: str,
         allies: list[Character],
         enemies: list[Entity],
+        scene: Optional[dict] = None,
     ) -> None:
+        scene_payload = scene if isinstance(scene, dict) else {}
+        hazard_state = scene_payload.setdefault("_hazard_state", {}) if isinstance(scene_payload, dict) else {}
+        if not isinstance(hazard_state, dict):
+            hazard_state = {}
+            if isinstance(scene_payload, dict):
+                scene_payload["_hazard_state"] = hazard_state
+
+        provided_hazards = [
+            str(item).strip().lower().replace(" ", "_")
+            for item in list(scene_payload.get("hazards", []) or [])
+            if str(item).strip()
+        ]
+        hazard_flags = set(provided_hazards)
         normalized = str(terrain or "").strip().lower()
-        if normalized not in {"volcano", "volcanic", "mountain", "mountains"}:
-            return
-        if round_no % 3 != 0:
+        if normalized in {"volcano", "volcanic"}:
+            hazard_flags.add("spreading_fire")
+        if normalized in {"cramped", "difficult", "mountain", "mountains"}:
+            hazard_flags.add("trapline")
+
+        if any(self._is_boss_enemy(enemy) for enemy in enemies):
+            hazard_flags.add("boss_lair")
+
+        if not hazard_flags:
             return
 
-        self._log(log, "Lair Action: A violent terrain surge erupts across the vanguard!", level="compact")
-        impacted = [
-            row
-            for row in list(allies) + list(enemies)
-            if int(getattr(row, "hp_current", 0) or 0) > 0 and self._combat_lane(row) == "vanguard"
-        ]
-        for actor in impacted:
-            save_mod = self._ability_scores(actor).dexterity_mod if isinstance(actor, Character) else 0
-            save_roll = self.rng.randint(1, 20) + int(save_mod)
-            if save_roll >= 12:
-                self._log(log, f"{actor.name} weathers the surge.", level="compact")
-                continue
-            damage = roll_die("d6", rng=self.rng) + roll_die("d6", rng=self.rng)
-            hp_now = int(getattr(actor, "hp_current", 0) or 0)
-            actor.hp_current = max(0, hp_now - damage)
-            self._log(log, f"{actor.name} takes {damage} lair damage ({actor.hp_current}/{getattr(actor, 'hp_max', hp_now)}).", level="compact")
+        if "spreading_fire" in hazard_flags:
+            current_intensity = int(hazard_state.get("fire_intensity", 0) or 0)
+            hazard_state["fire_intensity"] = max(1, current_intensity + 1)
+
+        if "trapline" in hazard_flags:
+            cooldown = int(hazard_state.get("trap_cooldown", 0) or 0)
+            hazard_state["trap_cooldown"] = max(0, cooldown - 1)
+
+        is_boss_lair_round = "boss_lair" in hazard_flags
+        is_terrain_surge_round = normalized in {"volcano", "volcanic", "mountain", "mountains"} and round_no % 3 == 0
+        if not is_boss_lair_round and not is_terrain_surge_round:
+            if "spreading_fire" not in hazard_flags and "trapline" not in hazard_flags:
+                return
+
+        if is_boss_lair_round:
+            self._log(log, "Initiative 20 — Lair Action: The boss warps the battlefield!", level="compact")
+            impacted_allies = [row for row in list(allies) if int(getattr(row, "hp_current", 0) or 0) > 0]
+            for actor in impacted_allies:
+                save_mod = self._ability_scores(actor).dexterity_mod
+                save_roll = self._ability_check_roll(actor, save_mod, requires_sight=True)
+                if save_roll >= 13:
+                    self._log(log, f"{actor.name} evades the lair pulse.", level="compact")
+                    continue
+                damage = roll_die("d6", rng=self.rng) + roll_die("d6", rng=self.rng)
+                damage = self._modify_incoming_damage(actor, damage)
+                hp_now = int(getattr(actor, "hp_current", 0) or 0)
+                actor.hp_current = max(0, hp_now - damage)
+                self._log(log, f"{actor.name} takes {damage} lair damage ({actor.hp_current}/{getattr(actor, 'hp_max', hp_now)}).", level="compact")
+
+        if is_terrain_surge_round:
+            self._log(log, "Initiative 20 — Lair Action: A violent terrain surge erupts across the vanguard!", level="compact")
+            impacted = [
+                row
+                for row in list(allies) + list(enemies)
+                if int(getattr(row, "hp_current", 0) or 0) > 0 and self._combat_lane(row) == "vanguard"
+            ]
+            for actor in impacted:
+                save_mod = self._ability_scores(actor).dexterity_mod if isinstance(actor, Character) else 0
+                save_roll = self._ability_check_roll(actor, int(save_mod), requires_sight=True)
+                if save_roll >= 12:
+                    self._log(log, f"{actor.name} weathers the surge.", level="compact")
+                    continue
+                damage = roll_die("d6", rng=self.rng) + roll_die("d6", rng=self.rng)
+                damage = self._modify_incoming_damage(actor, damage)
+                hp_now = int(getattr(actor, "hp_current", 0) or 0)
+                actor.hp_current = max(0, hp_now - damage)
+                self._log(log, f"{actor.name} takes {damage} lair damage ({actor.hp_current}/{getattr(actor, 'hp_max', hp_now)}).", level="compact")
+
+        if "spreading_fire" in hazard_flags:
+            intensity = max(1, int(hazard_state.get("fire_intensity", 1) or 1))
+            self._log(log, f"Hazard: Spreading fire intensifies (tier {intensity}).", level="compact")
+            for actor in [row for row in list(allies) + list(enemies) if int(getattr(row, "hp_current", 0) or 0) > 0]:
+                save_mod = self._ability_scores(actor).dexterity_mod if isinstance(actor, Character) else 0
+                save_roll = self._ability_check_roll(actor, int(save_mod), requires_sight=True)
+                if save_roll >= 11 + min(4, intensity):
+                    continue
+                damage = sum(roll_die("d4", rng=self.rng) for _ in range(min(4, intensity)))
+                damage = self._modify_incoming_damage(actor, damage)
+                hp_now = int(getattr(actor, "hp_current", 0) or 0)
+                actor.hp_current = max(0, hp_now - damage)
+                self._apply_status(
+                    actor=actor,
+                    status_id="burning",
+                    rounds=1,
+                    potency=1,
+                    log=log,
+                    source_name="Spreading Fire",
+                )
+                self._log(log, f"{actor.name} is scorched for {damage} ({actor.hp_current}/{getattr(actor, 'hp_max', hp_now)}).", level="compact")
+
+        if "trapline" in hazard_flags and int(hazard_state.get("trap_cooldown", 0) or 0) <= 0:
+            self._log(log, "Hazard: Hidden traps spring from the battlefield!", level="compact")
+            hazard_state["trap_cooldown"] = 2
+            candidates = [row for row in list(allies) + list(enemies) if int(getattr(row, "hp_current", 0) or 0) > 0]
+            self.rng.shuffle(candidates)
+            for actor in candidates[:2]:
+                save_mod = self._ability_scores(actor).dexterity_mod if isinstance(actor, Character) else 0
+                save_roll = self._ability_check_roll(actor, int(save_mod), requires_sight=True)
+                if save_roll >= 12:
+                    self._log(log, f"{actor.name} avoids the trap trigger.", level="compact")
+                    continue
+                damage = roll_die("d6", rng=self.rng)
+                damage = self._modify_incoming_damage(actor, damage)
+                hp_now = int(getattr(actor, "hp_current", 0) or 0)
+                actor.hp_current = max(0, hp_now - damage)
+                self._apply_status(
+                    actor=actor,
+                    status_id="restrained",
+                    rounds=1,
+                    potency=1,
+                    log=log,
+                    source_name="Trapline",
+                )
+                self._log(log, f"{actor.name} is hit by a trap for {damage} ({actor.hp_current}/{getattr(actor, 'hp_max', hp_now)}).", level="compact")
+
+    def _is_boss_enemy(self, enemy: Entity) -> bool:
+        level = int(getattr(enemy, "level", 1) or 1)
+        hp_max = int(getattr(enemy, "hp_max", getattr(enemy, "hp", 1)) or 1)
+        name_key = str(getattr(enemy, "name", "") or "").strip().lower()
+        if level >= 10 or hp_max >= 80:
+            return True
+        return any(keyword in name_key for keyword in self._BOSS_NAME_KEYWORDS)
 
     def _resolve_spell_cast_party(
         self,
@@ -1626,6 +2770,7 @@ class CombatService:
         spell_mod: int,
         prof: int,
         attack_roll_shift: int,
+        attack_advantage: Optional[str] = None,
         log: List[CombatLogEntry],
     ) -> None:
         known = getattr(caster, "known_spells", []) or []
@@ -1674,7 +2819,7 @@ class CombatService:
                 int(prof),
                 int(spell_mod),
                 target_ac,
-                None,
+                attack_advantage if attack_advantage in {"advantage", "disadvantage"} else None,
                 log,
                 caster.name,
                 target_name,
@@ -1820,6 +2965,9 @@ class CombatService:
         spell_dc = 8 + prof + spell_mod
         foe_ac = getattr(foe, "armour_class", 10)
         weather_shift = int(getattr(player, "flags", {}).get("combat_weather_shift", 0) or 0)
+        weather_advantage = str(getattr(player, "flags", {}).get("combat_weather_advantage", "") or "").strip().lower()
+        if weather_advantage not in {"advantage", "disadvantage"}:
+            weather_advantage = ""
 
         def _foe_save_mod(ability: Optional[str]) -> int:
             # Simple approximation; entities currently do not have saves
@@ -1841,7 +2989,7 @@ class CombatService:
                 prof,
                 spell_mod,
                 foe_ac,
-                None,
+                weather_advantage or None,
                 log,
                 player.name,
                 foe.name,

@@ -275,6 +275,73 @@ class TownSocialFlowTests(unittest.TestCase):
 
         self.assertIn("cataclysm strain", str(shop.price_modifier_label).lower())
 
+    def test_shop_prices_shift_by_settlement_scale(self):
+        village_service, village_character_id = self._build_service()
+        city_service, city_character_id = self._build_service()
+
+        village_location = village_service.location_repo.get(1)
+        city_location = city_service.location_repo.get(1)
+        self.assertIsNotNone(village_location)
+        self.assertIsNotNone(city_location)
+        village_location.name = "Ash Village"
+        city_location.name = "Grand City"
+
+        village_shop = village_service.get_shop_view_intent(village_character_id)
+        city_shop = city_service.get_shop_view_intent(city_character_id)
+
+        village_torch = next((item for item in village_shop.items if item.item_id == "torch"), None)
+        city_torch = next((item for item in city_shop.items if item.item_id == "torch"), None)
+        self.assertIsNotNone(village_torch)
+        self.assertIsNotNone(city_torch)
+        village_price = int(village_torch.price) if village_torch is not None else 0
+        city_price = int(city_torch.price) if city_torch is not None else 0
+        self.assertGreater(village_price, city_price)
+        self.assertIn("village scarcity", str(village_shop.price_modifier_label).lower())
+        self.assertIn("city trade depth", str(city_shop.price_modifier_label).lower())
+
+    def test_shop_reflects_local_faction_influence(self):
+        base_service, base_character_id = self._build_service()
+        influenced_service, influenced_character_id = self._build_service(with_factions=True)
+
+        base_location = base_service.location_repo.get(1)
+        influenced_location = influenced_service.location_repo.get(1)
+        self.assertIsNotNone(base_location)
+        self.assertIsNotNone(influenced_location)
+        base_location.factions = ["the_crown"]
+        influenced_location.factions = ["the_crown"]
+
+        base_shop = base_service.get_shop_view_intent(base_character_id)
+        influenced_shop = influenced_service.get_shop_view_intent(influenced_character_id)
+
+        base_torch = next((item for item in base_shop.items if item.item_id == "torch"), None)
+        influenced_torch = next((item for item in influenced_shop.items if item.item_id == "torch"), None)
+        self.assertIsNotNone(base_torch)
+        self.assertIsNotNone(influenced_torch)
+        base_price = int(base_torch.price) if base_torch is not None else 0
+        influenced_price = int(influenced_torch.price) if influenced_torch is not None else 0
+        self.assertLess(influenced_price, base_price)
+        self.assertIn("local faction support", str(influenced_shop.price_modifier_label).lower())
+
+    def test_shop_reflects_recent_world_unrest(self):
+        service, character_id = self._build_service()
+        world = service.world_repo.load_default()
+        world.current_turn = 20
+        world.flags.setdefault("consequences", [])
+        world.flags["consequences"].extend(
+            [
+                {"turn": 19, "severity": "high", "message": "Street violence spikes."},
+                {"turn": 18, "severity": "normal", "message": "Supply lanes stall."},
+                {"turn": 17, "severity": "normal", "message": "Merchants delay caravans."},
+            ]
+        )
+        service.world_repo.save(world)
+
+        shop = service.get_shop_view_intent(character_id)
+
+        self.assertIn("recent unrest", str(shop.price_modifier_label).lower())
+        item_ids = {str(item.item_id) for item in shop.items}
+        self.assertNotIn("focus_potion", item_ids)
+
     def test_social_outcome_persists_dialogue_state_v1(self):
         service, character_id = self._build_service()
 
@@ -506,6 +573,155 @@ class TownSocialFlowTests(unittest.TestCase):
         self.assertEqual("escalated", str(seed.get("status", "")))
         self.assertEqual("escalated", str(seed.get("escalation_stage", "")))
         self.assertTrue(any("Story seed state shift" in line for line in outcome.messages))
+
+    def test_dialogue_session_surfaces_skill_gated_choices_with_dc_labels(self):
+        service, character_id = self._build_service()
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            session = service.get_dialogue_session_intent(character_id, "broker_silas")
+
+        labels = [str(choice.label) for choice in session.choices]
+        self.assertTrue(any("Persuasion DC 13" in label for label in labels))
+        self.assertTrue(any("Deception DC 14" in label for label in labels))
+        self.assertTrue(any("Intimidation DC 15" in label for label in labels))
+
+    def test_skill_gated_deception_success_branches_to_resolve(self):
+        service, character_id = self._build_service()
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False), mock.patch(
+            "random.Random.randint", return_value=20
+        ):
+            outcome = service.submit_dialogue_choice_intent(character_id, "broker_silas", "deception check")
+            session = service.get_dialogue_session_intent(character_id, "broker_silas")
+
+        self.assertTrue(outcome.success)
+        self.assertTrue(any("Skill check: Deception" in line for line in outcome.messages))
+        self.assertTrue(any("Silas buys the lie" in line for line in outcome.messages))
+        self.assertEqual("resolve", session.stage_id)
+
+    def test_skill_gated_deception_failure_resets_to_opening(self):
+        service, character_id = self._build_service()
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False), mock.patch(
+            "random.Random.randint", return_value=1
+        ):
+            outcome = service.submit_dialogue_choice_intent(character_id, "broker_silas", "deception check")
+            session = service.get_dialogue_session_intent(character_id, "broker_silas")
+
+        self.assertFalse(outcome.success)
+        self.assertTrue(any("Skill check: Deception" in line for line in outcome.messages))
+        self.assertTrue(any("Silas catches a crack" in line for line in outcome.messages))
+        self.assertEqual("opening", session.stage_id)
+
+    def test_mara_and_ren_sessions_surface_skill_gated_checks(self):
+        service, character_id = self._build_service()
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            mara_session = service.get_dialogue_session_intent(character_id, "innkeeper_mara")
+            ren_session = service.get_dialogue_session_intent(character_id, "captain_ren")
+
+        mara_labels = [str(choice.label) for choice in mara_session.choices]
+        ren_labels = [str(choice.label) for choice in ren_session.choices]
+        self.assertTrue(any("Persuasion DC 12" in label for label in mara_labels))
+        self.assertTrue(any("Deception DC 13" in label for label in mara_labels))
+        self.assertTrue(any("Intimidation DC 14" in label for label in mara_labels))
+        self.assertTrue(any("Persuasion DC 14" in label for label in ren_labels))
+        self.assertTrue(any("Deception DC 15" in label for label in ren_labels))
+        self.assertTrue(any("Intimidation DC 16" in label for label in ren_labels))
+
+    def test_mara_and_ren_deception_success_branches_to_resolve(self):
+        service, character_id = self._build_service()
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False), mock.patch(
+            "random.Random.randint", return_value=20
+        ):
+            mara_outcome = service.submit_dialogue_choice_intent(character_id, "innkeeper_mara", "deception check")
+            mara_session = service.get_dialogue_session_intent(character_id, "innkeeper_mara")
+
+        self.assertTrue(mara_outcome.success)
+        self.assertTrue(any("Skill check: Deception" in line for line in mara_outcome.messages))
+        self.assertEqual("resolve", mara_session.stage_id)
+
+        service, character_id = self._build_service()
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False), mock.patch(
+            "random.Random.randint", return_value=20
+        ):
+            ren_outcome = service.submit_dialogue_choice_intent(character_id, "captain_ren", "deception check")
+            ren_session = service.get_dialogue_session_intent(character_id, "captain_ren")
+
+        self.assertTrue(ren_outcome.success)
+        self.assertTrue(any("Skill check: Deception" in line for line in ren_outcome.messages))
+        self.assertEqual("resolve", ren_session.stage_id)
+
+    def test_procedural_town_npcs_are_generated_once_and_persisted(self):
+        service, character_id = self._build_service()
+
+        town_a = service.get_town_view_intent(character_id)
+        town_b = service.get_town_view_intent(character_id)
+
+        generated_a = [npc for npc in town_a.npcs if str(npc.id).startswith("generated_")]
+        generated_b = [npc for npc in town_b.npcs if str(npc.id).startswith("generated_")]
+        self.assertGreaterEqual(len(generated_a), 20)
+        self.assertEqual([npc.id for npc in generated_a], [npc.id for npc in generated_b])
+        self.assertEqual([npc.name for npc in generated_a], [npc.name for npc in generated_b])
+
+        roles = {str(npc.role) for npc in generated_a}
+        self.assertIn("Blacksmith", roles)
+        self.assertIn("Shopkeep", roles)
+        self.assertIn("Beggar", roles)
+        self.assertIn("Town Crier", roles)
+
+        world = service.world_repo.load_default()
+        state = dict(world.flags.get("town_npcs_v1", {})) if isinstance(world.flags, dict) else {}
+        self.assertEqual(1, int(state.get("version", 0)))
+        self.assertEqual(len(generated_a), len(list(state.get("generated", []) or [])))
+
+    def test_procedural_npc_is_tied_into_dialogue_and_social_flow(self):
+        service, character_id = self._build_service()
+        town = service.get_town_view_intent(character_id)
+        procedural = next((npc for npc in town.npcs if str(npc.id).startswith("generated_")), None)
+        self.assertIsNotNone(procedural)
+        procedural_id = str(procedural.id) if procedural is not None else ""
+
+        interaction = service.get_npc_interaction_intent(character_id, procedural_id)
+        lowered = [str(item).lower() for item in interaction.approaches]
+        self.assertIn("persuasion", lowered)
+        self.assertIn("deception", lowered)
+        self.assertIn("intimidation", lowered)
+
+        session = service.get_dialogue_session_intent(character_id, procedural_id)
+        choice_ids = [str(choice.choice_id) for choice in session.choices]
+        self.assertIn("persuasion", choice_ids)
+        self.assertIn("deception", choice_ids)
+        self.assertIn("intimidation", choice_ids)
+
+        with mock.patch("random.Random.randint", return_value=20):
+            outcome = service.submit_social_approach_intent(character_id, procedural_id, "Persuasion")
+        self.assertTrue(any("Check: d20" in line for line in outcome.messages))
+
+    def test_beggar_template_uses_street_locations_not_buildings(self):
+        service, character_id = self._build_service()
+        town = service.get_town_view_intent(character_id)
+        beggar = next((npc for npc in town.npcs if str(npc.role).lower() == "beggar"), None)
+        self.assertIsNotNone(beggar)
+        beggar_id = str(beggar.id) if beggar is not None else ""
+
+        interaction = service.get_npc_interaction_intent(character_id, beggar_id)
+        greeting = str(interaction.greeting).lower()
+        self.assertTrue("market" in greeting or "alley" in greeting or "bridge" in greeting)
+
+    def test_procedural_npc_dialogue_uses_role_profile_tree(self):
+        service, character_id = self._build_service()
+        town = service.get_town_view_intent(character_id)
+        procedural = next((npc for npc in town.npcs if str(npc.role).lower() == "blacksmith"), None)
+        self.assertIsNotNone(procedural)
+        procedural_id = str(procedural.id) if procedural is not None else ""
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            session = service.get_dialogue_session_intent(character_id, procedural_id)
+
+        self.assertIn("[Opening]", session.greeting)
+        self.assertTrue("trader" in session.greeting.lower() or "posture" in session.greeting.lower())
 
 
 if __name__ == "__main__":

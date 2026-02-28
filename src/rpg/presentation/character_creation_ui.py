@@ -93,6 +93,8 @@ def _render_character_summary(summary) -> None:
             f"HP: {summary.hp_current}/{summary.hp_max}",
             f"Abilities: {summary.attributes_line}",
         ]
+        if getattr(summary, "subclass_name", ""):
+            lines.insert(2, f"Subclass: {summary.subclass_name}")
         if summary.race_traits:
             lines.append(f"Race Traits: {', '.join(summary.race_traits)}")
         if summary.background_features:
@@ -113,6 +115,8 @@ def _render_character_summary(summary) -> None:
         return
 
     print(f"You created: {summary.name}, a level {summary.level} {summary.class_name}.")
+    if getattr(summary, "subclass_name", ""):
+        print(f"Subclass: {summary.subclass_name}")
     print(f"Race: {summary.race} (Speed {summary.speed})")
     print(f"Background: {summary.background}")
     print(f"Difficulty: {summary.difficulty}")
@@ -237,6 +241,21 @@ def _choose_subrace(creation_service, race):
         if idx == 0:
             return True, None
         return True, subraces[idx - 1]
+
+
+def _choose_subclass(creation_service, chosen_class):
+    subclass_rows = creation_service.list_subclasses_for_class(
+        getattr(chosen_class, "slug", None) or getattr(chosen_class, "name", None)
+    )
+    if not subclass_rows:
+        return True, None
+
+    options = [f"{row.name} — {row.description}" for row in subclass_rows]
+    options.append("Back")
+    idx = arrow_menu("Choose Your Subclass", options, footer_hint="ESC to return to class selection")
+    if idx < 0 or idx == len(options) - 1:
+        return False, None
+    return True, str(subclass_rows[idx].slug)
 
 
 def _choose_difficulty(creation_service):
@@ -408,6 +427,97 @@ def _show_cancelled():
     _prompt_enter("Press ENTER to return to the menu...")
 
 
+def _run_creation_skill_training_flow(game_service, character_id: int) -> None:
+    initialize = game_service.initialize_skill_training_intent(
+        character_id,
+        grant_level_points=True,
+    )
+    clear_screen()
+    if _CONSOLE is not None and Panel is not None:
+        _CONSOLE.print(
+            Panel.fit(
+                "\n".join(list(initialize.messages or ["Skill training prepared."])),
+                title="[bold yellow]Skill Training[/bold yellow]",
+                border_style=_PANEL_BORDER,
+            )
+        )
+    else:
+        print("=== Skill Training ===")
+        for line in list(initialize.messages or ["Skill training prepared."]):
+            print(str(line))
+    _prompt_enter()
+
+    status = game_service.get_skill_training_status_intent(character_id)
+    intent = [str(row) for row in list(status.get("intent", []))]
+
+    while True:
+        skills = list(game_service.list_granular_skills_intent(character_id) or [])
+        options: list[str] = []
+        slugs: list[str] = []
+        for row in skills:
+            if not bool(row.get("eligible_new", False)):
+                continue
+            slug = str(row.get("slug", "") or "")
+            if not slug:
+                continue
+            label = str(row.get("label", slug)).strip() or slug
+            current = int(row.get("current", 0) or 0)
+            marker = "[x]" if slug in intent else "[ ]"
+            options.append(f"{marker} {label} (current +{current})")
+            slugs.append(slug)
+        options.extend(["Continue to Spending", "Skip Skill Training"])
+        choice = arrow_menu("Creation Skill Intent", options)
+        if choice in {-1, len(options) - 1, len(options) - 2}:
+            break
+        slug = slugs[choice]
+        if slug in intent:
+            intent = [row for row in intent if row != slug]
+        else:
+            intent.append(slug)
+
+    game_service.declare_skill_training_intent_intent(character_id, intent)
+
+    while True:
+        status = game_service.get_skill_training_status_intent(character_id)
+        points = int(status.get("points_available", 0) or 0)
+        if points <= 0:
+            return
+
+        skills = list(game_service.list_granular_skills_intent(character_id) or [])
+        options: list[str] = []
+        slugs: list[str] = []
+        for row in skills:
+            current = int(row.get("current", 0) or 0)
+            if current <= 0 and not bool(row.get("eligible_new", False)):
+                continue
+            slug = str(row.get("slug", "") or "")
+            if not slug:
+                continue
+            label = str(row.get("label", slug)).strip() or slug
+            options.append(f"{label} (+{current})")
+            slugs.append(slug)
+        options.append("Finish")
+        pick = arrow_menu(f"Creation Skill Spend ({points} left)", options)
+        if pick in {-1, len(options) - 1}:
+            return
+
+        result = game_service.spend_skill_proficiency_points_intent(character_id, {slugs[pick]: 1})
+        clear_screen()
+        if _CONSOLE is not None and Panel is not None:
+            _CONSOLE.print(
+                Panel.fit(
+                    "\n".join(list(result.messages or ["No changes applied."])),
+                    title="[bold yellow]Skill Training[/bold yellow]",
+                    border_style=_PANEL_BORDER,
+                )
+            )
+        else:
+            print("=== Skill Training ===")
+            for line in list(result.messages or ["No changes applied."]):
+                print(str(line))
+        _prompt_enter()
+
+
 def run_character_creation(game_service):
     creation_service = game_service.character_creation_service
     if creation_service is None:
@@ -454,6 +564,10 @@ def run_character_creation(game_service):
                 if not _show_class_detail(creation_service, chosen_class):
                     continue
 
+                subclass_confirmed, selected_subclass_slug = _choose_subclass(creation_service, chosen_class)
+                if not subclass_confirmed:
+                    continue
+
                 # Ability + following steps; allow back to class on cancel
                 while True:
                     ability_scores = _choose_abilities(creation_service, chosen_class)
@@ -479,11 +593,13 @@ def run_character_creation(game_service):
                         subrace=selected_subrace,
                         background=background,
                         difficulty=difficulty,
+                        subclass_slug=selected_subclass_slug,
                     )
                     summary = game_service.build_character_creation_summary(character)
 
                     clear_screen()
                     _render_character_summary(summary)
+                    _run_creation_skill_training_flow(game_service, summary.character_id)
                     print("")
                     _prompt_enter("Press ENTER to begin your adventure...")
 
