@@ -21,6 +21,26 @@ class ProgressionServiceTests(unittest.TestCase):
         self.assertEqual(1, pending.current_level)
         self.assertEqual(2, pending.next_level)
         self.assertIn("vitality", pending.growth_choices)
+        self.assertIn("adventurer", pending.class_options)
+
+    def test_preview_pending_includes_existing_and_available_class_options(self) -> None:
+        service = ProgressionService()
+        character = Character(
+            id=2,
+            name="Cato",
+            class_name="fighter",
+            class_levels={"fighter": 2, "wizard": 1},
+            level=3,
+            xp=75,
+        )
+
+        pending = service.preview_pending(character, available_classes=["rogue", "fighter"])
+
+        self.assertIsNotNone(pending)
+        assert pending is not None
+        self.assertIn("fighter", pending.class_options)
+        self.assertIn("wizard", pending.class_options)
+        self.assertIn("rogue", pending.class_options)
 
     def test_apply_level_progression_emits_pending_and_applied_events(self) -> None:
         emitted: list[object] = []
@@ -45,6 +65,28 @@ class ProgressionServiceTests(unittest.TestCase):
         flags = character.flags if isinstance(character.flags, dict) else {}
         unlocks = flags.get("progression_unlocks", {})
         self.assertTrue(unlocks.get("level_2_feat"))
+
+    def test_apply_level_progression_advances_selected_multiclass(self) -> None:
+        service = ProgressionService()
+        character = Character(
+            id=18,
+            name="Mira",
+            class_name="fighter",
+            class_levels={"fighter": 2, "wizard": 1},
+            level=3,
+            xp=75,
+        )
+
+        messages = service.apply_level_progression(
+            character,
+            growth_choice="vitality",
+            class_choice="wizard",
+        )
+
+        self.assertTrue(messages)
+        self.assertEqual(4, int(character.level))
+        self.assertEqual(2, int(character.class_levels.get("wizard", 0)))
+        self.assertEqual(2, int(character.class_levels.get("fighter", 0)))
 
     def test_level_up_awards_skill_points_from_proficiency_bonus(self) -> None:
         service = ProgressionService()
@@ -155,7 +197,7 @@ class ProgressionServiceTests(unittest.TestCase):
 
     def test_subclass_advancement_unlocks_on_class_tier_level(self) -> None:
         service = ProgressionService()
-        character = Character(id=16, name="Dren", class_name="fighter", level=2, xp=25)
+        character = Character(id=16, name="Dren", class_name="fighter", level=2, xp=50)
         character.flags = {
             "subclass_slug": "paragon",
             "subclass_name": "The Paragon",

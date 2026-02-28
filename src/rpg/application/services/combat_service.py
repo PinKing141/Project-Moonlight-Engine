@@ -1063,7 +1063,7 @@ class CombatService:
         hp_ratio = float(hp_now) / float(hp_max)
         threatened = engaged and not self._movement_blocked(actor)
 
-        if threatened and not is_melee_actor and intent_key in {"cautious", "skirmisher", "ambusher"} and roll <= 75:
+        if threatened and not is_melee_actor:
             return "disengage"
 
         if threatened and hp_ratio <= 0.45 and intent_key in {"cautious", "skirmisher", "ambusher"} and roll <= 50:

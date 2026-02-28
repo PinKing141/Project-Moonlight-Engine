@@ -89,7 +89,7 @@ class LevelUpUnlockAtomicTests(unittest.TestCase):
             name="Kora",
             class_name="fighter",
             level=2,
-            xp=30,
+            xp=50,
             location_id=1,
             flags={"subclass_slug": "paragon", "subclass_name": "The Paragon"},
         )

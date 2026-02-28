@@ -415,6 +415,32 @@ class TownSocialFlowTests(unittest.TestCase):
         self.assertTrue(outcome.messages)
         self.assertIn("wardens are already on edge", outcome.messages[0].lower())
 
+    def test_dialogue_probe_option_can_be_alignment_gated(self):
+        service, character_id = self._build_service(with_factions=True)
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False), mock.patch(
+            "random.Random.randint", return_value=20
+        ):
+            service.submit_dialogue_choice_intent(character_id, "captain_ren", "friendly")
+            session = service.get_dialogue_session_intent(character_id, "captain_ren")
+
+        invoke_row = next((row for row in session.choices if str(row.choice_id) == "invoke faction"), None)
+        self.assertIsNotNone(invoke_row)
+        self.assertFalse(bool(invoke_row.available))
+        self.assertIn("alignment", str(invoke_row.locked_reason).lower())
+        self.assertIn("lawful", str(invoke_row.locked_reason).lower())
+
+        character = service.character_repo.get(character_id)
+        character.alignment = "lawful_good"
+        service.character_repo.save(character)
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            lawful_session = service.get_dialogue_session_intent(character_id, "captain_ren")
+
+        lawful_invoke_row = next((row for row in lawful_session.choices if str(row.choice_id) == "invoke faction"), None)
+        self.assertIsNotNone(lawful_invoke_row)
+        self.assertTrue(bool(lawful_invoke_row.available))
+
     def test_mara_opening_uses_critical_tension_variant_line(self):
         service, character_id = self._build_service()
         world = service.world_repo.load_default()
@@ -426,6 +452,18 @@ class TownSocialFlowTests(unittest.TestCase):
             session = service.get_dialogue_session_intent(character_id, "innkeeper_mara")
 
         self.assertIn("distant shouting", session.greeting.lower())
+
+    def test_mara_friendly_response_can_use_alignment_variant(self):
+        service, character_id = self._build_service()
+        character = service.character_repo.get(character_id)
+        character.alignment = "chaotic_good"
+        service.character_repo.save(character)
+
+        with mock.patch.dict("os.environ", {"RPG_DIALOGUE_TREE_ENABLED": "1"}, clear=False):
+            outcome = service.submit_dialogue_choice_intent(character_id, "innkeeper_mara", "friendly")
+
+        self.assertTrue(outcome.messages)
+        self.assertIn("good heart tonight", outcome.messages[0].lower())
 
     def test_mara_direct_response_uses_wardens_heat_variant(self):
         service, character_id = self._build_service()

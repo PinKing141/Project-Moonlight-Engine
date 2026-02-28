@@ -111,6 +111,115 @@ class DialogueRequirementMatrixTests(unittest.TestCase):
             ),
         )
 
+    def test_alignment_requirement_matrix(self) -> None:
+        service = DialogueService()
+        world, character = self._build_world_character()
+
+        character.alignment = "true_neutral"
+        self.assertEqual(
+            ["alignment_lawful"],
+            service._failed_requirements(
+                world=world,
+                character=character,
+                character_id=99,
+                npc_id="captain_ren",
+                required=["alignment_lawful"],
+            ),
+        )
+
+        character.alignment = "lawful_good"
+        self.assertEqual(
+            [],
+            service._failed_requirements(
+                world=world,
+                character=character,
+                character_id=99,
+                npc_id="captain_ren",
+                required=["alignment_lawful", "alignment_good"],
+            ),
+        )
+
+    def test_template_authority_invoke_faction_is_alignment_gated(self) -> None:
+        service = DialogueService()
+        world, character = self._build_world_character()
+        service._session_row(character=character, npc_id="generated_guard")["stage_id"] = "probe"
+
+        character.alignment = "true_neutral"
+        neutral_session = service.build_dialogue_session(
+            world=world,
+            character=character,
+            character_id=99,
+            npc_id="generated_guard",
+            npc_name="Gate Warden",
+            greeting="The warden waits.",
+            approaches=["Direct", "Invoke Faction"],
+            npc_profile_id="template:authority",
+        )
+        neutral_invoke = next(
+            (row for row in neutral_session.get("choices", []) if str(row.get("choice_id", "")) == "invoke faction"),
+            None,
+        )
+        self.assertIsNotNone(neutral_invoke)
+        self.assertFalse(bool(neutral_invoke.get("available", False)))
+
+        character.alignment = "lawful_neutral"
+        lawful_session = service.build_dialogue_session(
+            world=world,
+            character=character,
+            character_id=99,
+            npc_id="generated_guard",
+            npc_name="Gate Warden",
+            greeting="The warden waits.",
+            approaches=["Direct", "Invoke Faction"],
+            npc_profile_id="template:authority",
+        )
+        lawful_invoke = next(
+            (row for row in lawful_session.get("choices", []) if str(row.get("choice_id", "")) == "invoke faction"),
+            None,
+        )
+        self.assertIsNotNone(lawful_invoke)
+        self.assertTrue(bool(lawful_invoke.get("available", False)))
+
+    def test_template_underworld_deception_is_alignment_gated(self) -> None:
+        service = DialogueService()
+        world, character = self._build_world_character()
+
+        character.alignment = "lawful_good"
+        blocked_session = service.build_dialogue_session(
+            world=world,
+            character=character,
+            character_id=99,
+            npc_id="generated_fixer",
+            npc_name="Back-Alley Fixer",
+            greeting="The fixer narrows their eyes.",
+            approaches=["Friendly", "Direct"],
+            npc_profile_id="template:underworld",
+        )
+        blocked_deceive = next(
+            (row for row in blocked_session.get("choices", []) if str(row.get("choice_id", "")) == "deception check"),
+            None,
+        )
+        self.assertIsNotNone(blocked_deceive)
+        self.assertFalse(bool(blocked_deceive.get("available", False)))
+
+        character.alignment = "chaotic_neutral"
+        allowed_session = service.build_dialogue_session(
+            world=world,
+            character=character,
+            character_id=99,
+            npc_id="generated_fixer",
+            npc_name="Back-Alley Fixer",
+            greeting="The fixer narrows their eyes.",
+            approaches=["Friendly", "Direct"],
+            npc_profile_id="template:underworld",
+        )
+        allowed_deceive = next(
+            (row for row in allowed_session.get("choices", []) if str(row.get("choice_id", "")) == "deception check"),
+            None,
+        )
+        self.assertIsNotNone(allowed_deceive)
+        self.assertTrue(bool(allowed_deceive.get("available", False)))
+
 
 if __name__ == "__main__":
     unittest.main()

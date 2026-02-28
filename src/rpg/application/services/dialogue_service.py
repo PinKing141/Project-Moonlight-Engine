@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Sequence
 
 from rpg.application.services.seed_policy import derive_seed
+from rpg.domain.models.character import CharacterAlignment
 
 
 class DialogueService:
@@ -587,6 +588,20 @@ class DialogueService:
             top_name, top_score = ranked[0]
             return top_name == faction_id and top_score > 0
 
+        if requirement.startswith("alignment_"):
+            target = requirement[len("alignment_") :].strip().lower().replace("-", "_").replace(" ", "_")
+            if not target:
+                return False
+            alignment = CharacterAlignment.normalize(str(getattr(character, "alignment", "") or ""))
+            if target in {item.value for item in CharacterAlignment}:
+                return alignment == target
+            alignment_axes = set(str(alignment).split("_"))
+            if target == "neutral":
+                return "neutral" in alignment_axes
+            if target in {"lawful", "chaotic", "good", "evil"}:
+                return target in alignment_axes
+            return False
+
         return True
 
     @staticmethod
@@ -610,6 +625,10 @@ class DialogueService:
             faction = token[len("dominant_faction_") :].replace("_", " ").strip()
             if faction:
                 return f"Requires {faction} as your dominant faction pressure."
+        if token.startswith("alignment_"):
+            target = token[len("alignment_") :].replace("_", " ").strip()
+            if target:
+                return f"Requires alignment: {target.title()}."
         return mapping.get(str(requirement), "Unavailable due to unmet requirement.")
 
     def _pick_variant_line(

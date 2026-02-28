@@ -53,6 +53,7 @@ class CharacterSheetView:
     name: str
     race: str
     class_name: str
+    alignment: str
     difficulty: str
     level: int
     xp: int
@@ -60,6 +61,7 @@ class CharacterSheetView:
     xp_to_next_level: int
     hp_current: int
     hp_max: int
+    class_levels_line: str = ""
     pressure_summary: str = ""
     pressure_lines: List[str] = field(default_factory=list)
 
@@ -72,6 +74,8 @@ class LevelUpPendingView:
     xp_current: int
     xp_required: int
     growth_choices: List[str] = field(default_factory=list)
+    class_options: List[str] = field(default_factory=list)
+    class_levels: Dict[str, int] = field(default_factory=dict)
     summary: str = ""
 
 
@@ -104,6 +108,7 @@ class CharacterCreationSummaryView:
     name: str
     level: int
     class_name: str
+    alignment: str
     race: str
     speed: int
     background: str

@@ -1,6 +1,6 @@
 from typing import Dict, Optional
 
-from rpg.domain.models.character import Character, DEFAULT_ATTRIBUTES
+from rpg.domain.models.character import Character, CharacterAlignment, DEFAULT_ATTRIBUTES
 from rpg.domain.models.character_class import CharacterClass
 from rpg.domain.models.character_options import Background, DifficultyPreset, Race
 from rpg.domain.services.class_profiles import CLASS_COMBAT_PROFILE, DEFAULT_COMBAT_PROFILE
@@ -119,6 +119,7 @@ def create_new_character(
     background: Optional[Background] = None,
     difficulty: Optional[DifficultyPreset] = None,
     starting_equipment: Optional[list[str]] = None,
+    alignment: str | None = None,
 ) -> Character:
     base_hp = HIT_DIE_BASE_HP.get(cls.hit_die, 8) + 2  # small bonus
     hp_max = _apply_difficulty_to_hp(base_hp, difficulty)
@@ -152,6 +153,7 @@ def create_new_character(
         hp_max=hp_max,
         hp_current=hp_max,
         class_name=cls.slug,
+        class_levels={cls.slug: 1},
         base_attributes=base_before_race,
         attributes=attributes,
         location_id=None,
@@ -173,4 +175,5 @@ def create_new_character(
         spell_slots_current=slots,
         cantrips=cantrips,
         known_spells=spells,
+        alignment=CharacterAlignment.normalize(alignment),
     )

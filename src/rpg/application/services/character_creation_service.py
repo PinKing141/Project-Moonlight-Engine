@@ -6,6 +6,7 @@ from typing import Dict, List
 from rpg.application.dtos import CharacterClassDetailView
 from rpg.application.mappers.character_creation_mapper import to_character_class_detail_view
 from rpg.application.services.balance_tables import DIFFICULTY_PRESET_PROFILES
+from rpg.domain.models.character import CharacterAlignment
 from rpg.domain.models.character_class import CharacterClass
 from rpg.domain.models.class_subclass import ClassSubclass
 from rpg.domain.models.character_options import Background, DifficultyPreset, Race, Subrace
@@ -37,6 +38,17 @@ class CharacterCreationService:
     _RACE_FEATURE_SLUGS = {
         "dwarf": "feature.darkvision",
     }
+    _ALIGNMENT_ORDER: tuple[str, ...] = (
+        CharacterAlignment.LAWFUL_GOOD.value,
+        CharacterAlignment.NEUTRAL_GOOD.value,
+        CharacterAlignment.CHAOTIC_GOOD.value,
+        CharacterAlignment.LAWFUL_NEUTRAL.value,
+        CharacterAlignment.TRUE_NEUTRAL.value,
+        CharacterAlignment.CHAOTIC_NEUTRAL.value,
+        CharacterAlignment.LAWFUL_EVIL.value,
+        CharacterAlignment.NEUTRAL_EVIL.value,
+        CharacterAlignment.CHAOTIC_EVIL.value,
+    )
 
     def __init__(
         self,
@@ -99,6 +111,15 @@ class CharacterCreationService:
 
     def list_difficulties(self) -> List[DifficultyPreset]:
         return list(self.difficulties)
+
+    def list_alignments(self) -> List[str]:
+        return list(self._ALIGNMENT_ORDER)
+
+    def alignment_option_labels(self) -> List[str]:
+        labels: List[str] = []
+        for slug in self.list_alignments():
+            labels.append(str(slug).replace("_", " ").title())
+        return labels
 
     def list_class_names(self) -> List[str]:
         return [cls.name for cls in self.list_classes()]
@@ -185,6 +206,7 @@ class CharacterCreationService:
         background: Background | None = None,
         difficulty: DifficultyPreset | None = None,
         subclass_slug: str | None = None,
+        alignment: str | None = None,
     ) -> "Character":
         provided_name = (name or "").strip()
         if not provided_name and self.name_generator is not None:
@@ -226,6 +248,7 @@ class CharacterCreationService:
             background=background,
             difficulty=difficulty,
             starting_equipment=starting_equipment,
+            alignment=CharacterAlignment.normalize(alignment),
         )
 
         selected_subclass = resolve_subclass(chosen.slug, subclass_slug)
@@ -238,6 +261,7 @@ class CharacterCreationService:
                 character.flags = flags
             flags["subclass_slug"] = selected_subclass.slug
             flags["subclass_name"] = selected_subclass.name
+            flags["subclass_class_slug"] = chosen.slug
 
         starting_location = self.location_repo.get_starting_location()
         character.location_id = starting_location.id if starting_location else None

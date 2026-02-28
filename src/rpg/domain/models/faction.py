@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional
 
+from rpg.domain.models.character import CharacterAlignment
+
 
 class InfluenceThreshold(str, Enum):
     HOSTILE = "hostile"
@@ -33,6 +35,7 @@ class Faction:
     description: str = ""
     reputation: Dict[str, int] = field(default_factory=dict)
     home_location_id: Optional[int] = None
+    alignment_affinities: Dict[str, int] = field(default_factory=dict)
 
     def adjust_reputation(self, target: str, delta: int) -> int:
         """Update reputation towards another faction or character."""
@@ -53,6 +56,29 @@ class Faction:
         if score <= -5:
             return "unfriendly"
         return "neutral"
+
+    def alignment_affinity_delta(self, character_alignment: str | None) -> int:
+        normalized = CharacterAlignment.normalize(character_alignment)
+        direct = self.alignment_affinities.get(normalized)
+        if direct is not None:
+            return int(direct)
+
+        axis_pairs = {
+            "lawful_good": ("lawful", "good"),
+            "neutral_good": ("neutral_axis", "good"),
+            "chaotic_good": ("chaotic", "good"),
+            "lawful_neutral": ("lawful", "neutral_moral"),
+            "true_neutral": ("neutral_axis", "neutral_moral"),
+            "chaotic_neutral": ("chaotic", "neutral_moral"),
+            "lawful_evil": ("lawful", "evil"),
+            "neutral_evil": ("neutral_axis", "evil"),
+            "chaotic_evil": ("chaotic", "evil"),
+        }
+        axis_tags = axis_pairs.get(normalized, ("neutral_axis", "neutral_moral"))
+        total = 0
+        for key in axis_tags:
+            total += int(self.alignment_affinities.get(key, 0) or 0)
+        return int(total)
 
 
 def reputation_threshold(reputation_score: int) -> InfluenceThreshold:

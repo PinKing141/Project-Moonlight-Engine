@@ -96,6 +96,23 @@ class CombatGridlessRangeTests(unittest.TestCase):
 
         self.assertEqual("disengage", action)
 
+    def test_enemy_ai_ranged_aggressive_also_prefers_disengage_when_engaged(self) -> None:
+        service = CombatService(verbosity="compact")
+        hero = Character(id=238, name="Ari", class_name="fighter", hp_current=22, hp_max=22)
+        enemy = Entity(id=239, name="Goblin Archer", kind="beast", level=2, hp=20, hp_current=20, hp_max=20, armour_class=12, damage_die="d4")
+
+        with mock.patch.object(service.rng, "randint", return_value=90):
+            action = service._select_enemy_tactical_action(
+                intent="aggressive",
+                actor=enemy,
+                target=hero,
+                terrain="open",
+                distance="engaged",
+                default_action="attack",
+            )
+
+        self.assertEqual("disengage", action)
+
     def test_enemy_disengage_action_repositions_distance(self) -> None:
         service = CombatService(verbosity="compact")
         service.set_seed(33)

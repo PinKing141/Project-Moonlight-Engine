@@ -259,7 +259,7 @@
           }
         ],
         "choices": [
-          { "id": "invoke faction", "label": "Invoke Faction", "requires": [] },
+          { "id": "invoke faction", "label": "Invoke Faction", "requires": ["alignment_lawful"] },
           { "id": "address flashpoint", "label": "Address Flashpoint", "requires": ["flashpoint_present"] },
           { "id": "direct", "label": "Direct", "requires": [] }
         ]
@@ -434,6 +434,10 @@
               {
                 "line": "Mara nods at your measured tone. 'With crown pressure leading the night, calm words matter more than steel.'",
                 "requires": ["dominant_faction_the_crown"]
+              },
+              {
+                "line": "Mara studies you for a beat, then nods. 'I can work with a good heart tonight.'",
+                "requires": ["alignment_good"]
               }
             ]
           },
@@ -620,7 +624,7 @@
         "choices": [
           { "id": "direct", "label": "Direct", "requires": [], "response": "You set terms plainly and ask for reciprocity." },
           { "id": "bribe", "label": "Bribe", "requires": ["has_gold_8"], "response": "Coin changes hands and resistance fades." },
-          { "id": "invoke faction", "label": "Invoke Faction", "requires": [], "response": "You reference faction ties to secure leverage." }
+          { "id": "invoke faction", "label": "Invoke Faction", "requires": ["alignment_lawful"], "response": "You reference faction ties to secure leverage." }
         ]
       },
       "resolve": {
@@ -670,7 +674,7 @@
         "line": "They ask for concrete proof and actionable steps.",
         "choices": [
           { "id": "address flashpoint", "label": "Address Flashpoint", "requires": ["flashpoint_present"], "response": "You connect your case to the latest civic fracture." },
-          { "id": "invoke faction", "label": "Invoke Faction", "requires": [], "response": "You press your standing as a reason to be trusted." },
+          { "id": "invoke faction", "label": "Invoke Faction", "requires": ["alignment_lawful"], "response": "You press your standing as a reason to be trusted." },
           { "id": "direct", "label": "Direct", "requires": [], "response": "You keep it precise and operational." }
         ]
       },
@@ -690,7 +694,7 @@
           {
             "id": "deception check",
             "label": "Deceive",
-            "requires": [],
+            "requires": ["alignment_chaotic"],
             "response": "You claim you've already paid the right people.",
             "skill_check": {
               "skill": "deception",
@@ -830,7 +834,7 @@
       "resolve": {
         "line": "The local decides whether to vouch for you going forward.",
         "choices": [
-          { "id": "friendly", "label": "Friendly", "requires": [], "response": "They promise to speak well of you in the district." },
+          { "id": "friendly", "label": "Friendly", "requires": ["alignment_good"], "response": "They promise to speak well of you in the district." },
           { "id": "make amends", "label": "Make Amends", "requires": ["recent_rebuff"], "response": "They agree to a clean slate, cautiously." }
         ]
       }
