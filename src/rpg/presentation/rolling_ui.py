@@ -1,3 +1,4 @@
+import asyncio
 import random
 import time
 
@@ -24,9 +25,10 @@ def _prompt_continue(message: str) -> None:
     clear_screen()
 
 
-def roll_4d6_drop_lowest() -> tuple[int, list[int]]:
+def roll_4d6_drop_lowest(rng: random.Random | None = None) -> tuple[int, list[int]]:
     """Roll 4d6, drop the lowest, return (total, rolls)."""
-    rolls = [random.randint(1, 6) for _ in range(4)]
+    resolved_rng = rng or random.Random()
+    rolls = [resolved_rng.randint(1, 6) for _ in range(4)]
     total = sum(rolls) - min(rolls)
     return total, rolls
 
@@ -61,14 +63,15 @@ def _render_roll_panel(title: str, lines: list[str], border_style: str = "yellow
         print(line)
 
 
-def _animate_stat_roll(stat_name: str, final_total: int, final_rolls: list[int]) -> None:
+def _animate_stat_roll(stat_name: str, final_total: int, final_rolls: list[int], *, rng: random.Random | None = None) -> None:
     """Show a quick rolling animation then reveal the final result."""
     frames = 12
     sleep_time = 0.05
+    resolved_rng = rng or random.Random()
 
     for _ in range(frames):
         clear_screen()
-        fake_rolls = [random.randint(1, 6) for _ in range(4)]
+        fake_rolls = [resolved_rng.randint(1, 6) for _ in range(4)]
         _render_roll_panel(
             f"ROLLING {stat_name} (4d6, drop lowest)",
             [
@@ -81,6 +84,48 @@ def _animate_stat_roll(stat_name: str, final_total: int, final_rolls: list[int])
 
     # Final reveal
     clear_screen()
+
+async def _animate_stat_roll_async(
+    stat_name: str,
+    final_total: int,
+    final_rolls: list[int],
+    *,
+    rng: random.Random | None = None,
+) -> None:
+    """Async variant that yields to the event loop during roll animation."""
+    frames = 12
+    sleep_time = 0.05
+    resolved_rng = rng or random.Random()
+
+    for _ in range(frames):
+        clear_screen()
+        fake_rolls = [resolved_rng.randint(1, 6) for _ in range(4)]
+        _render_roll_panel(
+            f"ROLLING {stat_name} (4d6, drop lowest)",
+            [
+                f"Dice: {_render_dice_row(fake_rolls)}",
+                "",
+                "Rolling...",
+            ],
+        )
+        await asyncio.sleep(sleep_time)
+
+    clear_screen()
+    lowest = min(final_rolls)
+    lowest_idx = final_rolls.index(lowest)
+
+    _render_roll_panel(
+        f"{stat_name} RESULT",
+        [
+            f"Final dice: {_render_dice_row(final_rolls, highlight_index=lowest_idx)}",
+            f"(Lowest die ({lowest}) is dropped.)",
+            "",
+            f"{stat_name} = {final_total}",
+        ],
+    )
+    _prompt_continue("Press ENTER to continue...")
+
+
     lowest = min(final_rolls)
     lowest_idx = final_rolls.index(lowest)
 
@@ -114,13 +159,44 @@ def roll_attributes_with_animation() -> dict[str, int]:
     _prompt_continue("Press ENTER to begin rolling...")
 
     results: dict[str, int] = {}
+    session_rng = random.Random()
 
     for stat in ATTR_ORDER:
-        total, rolls = roll_4d6_drop_lowest()
-        _animate_stat_roll(stat, total, rolls)
+        total, rolls = roll_4d6_drop_lowest(rng=session_rng)
+        _animate_stat_roll(stat, total, rolls, rng=session_rng)
         results[stat] = total
 
     # Summary screen
+    clear_screen()
+    _render_roll_panel(
+        "FINAL ATTRIBUTE ROLLS",
+        [f"{stat}: {results[stat]}" for stat in ATTR_ORDER],
+    )
+    _prompt_continue("Press ENTER to accept these rolls...")
+
+    return results
+
+
+async def roll_attributes_with_animation_async() -> dict[str, int]:
+    """Async roll flow that avoids blocking the event loop during animation."""
+    clear_screen()
+    _render_roll_panel(
+        "ATTRIBUTE ROLLING",
+        [
+            "You will roll 4d6 for each attribute, dropping the lowest die.",
+            "Order: STR, DEX, CON, INT, WIS, CHA.",
+        ],
+    )
+    _prompt_continue("Press ENTER to begin rolling...")
+
+    results: dict[str, int] = {}
+    session_rng = random.Random()
+
+    for stat in ATTR_ORDER:
+        total, rolls = roll_4d6_drop_lowest(rng=session_rng)
+        await _animate_stat_roll_async(stat, total, rolls, rng=session_rng)
+        results[stat] = total
+
     clear_screen()
     _render_roll_panel(
         "FINAL ATTRIBUTE ROLLS",

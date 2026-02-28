@@ -14,15 +14,20 @@ from rpg.presentation import main_menu as main_menu_module
 
 
 class SessionQualityHookTests(unittest.TestCase):
+    @staticmethod
+    def _create_inmemory_service():
+        with mock.patch.dict(os.environ, {"RPG_DATABASE_URL": ""}, clear=False):
+            return create_game_service()
+
     def test_maybe_emit_session_quality_report_is_noop_by_default(self) -> None:
-        service = create_game_service()
+        service = self._create_inmemory_service()
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("RPG_NARRATIVE_SESSION_REPORT_ENABLED", None)
             path = maybe_emit_session_quality_report(service, character_id=None)
         self.assertIsNone(path)
 
     def test_maybe_emit_session_quality_report_writes_artifact_when_enabled(self) -> None:
-        service = create_game_service()
+        service = self._create_inmemory_service()
         with tempfile.TemporaryDirectory() as temp_dir:
             report_path = Path(temp_dir) / "session_quality.json"
             with mock.patch.dict(
@@ -46,7 +51,7 @@ class SessionQualityHookTests(unittest.TestCase):
             self.assertIn("session_context", payload)
 
     def test_main_menu_quit_invokes_session_report_hook(self) -> None:
-        service = create_game_service()
+        service = self._create_inmemory_service()
         with mock.patch.object(main_menu_module, "arrow_menu", side_effect=[4]), mock.patch.object(
             main_menu_module,
             "clear_screen",

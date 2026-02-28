@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from rpg.application.services.seed_policy import derive_seed
+from rpg.application.services.seed_policy import derive_rng, derive_seed
 
 
 class SeedPolicyTests(unittest.TestCase):
@@ -34,6 +34,18 @@ class SeedPolicyTests(unittest.TestCase):
     def test_non_finite_float_in_context_raises(self) -> None:
         with self.assertRaises(ValueError):
             derive_seed("world.tick", {"threat": float("nan")})
+
+    def test_derive_rng_is_deterministic_for_same_context(self) -> None:
+        context = {"world_turn": 12, "enemy_id": 4, "character_id": 9}
+        rng_a = derive_rng("encounter.intro", context)
+        rng_b = derive_rng("encounter.intro", context)
+        self.assertEqual(rng_a.randint(1, 1000), rng_b.randint(1, 1000))
+
+    def test_derive_rng_changes_with_namespace(self) -> None:
+        context = {"world_turn": 12, "enemy_id": 4, "character_id": 9}
+        rng_a = derive_rng("encounter.intro", context)
+        rng_b = derive_rng("encounter.loot", context)
+        self.assertNotEqual(rng_a.randint(1, 1000), rng_b.randint(1, 1000))
 
 
 if __name__ == "__main__":

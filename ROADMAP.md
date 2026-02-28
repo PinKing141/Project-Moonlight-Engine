@@ -2490,3 +2490,81 @@ Rename player-facing magic faction/tower labels to school-aligned naming, remove
   - `19 passed`
   - `71 passed`
 
+---
+
+## 27) Playtest Defect Closure V16 — CLI Loop Coverage Telemetry Reliability
+
+### Phase Goal
+Close the two Phase 25 playtest defects by making scripted CLI loop telemetry reflect real travel/turn progression behavior in the in-memory runtime.
+
+### Status
+`Done`
+
+### 27.1 Scope Contract
+- **In Scope:**
+  - Fix scripted playtest capture metrics so start/end snapshots are not impacted by mutable model references.
+  - Track root-level travel action execution independently from destination-list selection.
+  - Add regression coverage to keep the scripted loop from silently reporting no progression.
+- **Out of Scope (Hard Stop):**
+  - No gameplay-system expansion.
+  - No presentation architecture rewrites.
+  - No multi-location content seeding changes in this phase.
+
+### 27.2 Sequence
+
+#### `V16-T01` Snapshot Integrity Fix for Phase 25 Capture
+- **Status:** `Done`
+- **Objective:** Prevent false zero deltas caused by mutable object references in the playtest capture script.
+- **Action:**
+  1. Capture scalar `start_*` values immediately after bootstrap.
+  2. Capture scalar `end_*` values after loop execution.
+  3. Compute deltas from scalar snapshots only.
+- **Files (actual):**
+  - `artifacts/phase25_cli_playtest_capture.py`
+- **Done Evidence:**
+  - Script output now reports real progression (`turn_delta: 1`) for the scripted loop run.
+
+#### `V16-T02` Travel Path Coverage Metric Clarification
+- **Status:** `Done`
+- **Objective:** Distinguish between travel action execution and destination-list hops so single-location in-memory runs are measured correctly.
+- **Action:**
+  1. Add `travel_actions` counter when root menu selects `Travel`.
+  2. Keep `travel_hops` for destination-list choices only.
+  3. Update notes/report interpretation to explain why `travel_hops` can remain `0` in single-location setups.
+- **Files (actual):**
+  - `artifacts/phase25_cli_playtest_capture.py`
+  - `artifacts/phase25_cli_playtest_report.json`
+  - `artifacts/phase25_cli_playtest_notes.md`
+- **Done Evidence:**
+  - Latest artifact values include `travel_actions: 1`, `travel_hops: 0`, `turn_delta: 1`.
+
+#### `V16-T03` Regression Test for Scripted CLI Loop Progress Signal
+- **Status:** `Done`
+- **Objective:** Lock in a regression test ensuring scripted loop travel path executes and advances world turn.
+- **Action:**
+  1. Add CLI e2e test mirroring scripted loop behavior.
+  2. Assert `travel_actions >= 1`.
+  3. Assert `world_after.current_turn > start_turn`.
+- **Files (actual):**
+  - `tests/e2e/test_cli_flow.py`
+- **Done Evidence:**
+  - Validation runs:
+    - `pytest tests/e2e/test_cli_flow.py::CliFlowTests::test_scripted_cli_loop_records_travel_hop_and_turn_advance -q` → `1 passed`
+    - `pytest tests/e2e/test_cli_flow.py -q` → `8 passed`
+
+### 27.3 Exit Gates (Strict)
+- [x] **Scope Gate:** Changes limited to scripted capture artifact telemetry, e2e regression, and roadmap/docs evidence.
+- [x] **Defect Gate:** Scripted run no longer reports false zero turn progression when travel executes.
+- [x] **Quality Gate:** Added CLI e2e regression passes.
+- [x] **Purity Gate:** No new gameplay features introduced.
+
+### 27.4 Done Evidence
+- Script execution:
+  - `python artifacts/phase25_cli_playtest_capture.py` wrote updated report at `artifacts/phase25_cli_playtest_report.json`.
+- Report summary:
+  - `turn_delta: 1`
+  - `travel_actions: 1`
+  - `travel_hops: 0` (expected in single-location in-memory seed).
+- Full regression confirmation:
+  - `pytest -q` → `545 passed, 1 skipped`
+

@@ -180,7 +180,9 @@ class MysqlCharacterRepositoryStatsIntegrationTests(unittest.TestCase):
         self.assertEqual("d10", loaded.damage_die)
         self.assertEqual(25, loaded.speed)
         self.assertEqual(["Healing Potion", "Whetstone"], loaded.inventory)
-        self.assertEqual({"equipment": {"weapon": "Longsword"}}, loaded.flags)
+        self.assertEqual({"weapon": "Longsword"}, dict((loaded.flags or {}).get("equipment", {}) or {}))
+        self.assertIn("alignment", loaded.flags or {})
+        self.assertIn("class_levels", loaded.flags or {})
 
     def test_save_updates_character_combat_stats(self) -> None:
         created = self.repo.create(
@@ -208,7 +210,9 @@ class MysqlCharacterRepositoryStatsIntegrationTests(unittest.TestCase):
         self.assertEqual("d12", loaded.damage_die)
         self.assertEqual(35, loaded.speed)
         self.assertEqual(["Focus Potion"], loaded.inventory)
-        self.assertEqual({"travel_prep": {"rations": 2}}, loaded.flags)
+        self.assertEqual({"rations": 2}, dict((loaded.flags or {}).get("travel_prep", {}) or {}))
+        self.assertIn("alignment", loaded.flags or {})
+        self.assertIn("class_levels", loaded.flags or {})
 
 
 if __name__ == "__main__":

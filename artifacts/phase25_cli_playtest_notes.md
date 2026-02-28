@@ -1,6 +1,6 @@
 # Phase 25 CLI Playtest Notes
 
-- Timestamp (UTC): 2026-02-28T16:56:37.319283+00:00
+- Timestamp (UTC): 2026-02-28T19:28:10.573061+00:00
 - Mode: Scripted CLI loop through `run_game_loop` in in-memory mode.
 - Report artifact: `artifacts/phase25_cli_playtest_report.json`
 
@@ -9,13 +9,14 @@
 - Quest board visits: 2
 - Quest accepts: 1
 - Wilderness menu visits: 1
+- Travel actions selected from root loop: 1
 - Travel destination hops selected: 0
 
 ## Pacing & Economy Observations
 - Level delta: 0 (start 1 -> end 1)
 - XP delta: 0 (start 0 -> end 0)
 - Gold delta: 0 (start 0 -> end 0)
-- Turn delta: 0 (start 1 -> end 1)
+- Turn delta: 1 (start 0 -> end 1)
 
 ## Quest Tempo
 - Active quests after cycle: 1
@@ -24,5 +25,6 @@
 
 ## Anomalies / Follow-up
 - No economy or leveling movement in this bounded cycle.
-- Travel destination selection counter remained 0 in this run.
+- Travel destination selection counter remained 0 because the in-memory bootstrap currently exposes a single location (no destination list to choose from).
+- Travel execution path is still confirmed by `travel_actions = 1` and `turn_delta = 1`.
 - Captured as playtest findings only; no feature work added during freeze.

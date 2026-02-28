@@ -25,22 +25,23 @@ class MigrationChainTests(unittest.TestCase):
     def test_apply_all_references_all_numbered_migrations_in_order(self) -> None:
         content = self.apply_all.read_text(encoding="utf-8")
         sources = [line.strip() for line in content.splitlines() if line.strip().upper().startswith("SOURCE ")]
+        numbered = sorted([path.name for path in self.migration_dir.glob("[0-9][0-9][0-9]_*.sql")])
 
-        numbered = sorted(
-            [path.name for path in self.migration_dir.glob("[0-9][0-9][0-9]_*.sql")]
-        )
+        # Aggregate SOURCE chains are deprecated; when SOURCE lines are absent,
+        # the file should explicitly direct callers to the Python runner.
+        if not sources:
+            normalized = content.lower()
+            self.assertIn("deprecated", normalized)
+            self.assertIn("python -m rpg.infrastructure.db.mysql.migrate", normalized)
+            self.assertTrue(numbered, "No numbered migration files found")
+            return
+
         apply_lines_for_numbered = [line for line in sources if re.search(r"\/[0-9]{3}_|\.[0-9]{3}_|[0-9]{3}_", line)]
 
         for migration in numbered:
-            self.assertTrue(
-                any(migration in line for line in apply_lines_for_numbered),
-                f"Missing migration in apply-all: {migration}",
-            )
+            self.assertTrue(any(migration in line for line in apply_lines_for_numbered), f"Missing migration in apply-all: {migration}")
 
-        found_order = [
-            next((name for name in numbered if name in line), None)
-            for line in apply_lines_for_numbered
-        ]
+        found_order = [next((name for name in numbered if name in line), None) for line in apply_lines_for_numbered]
         found_order = [name for name in found_order if name is not None]
         self.assertEqual(numbered, found_order, "apply-all migration order must match filename order")
 

@@ -1048,6 +1048,7 @@ class CombatService:
         terrain: str,
         distance: str,
         default_action: str,
+        allies: Optional[list] = None,
     ) -> str:
         base = str(default_action or "attack").strip().lower()
         if base not in {"attack", "reckless"}:
@@ -1062,8 +1063,16 @@ class CombatService:
         hp_now = int(getattr(actor, "hp_current", hp_max) or hp_max)
         hp_ratio = float(hp_now) / float(hp_max)
         threatened = engaged and not self._movement_blocked(actor)
+        has_vanguard_support = True
+        if isinstance(allies, list):
+            has_vanguard_support = any(
+                row is not actor
+                and int(getattr(row, "hp_current", 0) or 0) > 0
+                and self._combat_lane(row) == "vanguard"
+                for row in allies
+            )
 
-        if threatened and not is_melee_actor:
+        if threatened and not is_melee_actor and has_vanguard_support:
             return "disengage"
 
         if threatened and hp_ratio <= 0.45 and intent_key in {"cautious", "skirmisher", "ambusher"} and roll <= 50:
@@ -2236,6 +2245,7 @@ class CombatService:
                     terrain=str(terrain),
                     distance=str(distance),
                     default_action=str(enemy_action),
+                    allies=living_enemies,
                 )
                 if str(enemy_action).lower() == "flee":
                     enemy_actor.hp_current = 0

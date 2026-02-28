@@ -15,12 +15,17 @@ with mock.patch("builtins.input", side_effect=["Phase25Hero", "2"]), mock.patch(
 
 char_before = game.character_repo.get(character_id)
 world_before = game.world_repo.load_default() if game.world_repo is not None else None
+start_level = int(getattr(char_before, "level", 0) or 0)
+start_xp = int(getattr(char_before, "xp", 0) or 0)
+start_gold = int(getattr(char_before, "money", 0) or 0)
+start_turn = int(getattr(world_before, "current_turn", 0) or 0) if world_before is not None else None
 
 state = {
     "root_actions": 0,
     "quest_board_visits": 0,
     "quest_accepts": 0,
     "wilderness_actions": 0,
+    "travel_actions": 0,
     "travel_hops": 0,
 }
 
@@ -31,6 +36,8 @@ def _choose_menu(title, options):
         sequence = [0, 1, 0, 2, 4]
         idx = sequence[state["root_actions"]] if state["root_actions"] < len(sequence) else 4
         state["root_actions"] += 1
+        if idx == 1:
+            state["travel_actions"] += 1
         return idx
 
     if text.startswith("Town Options"):
@@ -58,11 +65,11 @@ def _choose_menu(title, options):
     if text.startswith("Wilderness Rest"):
         return 1
 
-    if "Travel" in text and "—" in text:
+    if text in {"Leave Town", "Return to Town"}:
         if len(options) > 1:
             state["travel_hops"] += 1
             return 0
-        return -1
+        return len(options) - 1 if options else -1
 
     if options:
         return len(options) - 1
@@ -78,6 +85,10 @@ with mock.patch("rpg.presentation.game_loop._CONSOLE", None), mock.patch(
 
 char_after = game.character_repo.get(character_id)
 world_after = game.world_repo.load_default() if game.world_repo is not None else None
+end_level = int(getattr(char_after, "level", 0) or 0)
+end_xp = int(getattr(char_after, "xp", 0) or 0)
+end_gold = int(getattr(char_after, "money", 0) or 0)
+end_turn = int(getattr(world_after, "current_turn", 0) or 0) if world_after is not None else None
 journal = game.get_quest_journal_intent(character_id)
 
 section_counts = {str(section.title): len(list(section.quests or [])) for section in list(getattr(journal, "sections", []) or [])}
@@ -95,22 +106,22 @@ result = {
     "timestamp_utc": datetime.now(timezone.utc).isoformat(),
     "character_id": character_id,
     "start": {
-        "level": int(getattr(char_before, "level", 0) or 0),
-        "xp": int(getattr(char_before, "xp", 0) or 0),
-        "gold": int(getattr(char_before, "money", 0) or 0),
-        "turn": int(getattr(world_before, "current_turn", 0) or 0) if world_before is not None else None,
+        "level": start_level,
+        "xp": start_xp,
+        "gold": start_gold,
+        "turn": start_turn,
     },
     "end": {
-        "level": int(getattr(char_after, "level", 0) or 0),
-        "xp": int(getattr(char_after, "xp", 0) or 0),
-        "gold": int(getattr(char_after, "money", 0) or 0),
-        "turn": int(getattr(world_after, "current_turn", 0) or 0) if world_after is not None else None,
+        "level": end_level,
+        "xp": end_xp,
+        "gold": end_gold,
+        "turn": end_turn,
     },
     "delta": {
-        "level_delta": int((getattr(char_after, "level", 0) or 0) - (getattr(char_before, "level", 0) or 0)),
-        "xp_delta": int((getattr(char_after, "xp", 0) or 0) - (getattr(char_before, "xp", 0) or 0)),
-        "gold_delta": int((getattr(char_after, "money", 0) or 0) - (getattr(char_before, "money", 0) or 0)),
-        "turn_delta": int((getattr(world_after, "current_turn", 0) or 0) - (getattr(world_before, "current_turn", 0) or 0)) if (world_after is not None and world_before is not None) else None,
+        "level_delta": int(end_level - start_level),
+        "xp_delta": int(end_xp - start_xp),
+        "gold_delta": int(end_gold - start_gold),
+        "turn_delta": int(end_turn - start_turn) if (end_turn is not None and start_turn is not None) else None,
     },
     "quest": {
         "sections": section_counts,

@@ -64,6 +64,36 @@ class FileContentCache:
         tmp_path.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp_path, path)
 
+    def sweep_expired(self, *, max_age_seconds: int) -> int:
+        ttl = max(0, int(max_age_seconds))
+        now = int(time.time())
+        removed = 0
+
+        for path in self.root_dir.glob("*.json"):
+            if path.name == _MANIFEST_FILENAME:
+                continue
+
+            stale = False
+            try:
+                envelope = json.loads(path.read_text(encoding="utf-8"))
+                stored_at = envelope.get("stored_at") if isinstance(envelope, dict) else None
+                if stored_at is None:
+                    stale = True
+                else:
+                    age_seconds = now - int(stored_at)
+                    stale = age_seconds > ttl
+            except Exception:
+                stale = True
+
+            if stale:
+                try:
+                    path.unlink(missing_ok=True)
+                    removed += 1
+                except Exception:
+                    pass
+
+        return removed
+
     def get(
         self,
         cache_key: str,

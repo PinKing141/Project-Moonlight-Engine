@@ -31,6 +31,34 @@ class FileContentCacheTests(unittest.TestCase):
             manifest = json.loads((Path(tmp) / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual("2.0.0", manifest.get("data_version"))
 
+    def test_sweep_expired_removes_stale_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = FileContentCache(tmp, data_version="1.0.0")
+            cache.set("fresh:key", {"kind": "fresh"})
+            cache.set("stale:key", {"kind": "stale"})
+
+            stale_path = cache._path_for_key("stale:key")
+            stale_envelope = json.loads(stale_path.read_text(encoding="utf-8"))
+            stale_envelope["stored_at"] = 0
+            stale_path.write_text(json.dumps(stale_envelope, ensure_ascii=False), encoding="utf-8")
+
+            removed = cache.sweep_expired(max_age_seconds=60)
+
+            self.assertEqual(1, removed)
+            self.assertEqual({"kind": "fresh"}, cache.get("fresh:key", ttl_seconds=None))
+            self.assertIsNone(cache.get("stale:key", ttl_seconds=None))
+
+    def test_sweep_expired_keeps_manifest_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = FileContentCache(tmp, data_version="9.9.9")
+            cache.set("content:key", {"ok": True})
+
+            removed = cache.sweep_expired(max_age_seconds=0)
+
+            self.assertGreaterEqual(removed, 0)
+            manifest = json.loads((Path(tmp) / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual("9.9.9", manifest.get("data_version"))
+
 
 if __name__ == "__main__":
     unittest.main()

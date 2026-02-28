@@ -5377,12 +5377,33 @@ class GameService:
         )
 
     def encounter_intro_intent(self, enemy: Entity, character_id: int | None = None) -> str:
+        world_turn = 0
+        world_seed = 0
+        if self.world_repo:
+            world = self.world_repo.load_default()
+            if world is not None:
+                world_turn = int(getattr(world, "current_turn", 0) or 0)
+                world_seed = int(getattr(world, "rng_seed", 0) or 0)
+        intro_seed = derive_seed(
+            "encounter.intro",
+            {
+                "enemy_id": int(getattr(enemy, "id", 0) or 0),
+                "enemy_name": str(getattr(enemy, "name", "") or ""),
+                "enemy_kind": str(getattr(enemy, "kind", "") or ""),
+                "character_id": int(character_id) if character_id is not None else 0,
+                "world_turn": world_turn,
+                "world_seed": world_seed,
+            },
+        )
         try:
-            intro = self.encounter_intro_builder(enemy)
+            if self.encounter_intro_builder is random_intro:
+                intro = random_intro(enemy, seed=intro_seed)
+            else:
+                intro = self.encounter_intro_builder(enemy)
         except Exception:
-            intro = random_intro(enemy)
+            intro = random_intro(enemy, seed=intro_seed)
         text = (intro or "").strip()
-        message = text or random_intro(enemy)
+        message = text or random_intro(enemy, seed=intro_seed)
         if character_id is None:
             return message
         character = self.character_repo.get(int(character_id)) if self.character_repo else None

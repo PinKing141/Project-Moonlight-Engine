@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
@@ -249,7 +250,7 @@ class WorldProgressionTests(unittest.TestCase):
         progression_high._REFERENCE_WORLD_DATASET_CACHE.clear()
         progression_low._REFERENCE_WORLD_DATASET_CACHE.clear()
 
-        with unittest.mock.patch.object(WorldProgression, "_load_reference_world_dataset_cached", return_value=dataset):
+        with mock.patch.object(WorldProgression, "_load_reference_world_dataset_cached", return_value=dataset):
             progression_high.tick(high_repo.world, ticks=12)
             progression_low.tick(low_repo.world, ticks=12)
 

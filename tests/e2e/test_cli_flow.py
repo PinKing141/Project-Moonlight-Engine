@@ -203,6 +203,85 @@ class CliFlowTests(unittest.TestCase):
         self.assertIn("Doomsday Bulletin", transcript)
         self.assertIn("Map Shrinks", transcript)
 
+    def test_scripted_cli_loop_records_travel_hop_and_turn_advance(self) -> None:
+        game, creation_service = cli._bootstrap_inmemory()
+
+        with mock.patch("builtins.input", side_effect=["Phase25Hero", "2"]), mock.patch("sys.stdout", new_callable=io.StringIO):
+            character_id = cli.run_character_creator(creation_service)
+
+        world_before = game.world_repo.load_default() if game.world_repo is not None else None
+        self.assertIsNotNone(world_before)
+        if world_before is None:
+            return
+        start_turn = int(world_before.current_turn)
+
+        state = {
+            "root_actions": 0,
+            "quest_board_visits": 0,
+            "quest_accepts": 0,
+            "wilderness_actions": 0,
+            "travel_actions": 0,
+            "travel_hops": 0,
+        }
+
+        def _choose_menu(title, options):
+            text = str(title)
+            if text.endswith("— Actions"):
+                sequence = [0, 1, 0, 2, 4]
+                idx = sequence[state["root_actions"]] if state["root_actions"] < len(sequence) else 4
+                state["root_actions"] += 1
+                if idx == 1:
+                    state["travel_actions"] += 1
+                return idx
+
+            if text.startswith("Town Options"):
+                if state["quest_board_visits"] == 0:
+                    return 1
+                return 8
+
+            if text.startswith("Quest Board"):
+                state["quest_board_visits"] += 1
+                if state["quest_accepts"] == 0 and len(options) > 1:
+                    state["quest_accepts"] += 1
+                    return 0
+                return len(options) - 1
+
+            if text.startswith("Travel Mode"):
+                return 0
+
+            if text.startswith("Travel Pace"):
+                return 1
+
+            if "Wilderness Actions" in text:
+                state["wilderness_actions"] += 1
+                return 5
+
+            if text.startswith("Wilderness Rest"):
+                return 1
+
+            if text in {"Leave Town", "Return to Town"}:
+                if len(options) > 1:
+                    state["travel_hops"] += 1
+                    return 0
+                return len(options) - 1 if options else -1
+
+            return len(options) - 1 if options else -1
+
+        with mock.patch("rpg.presentation.game_loop._CONSOLE", None), mock.patch(
+            "rpg.presentation.game_loop.arrow_menu", side_effect=_choose_menu
+        ), mock.patch("rpg.presentation.game_loop.clear_screen", lambda: None), mock.patch(
+            "rpg.presentation.game_loop._prompt_continue", lambda *args, **kwargs: None
+        ), mock.patch("builtins.input", return_value=""), mock.patch("sys.stdout", new_callable=io.StringIO):
+            run_game_loop(game, character_id)
+
+        world_after = game.world_repo.load_default() if game.world_repo is not None else None
+        self.assertIsNotNone(world_after)
+        if world_after is None:
+            return
+
+        self.assertGreaterEqual(state["travel_actions"], 1)
+        self.assertGreater(int(world_after.current_turn), int(start_turn))
+
 
 if __name__ == "__main__":
     unittest.main()

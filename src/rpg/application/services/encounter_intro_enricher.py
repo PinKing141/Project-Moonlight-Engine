@@ -1,3 +1,4 @@
+from rpg.application.services.seed_policy import derive_rng
 from rpg.application.services.encounter_flavour import random_intro
 from rpg.domain.models.entity import Entity
 
@@ -23,8 +24,15 @@ class EncounterIntroEnricher:
         if not words:
             return base
 
-        idx = hash(f"{enemy_name}|{enemy_kind}") % len(words)
-        adjective = words[idx].strip()
+        rng = derive_rng(
+            "encounter.intro.adjective",
+            {
+                "enemy_name": enemy_name,
+                "enemy_kind": enemy_kind,
+                "word_count": len(words),
+            },
+        )
+        adjective = str(rng.choice(words)).strip()
         if not adjective:
             return base
 

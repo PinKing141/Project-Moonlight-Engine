@@ -32,6 +32,12 @@ htmlcov/
 *.out
 *.pid
 .rpg_cache/
+artifacts/
+.pytest_e2e_out.txt
+
+# Local temporary helpers
+*_tmp_*.py
+_tmp_*.py
 
 # Local environment/config files
 .env

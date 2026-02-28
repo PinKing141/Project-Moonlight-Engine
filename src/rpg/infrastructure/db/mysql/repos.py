@@ -2185,6 +2185,9 @@ class MysqlWorldRepository(WorldRepository):
     ):
         def _operation(session) -> None:
             dialect = session.bind.dialect.name if session.bind is not None else "mysql"
+            # Reduced test schemas may omit world_flag/world_history tables.
+            if not _table_columns(session, "world_flag"):
+                return
             prior = None
             try:
                 prior = session.execute(

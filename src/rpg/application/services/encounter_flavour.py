@@ -23,7 +23,7 @@ DEFAULT_INTROS = [
 ]
 
 
-def random_intro(enemy: Entity) -> str:
+def random_intro(enemy: Entity, *, seed: int | None = None, rng: random.Random | None = None) -> str:
     kind = getattr(enemy, "kind", "beast")
     if kind == "beast":
         pool = BEAST_ENCOUNTER_INTROS
@@ -34,5 +34,6 @@ def random_intro(enemy: Entity) -> str:
     else:
         pool = DEFAULT_INTROS
 
-    template = random.choice(pool)
+    resolved_rng = rng or (random.Random(int(seed)) if seed is not None else random.Random())
+    template = resolved_rng.choice(pool)
     return template.format(name=enemy.name)

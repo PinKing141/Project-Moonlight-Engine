@@ -1,11 +1,11 @@
 {
-  "timestamp_utc": "2026-02-28T16:56:37.319283+00:00",
+  "timestamp_utc": "2026-02-28T19:28:10.573061+00:00",
   "character_id": 1,
   "start": {
     "level": 1,
     "xp": 0,
     "gold": 0,
-    "turn": 1
+    "turn": 0
   },
   "end": {
     "level": 1,
@@ -17,7 +17,7 @@
     "level_delta": 0,
     "xp_delta": 0,
     "gold_delta": 0,
-    "turn_delta": 0
+    "turn_delta": 1
   },
   "quest": {
     "sections": {
@@ -32,6 +32,7 @@
     "quest_board_visits": 2,
     "quest_accepts": 1,
     "wilderness_actions": 1,
+    "travel_actions": 1,
     "travel_hops": 0
   }
 }

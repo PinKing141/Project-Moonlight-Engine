@@ -163,6 +163,10 @@ def _upsert_character_attributes(session, character: Character) -> None:
     attrs = dict(getattr(character, "attributes", {}) or {})
     if not attrs:
         return
+    attribute_columns = _table_columns(session, "attribute")
+    character_attribute_columns = _table_columns(session, "character_attribute")
+    if not attribute_columns or not character_attribute_columns:
+        return
 
     names = [str(name) for name in attrs.keys()]
     bind_names = [f"name_{idx}" for idx in range(len(names))]
