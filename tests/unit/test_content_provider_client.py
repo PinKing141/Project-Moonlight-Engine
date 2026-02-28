@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import tempfile
 import time
+import json
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -80,7 +81,10 @@ class FallbackContentClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cache = FileContentCache(tmp)
             cache.set("content:list_races|page=1", {"results": [{"name": "Stale Elf"}]})
-            time.sleep(1)
+            stale_path = cache._path_for_key("content:list_races|page=1")
+            envelope = json.loads(stale_path.read_text(encoding="utf-8"))
+            envelope["stored_at"] = 0
+            stale_path.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
             primary = _FakeProvider(should_fail=True)
             fallback = _FakeProvider(should_fail=True)
 

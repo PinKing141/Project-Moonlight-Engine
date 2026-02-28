@@ -7,6 +7,11 @@ from rpg.infrastructure.local_srd_provider import LocalSrdProvider
 from rpg.infrastructure.open5e_client import Open5eClient
 
 
+def _is_truthy(value: str | None, *, default: str = "0") -> bool:
+    normalized = str(value if value is not None else default).strip().lower()
+    return normalized in {"1", "true", "yes"}
+
+
 def _base_clients() -> tuple[LocalSrdProvider, DnD5eClient, Open5eClient, FileContentCache, int]:
     timeout = float(os.getenv("RPG_CONTENT_TIMEOUT_S", "10"))
     retries = int(os.getenv("RPG_CONTENT_RETRIES", "2"))
@@ -25,10 +30,16 @@ def _base_clients() -> tuple[LocalSrdProvider, DnD5eClient, Open5eClient, FileCo
 
 def create_runtime_content_client() -> FallbackContentClient:
     local, dnd5e, open5e, cache, cache_ttl_seconds = _base_clients()
-    local_enabled = os.getenv("RPG_LOCAL_SRD_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
-    providers = [dnd5e, open5e]
+    local_enabled = _is_truthy(os.getenv("RPG_LOCAL_SRD_ENABLED"), default="1")
+    runtime_remote_enabled = _is_truthy(os.getenv("RPG_CONTENT_RUNTIME_REMOTE_ENABLED"), default="0")
+
+    providers: list[object] = []
     if local_enabled:
-        providers = [local, dnd5e, open5e]
+        providers.append(local)
+    if runtime_remote_enabled:
+        providers.extend([dnd5e, open5e])
+    if not providers:
+        providers = [local]
 
     return FallbackContentClient(
         providers=providers,
@@ -39,7 +50,7 @@ def create_runtime_content_client() -> FallbackContentClient:
 
 def create_import_content_client() -> FallbackContentClient:
     local, dnd5e, open5e, cache, cache_ttl_seconds = _base_clients()
-    include_local = os.getenv("RPG_IMPORT_INCLUDE_LOCAL_SRD", "1").strip().lower() in {"1", "true", "yes"}
+    include_local = _is_truthy(os.getenv("RPG_IMPORT_INCLUDE_LOCAL_SRD"), default="1")
     providers = [dnd5e, open5e]
     if include_local:
         providers.append(local)

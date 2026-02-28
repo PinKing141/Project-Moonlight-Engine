@@ -22,12 +22,20 @@ Deterministic seed contract:
 Content provider runtime contract (solo mode):
 
 - Runtime is local-first for content reads used by gameplay setup flows (e.g., race options).
-- Primary provider is `dnd5eapi.co` (`/api/2014`), with Open5e as fallback.
+- Runtime is now offline-first by default (local SRD only, no live HTTP required).
+- Remote runtime fallback (`dnd5eapi.co` then Open5e) is opt-in.
 - Responses are cached on disk for offline continuity, with stale-cache fallback if both providers fail.
 - `CharacterCreationService` still safely falls back to built-in default races if provider calls are unavailable.
 - Runtime and import flows now use separate provider strategies:
-        - Runtime default order: Local SRD JSON → D&D5e API → Open5e.
+        - Runtime default order: Local SRD JSON.
+        - Runtime opt-in remote order: Local SRD JSON → D&D5e API → Open5e.
         - Import default order: D&D5e API → Open5e → Local SRD JSON.
+
+Cache invalidation contract:
+
+- Content cache writes a versioned manifest at `.rpg_cache/content/manifest.json`.
+- If `data_version` mismatches the current runtime data version, cache is rebuilt automatically.
+- Data version is controlled by `RPG_CONTENT_DATA_VERSION` (default `0.1.0`).
 
 Content provider environment variables:
 
@@ -36,10 +44,15 @@ Content provider environment variables:
 - `RPG_CONTENT_BACKOFF_S` (default `0.2`)
 - `RPG_CONTENT_CACHE_TTL_S` (default `86400`)
 - `RPG_CONTENT_CACHE_DIR` (default `.rpg_cache/content`)
+- `RPG_CONTENT_DATA_VERSION` (default `0.1.0`)
 - `RPG_LOCAL_SRD_ENABLED` (default `1`)
 - `RPG_LOCAL_SRD_DIR` (default `data/srd/2014`)
 - `RPG_LOCAL_SRD_PAGE_SIZE` (default `50`)
+- `RPG_CONTENT_RUNTIME_REMOTE_ENABLED` (default `0`)
 - `RPG_IMPORT_INCLUDE_LOCAL_SRD` (default `1`)
+- `RPG_HTTP_CIRCUIT_BREAKER_ENABLED` (default `1`)
+- `RPG_HTTP_CIRCUIT_FAILURE_THRESHOLD` (default `3`)
+- `RPG_HTTP_CIRCUIT_RESET_SECONDS` (default `120`)
 
 Local SRD files are optional and expected as JSON in `RPG_LOCAL_SRD_DIR`:
 
@@ -108,6 +121,10 @@ Use MySQL schema + Open5e import:
         ```bash
         python -m rpg.infrastructure.db.mysql.migrate
         ```
+        Notes:
+        - Runs in strict linear mode (`001_*.sql`, `002_*.sql`, ...), rejecting gaps/out-of-order files.
+        - Tracks applied files in `schema_migrations` to avoid re-applying migrations.
+        - Legacy chain scripts are deprecated and not part of the default execution path.
    Optional verification-only pass:
         ```bash
         python -m rpg.infrastructure.db.mysql.migrate --dry-run

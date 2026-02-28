@@ -1,19 +1,2 @@
-SOURCE ../create_tables.sql;
-SOURCE ../create_history_tables.sql;
-SOURCE ./001_add_world_and_hp.sql;
-SOURCE ./002_add_spell_table.sql;
-SOURCE ./003_update_entity_combat.sql;
-SOURCE ./004_add_character_combat_stats.sql;
-SOURCE ./005_add_character_feature_pipeline.sql;
-SOURCE ./006_add_world_rng_seed.sql;
-SOURCE ./007_add_faction_reputation_persistence.sql;
-SOURCE ./008_add_location_biome_hazard_tables.sql;
-SOURCE ./009_add_quest_and_rumour_tables.sql;
-SOURCE ./010_add_world_flag_and_progression_tables.sql;
-SOURCE ./011_seed_factions.sql;
-SOURCE ./012_add_entity_tags.sql;
-SOURCE ./013_seed_new_consumables.sql;
-SOURCE ./014_add_character_inventory_flags_json.sql;
-SOURCE ./015_expand_faction_roster.sql;
-SOURCE ./016_seed_taklamakan_locations.sql;
-SOURCE ./017_seed_conclave_of_colours.sql;
+-- Deprecated aggregate migration script.
+-- Use python -m rpg.infrastructure.db.mysql.migrate (strict linear mode) instead.

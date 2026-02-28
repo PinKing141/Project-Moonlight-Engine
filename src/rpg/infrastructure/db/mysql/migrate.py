@@ -5,13 +5,14 @@ Usage examples:
     python -m rpg.infrastructure.db.mysql.migrate
 
     python -m rpg.infrastructure.db.mysql.migrate --dry-run
-    python -m rpg.infrastructure.db.mysql.migrate --script src/rpg/infrastructure/db/migrations/_apply_all.sql
+    python -m rpg.infrastructure.db.mysql.migrate --script path/to/legacy_script.sql
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Set
@@ -26,8 +27,50 @@ class MigrationPlan:
     statements: list[str]
 
 
+@dataclass(frozen=True)
+class MigrationFilePlan:
+    file_path: Path
+    statements: list[str]
+
+
+MIGRATION_NAME_PATTERN = re.compile(r"^(\d{3})_[a-z0-9_]+\.sql$", re.IGNORECASE)
+
+
 def _default_script_path() -> Path:
     return Path(__file__).resolve().parents[1] / "migrations" / "_apply_all.sql"
+
+
+def _migrations_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "migrations"
+
+
+def _base_schema_files() -> list[Path]:
+    base_dir = Path(__file__).resolve().parents[2]
+    return [base_dir / "create_tables.sql", base_dir / "create_history_tables.sql"]
+
+
+def discover_linear_migration_files() -> list[Path]:
+    migration_dir = _migrations_dir()
+    candidates = [path for path in migration_dir.glob("*.sql") if not path.name.startswith("_")]
+    invalid = [path.name for path in candidates if MIGRATION_NAME_PATTERN.match(path.name) is None]
+    if invalid:
+        invalid_list = ", ".join(sorted(invalid))
+        raise ValueError(f"Invalid migration filename(s): {invalid_list}. Expected pattern: NNN_description.sql")
+
+    ordered = sorted(candidates, key=lambda path: path.name)
+    expected = 1
+    for path in ordered:
+        match = MIGRATION_NAME_PATTERN.match(path.name)
+        if match is None:
+            continue
+        number = int(match.group(1))
+        if number != expected:
+            raise ValueError(
+                f"Migration numbering gap or out-of-order file detected at {path.name}. "
+                f"Expected prefix {expected:03d}."
+            )
+        expected += 1
+    return ordered
 
 
 def _extract_source_target(line: str) -> str | None:
@@ -156,6 +199,40 @@ def build_migration_plan(script_path: Path | str | None = None) -> MigrationPlan
     return _collect_plan(resolved)
 
 
+def build_linear_migration_plan() -> list[MigrationFilePlan]:
+    plans: list[MigrationFilePlan] = []
+    for file_path in _base_schema_files() + discover_linear_migration_files():
+        statements = _split_sql_statements(file_path.read_text(encoding="utf-8"))
+        plans.append(MigrationFilePlan(file_path=file_path.resolve(), statements=statements))
+    return plans
+
+
+def _ensure_schema_migrations_table(conn) -> None:
+    conn.exec_driver_sql(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            migration_name VARCHAR(255) PRIMARY KEY,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
+def _already_applied(conn, migration_name: str) -> bool:
+    row = conn.exec_driver_sql(
+        "SELECT migration_name FROM schema_migrations WHERE migration_name = :name",
+        {"name": migration_name},
+    ).first()
+    return row is not None
+
+
+def _mark_applied(conn, migration_name: str) -> None:
+    conn.exec_driver_sql(
+        "INSERT INTO schema_migrations (migration_name) VALUES (:name)",
+        {"name": migration_name},
+    )
+
+
 def execute_statements(statements: Iterable[str], database_url: str) -> int:
     engine = create_engine(database_url, echo=False, future=True)
     count = 0
@@ -164,6 +241,25 @@ def execute_statements(statements: Iterable[str], database_url: str) -> int:
             conn.exec_driver_sql(statement)
     engine.dispose()
     return count
+
+
+def execute_linear_migration_plan(file_plans: list[MigrationFilePlan], database_url: str) -> tuple[int, int]:
+    engine = create_engine(database_url, echo=False, future=True)
+    applied_files = 0
+    executed_statements = 0
+    with engine.begin() as conn:
+        _ensure_schema_migrations_table(conn)
+        for file_plan in file_plans:
+            migration_name = file_plan.file_path.name
+            if _already_applied(conn, migration_name):
+                continue
+            for statement in file_plan.statements:
+                executed_statements += 1
+                conn.exec_driver_sql(statement)
+            _mark_applied(conn, migration_name)
+            applied_files += 1
+    engine.dispose()
+    return applied_files, executed_statements
 
 
 def _resolve_database_url(explicit_url: str | None) -> str:
@@ -180,8 +276,8 @@ def main() -> None:
     parser.add_argument(
         "--script",
         type=str,
-        default=str(_default_script_path()),
-        help="Path to the root SQL script (default: migrations/_apply_all.sql)",
+        default=None,
+        help="Optional legacy root SQL script path. If omitted, uses strict linear migration mode.",
     )
     parser.add_argument(
         "--database-url",
@@ -196,10 +292,32 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    plan = build_migration_plan(args.script)
-    print(f"Resolved {len(plan.files)} SQL file(s) and {len(plan.statements)} statement(s).")
-    for file_path in plan.files:
-        print(f"  - {file_path}")
+    if args.script:
+        plan = build_migration_plan(args.script)
+        print(f"Resolved {len(plan.files)} SQL file(s) and {len(plan.statements)} statement(s).")
+        for file_path in plan.files:
+            print(f"  - {file_path}")
+
+        if args.dry_run:
+            print("Dry run complete. No SQL executed.")
+            return
+
+        database_url = _resolve_database_url(args.database_url)
+        try:
+            executed = execute_statements(plan.statements, database_url)
+        except SQLAlchemyError as exc:
+            raise SystemExit(
+                "Migration execution failed. Verify RPG_DATABASE_URL points to a reachable database instance. "
+                f"Details: {exc}"
+            ) from exc
+        print(f"Executed {executed} statement(s) successfully.")
+        return
+
+    linear_plan = build_linear_migration_plan()
+    total_statements = sum(len(item.statements) for item in linear_plan)
+    print(f"Resolved strict linear plan: {len(linear_plan)} file(s), {total_statements} statement(s).")
+    for item in linear_plan:
+        print(f"  - {item.file_path}")
 
     if args.dry_run:
         print("Dry run complete. No SQL executed.")
@@ -207,13 +325,13 @@ def main() -> None:
 
     database_url = _resolve_database_url(args.database_url)
     try:
-        executed = execute_statements(plan.statements, database_url)
+        applied_files, executed_statements = execute_linear_migration_plan(linear_plan, database_url)
     except SQLAlchemyError as exc:
         raise SystemExit(
-            "Migration execution failed. Verify RPG_DATABASE_URL points to a reachable MySQL instance. "
+            "Migration execution failed. Verify RPG_DATABASE_URL points to a reachable database instance. "
             f"Details: {exc}"
         ) from exc
-    print(f"Executed {executed} statement(s) successfully.")
+    print(f"Applied {applied_files} migration file(s); executed {executed_statements} statement(s).")
 
 
 if __name__ == "__main__":

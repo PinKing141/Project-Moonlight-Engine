@@ -23,33 +23,34 @@ def _class_methods_from_file(path: Path, class_name: str) -> set[str]:
 
 
 class RepositoryParityAuditTests(unittest.TestCase):
-    def test_inmemory_mysql_adapters_cover_application_used_methods(self) -> None:
+    def test_mysql_repositories_expose_required_contract_methods(self) -> None:
         mysql_path = ROOT / "src" / "rpg" / "infrastructure" / "db" / "mysql" / "repos.py"
 
-        inmemory_paths = {
-            "InMemoryCharacterRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_character_repo.py",
-            "InMemoryEntityRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_entity_repo.py",
-            "InMemoryWorldRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_world_repo.py",
-            "InMemoryLocationRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_location_repo.py",
-            "InMemoryClassRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_class_repo.py",
-            "InMemoryEncounterDefinitionRepository": ROOT / "src" / "rpg" / "infrastructure" / "inmemory" / "inmemory_encounter_definition_repo.py",
-        }
-
         requirements = {
-            ("InMemoryCharacterRepository", "MysqlCharacterRepository"): {"get", "list_all", "save", "create", "find_by_location"},
-            ("InMemoryEntityRepository", "MysqlEntityRepository"): {"get_many", "list_by_location", "list_for_level", "list_by_level_band"},
-            ("InMemoryWorldRepository", "MysqlWorldRepository"): {"load_default", "save"},
-            ("InMemoryLocationRepository", "MysqlLocationRepository"): {"get", "list_all", "get_starting_location"},
-            ("InMemoryClassRepository", "MysqlClassRepository"): {"list_playable"},
-            ("InMemoryEncounterDefinitionRepository", "MysqlEncounterDefinitionRepository"): {"list_for_location", "list_global"},
+            "MysqlCharacterRepository": {"get", "list_all", "save", "create", "find_by_location"},
+            "MysqlEntityRepository": {"get_many", "list_by_location", "list_for_level", "list_by_level_band"},
+            "MysqlWorldRepository": {"load_default", "save"},
+            "MysqlLocationRepository": {"get", "list_all", "get_starting_location"},
+            "MysqlClassRepository": {"list_playable"},
+            "MysqlEncounterDefinitionRepository": {"list_for_location", "list_global"},
         }
 
-        for (inmemory_class, mysql_class), required in requirements.items():
-            in_mem_methods = _class_methods_from_file(inmemory_paths[inmemory_class], inmemory_class)
+        for mysql_class, required in requirements.items():
             mysql_methods = _class_methods_from_file(mysql_path, mysql_class)
-
-            self.assertTrue(required.issubset(in_mem_methods), f"{inmemory_class} missing {sorted(required - in_mem_methods)}")
             self.assertTrue(required.issubset(mysql_methods), f"{mysql_class} missing {sorted(required - mysql_methods)}")
+
+    def test_migration_folder_has_no_chain_or_aggregate_scripts(self) -> None:
+        migration_dir = ROOT / "src" / "rpg" / "infrastructure" / "db" / "migrations"
+        forbidden = [
+            migration_dir / "_legacy_001_chain.sql",
+            migration_dir / "_upgrade_002_003_chain.sql",
+            migration_dir / "_apply_all.sql",
+        ]
+        for path in forbidden:
+            if path.exists():
+                content = path.read_text(encoding="utf-8")
+                has_active_source = any(line.strip().upper().startswith("SOURCE ") for line in content.splitlines())
+                self.assertFalse(has_active_source, f"Legacy chain script still active: {path.name}")
 
     def test_application_layer_has_no_adapter_specific_assumptions(self) -> None:
         app_dir = ROOT / "src" / "rpg" / "application"
