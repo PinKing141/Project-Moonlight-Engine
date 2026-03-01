@@ -34,6 +34,10 @@ htmlcov/
 .rpg_cache/
 artifacts/
 .pytest_e2e_out.txt
+.sanity.txt
+.final_verify.txt
+.full_test_report.txt
+tmp_progression_tests.log
 
 # Local temporary helpers
 *_tmp_*.py

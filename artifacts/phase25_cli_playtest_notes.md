@@ -1,6 +1,6 @@
 # Phase 25 CLI Playtest Notes
 
-- Timestamp (UTC): 2026-02-28T19:28:10.573061+00:00
+- Timestamp (UTC): 2026-03-01T17:38:35.178182+00:00
 - Mode: Scripted CLI loop through `run_game_loop` in in-memory mode.
 - Report artifact: `artifacts/phase25_cli_playtest_report.json`
 
@@ -26,5 +26,5 @@
 ## Anomalies / Follow-up
 - No economy or leveling movement in this bounded cycle.
 - Travel destination selection counter remained 0 because the in-memory bootstrap currently exposes a single location (no destination list to choose from).
-- Travel execution path is still confirmed by `travel_actions = 1` and `turn_delta = 1`.
+- Travel execution path is confirmed by `travel_actions = 1` and `turn_delta = 1`.
 - Captured as playtest findings only; no feature work added during freeze.

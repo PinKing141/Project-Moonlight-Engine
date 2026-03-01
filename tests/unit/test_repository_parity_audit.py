@@ -62,10 +62,7 @@ class RepositoryParityAuditTests(unittest.TestCase):
         ]
 
         violations: list[str] = []
-        excluded_files = {"narrative_quality_batch.py"}
         for path in app_dir.rglob("*.py"):
-            if path.name in excluded_files:
-                continue
             text = path.read_text(encoding="utf-8")
             for pattern in forbidden_patterns:
                 if pattern.search(text):

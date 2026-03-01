@@ -44,9 +44,8 @@ def _migrations_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "migrations"
 
 
-def _base_schema_files() -> list[Path]:
-    base_dir = Path(__file__).resolve().parents[2]
-    return [base_dir / "create_tables.sql", base_dir / "create_history_tables.sql"]
+def _is_seed_data_migration(path: Path) -> bool:
+    return bool(re.match(r"^\d{3}_seed_[a-z0-9_]+\.sql$", path.name, re.IGNORECASE))
 
 
 def discover_linear_migration_files() -> list[Path]:
@@ -58,12 +57,14 @@ def discover_linear_migration_files() -> list[Path]:
         raise ValueError(f"Invalid migration filename(s): {invalid_list}. Expected pattern: NNN_description.sql")
 
     ordered = sorted(candidates, key=lambda path: path.name)
-    expected = 1
+    expected: int | None = None
     for path in ordered:
         match = MIGRATION_NAME_PATTERN.match(path.name)
         if match is None:
             continue
         number = int(match.group(1))
+        if expected is None:
+            expected = number
         if number != expected:
             raise ValueError(
                 f"Migration numbering gap or out-of-order file detected at {path.name}. "
@@ -199,9 +200,21 @@ def build_migration_plan(script_path: Path | str | None = None) -> MigrationPlan
     return _collect_plan(resolved)
 
 
-def build_linear_migration_plan() -> list[MigrationFilePlan]:
+def build_linear_migration_plan(include_seed_data: bool = False) -> list[MigrationFilePlan]:
     plans: list[MigrationFilePlan] = []
-    for file_path in _base_schema_files() + discover_linear_migration_files():
+    for file_path in discover_linear_migration_files():
+        if _is_seed_data_migration(file_path) and not include_seed_data:
+            continue
+        statements = _split_sql_statements(file_path.read_text(encoding="utf-8"))
+        plans.append(MigrationFilePlan(file_path=file_path.resolve(), statements=statements))
+    return plans
+
+
+def build_seed_migration_plan() -> list[MigrationFilePlan]:
+    plans: list[MigrationFilePlan] = []
+    for file_path in discover_linear_migration_files():
+        if not _is_seed_data_migration(file_path):
+            continue
         statements = _split_sql_statements(file_path.read_text(encoding="utf-8"))
         plans.append(MigrationFilePlan(file_path=file_path.resolve(), statements=statements))
     return plans
@@ -290,6 +303,16 @@ def main() -> None:
         action="store_true",
         help="Only parse/resolve scripts and print migration plan",
     )
+    parser.add_argument(
+        "--include-seeds",
+        action="store_true",
+        help="Include seed-data migrations (NNN_seed_*.sql) with the strict linear schema plan.",
+    )
+    parser.add_argument(
+        "--seed-only",
+        action="store_true",
+        help="Apply only seed-data migrations (NNN_seed_*.sql).",
+    )
     args = parser.parse_args()
 
     if args.script:
@@ -313,9 +336,15 @@ def main() -> None:
         print(f"Executed {executed} statement(s) successfully.")
         return
 
-    linear_plan = build_linear_migration_plan()
+    if args.seed_only:
+        linear_plan = build_seed_migration_plan()
+        plan_label = "seed-only linear plan"
+    else:
+        linear_plan = build_linear_migration_plan(include_seed_data=args.include_seeds)
+        plan_label = "strict linear schema+seed plan" if args.include_seeds else "strict linear schema plan"
+
     total_statements = sum(len(item.statements) for item in linear_plan)
-    print(f"Resolved strict linear plan: {len(linear_plan)} file(s), {total_statements} statement(s).")
+    print(f"Resolved {plan_label}: {len(linear_plan)} file(s), {total_statements} statement(s).")
     for item in linear_plan:
         print(f"  - {item.file_path}")
 

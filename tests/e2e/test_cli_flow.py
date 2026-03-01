@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from rpg.presentation import cli
 from rpg.presentation.game_loop import _run_explore, _render_character_sheet, _run_rumour_board, _run_town, run_game_loop
 from rpg.application.dtos import ExploreView
+from rpg.infrastructure.playtest.phase25_scenario import Phase25LoopSelector
 
 
 class CliFlowTests(unittest.TestCase):
@@ -215,60 +216,10 @@ class CliFlowTests(unittest.TestCase):
             return
         start_turn = int(world_before.current_turn)
 
-        state = {
-            "root_actions": 0,
-            "quest_board_visits": 0,
-            "quest_accepts": 0,
-            "wilderness_actions": 0,
-            "travel_actions": 0,
-            "travel_hops": 0,
-        }
-
-        def _choose_menu(title, options):
-            text = str(title)
-            if text.endswith("— Actions"):
-                sequence = [0, 1, 0, 2, 4]
-                idx = sequence[state["root_actions"]] if state["root_actions"] < len(sequence) else 4
-                state["root_actions"] += 1
-                if idx == 1:
-                    state["travel_actions"] += 1
-                return idx
-
-            if text.startswith("Town Options"):
-                if state["quest_board_visits"] == 0:
-                    return 1
-                return 8
-
-            if text.startswith("Quest Board"):
-                state["quest_board_visits"] += 1
-                if state["quest_accepts"] == 0 and len(options) > 1:
-                    state["quest_accepts"] += 1
-                    return 0
-                return len(options) - 1
-
-            if text.startswith("Travel Mode"):
-                return 0
-
-            if text.startswith("Travel Pace"):
-                return 1
-
-            if "Wilderness Actions" in text:
-                state["wilderness_actions"] += 1
-                return 5
-
-            if text.startswith("Wilderness Rest"):
-                return 1
-
-            if text in {"Leave Town", "Return to Town"}:
-                if len(options) > 1:
-                    state["travel_hops"] += 1
-                    return 0
-                return len(options) - 1 if options else -1
-
-            return len(options) - 1 if options else -1
+        selector = Phase25LoopSelector()
 
         with mock.patch("rpg.presentation.game_loop._CONSOLE", None), mock.patch(
-            "rpg.presentation.game_loop.arrow_menu", side_effect=_choose_menu
+            "rpg.presentation.game_loop.arrow_menu", side_effect=selector.choose
         ), mock.patch("rpg.presentation.game_loop.clear_screen", lambda: None), mock.patch(
             "rpg.presentation.game_loop._prompt_continue", lambda *args, **kwargs: None
         ), mock.patch("builtins.input", return_value=""), mock.patch("sys.stdout", new_callable=io.StringIO):
@@ -279,7 +230,7 @@ class CliFlowTests(unittest.TestCase):
         if world_after is None:
             return
 
-        self.assertGreaterEqual(state["travel_actions"], 1)
+        self.assertGreaterEqual(int(selector.state["travel_actions"]), 1)
         self.assertGreater(int(world_after.current_turn), int(start_turn))
 
 

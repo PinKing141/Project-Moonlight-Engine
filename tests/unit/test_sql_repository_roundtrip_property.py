@@ -261,10 +261,120 @@ if HYPOTHESIS_AVAILABLE and settings is not None and given is not None and st is
             self.assertEqual(expected_flags.get("difficulty"), loaded.flags.get("difficulty"))
             self.assertEqual(expected_flags.get("travel_prep"), loaded.flags.get("travel_prep"))
 else:
-    @unittest.skip("Hypothesis is required for property-based parity audit")
     class SqliteRoundTripParityPropertyTestsMissingHypothesis(unittest.TestCase):
-        def test_hypothesis_dependency_missing(self) -> None:
-            self.assertTrue(True)
+        def setUp(self) -> None:
+            self.engine = create_engine("sqlite:///:memory:", future=True)
+            _bootstrap_character_schema(self.engine)
+            session_local = sessionmaker(bind=self.engine, autoflush=False, autocommit=False)
+            self.session_patcher = mock.patch.object(mysql_repos, "SessionLocal", session_local)
+            self.session_patcher.start()
+            self.repo = MysqlCharacterRepository()
+
+        def tearDown(self) -> None:
+            self.session_patcher.stop()
+            self.engine.dispose()
+
+        def test_character_round_trip_sqlite_backend_fallback_matrix(self) -> None:
+            cases = [
+                {
+                    "name": "arin",
+                    "level": 1,
+                    "xp": 0,
+                    "money": 0,
+                    "hp_max": 10,
+                    "armour_class": 12,
+                    "armor": 0,
+                    "attack_bonus": 2,
+                    "speed": 30,
+                    "damage_die": "d6",
+                    "inventory": [],
+                    "alignment": "true_neutral",
+                    "difficulty": "normal",
+                },
+                {
+                    "name": "bryn",
+                    "level": 5,
+                    "xp": 1200,
+                    "money": 75,
+                    "hp_max": 42,
+                    "armour_class": 16,
+                    "armor": 2,
+                    "attack_bonus": 6,
+                    "speed": 35,
+                    "damage_die": "d10",
+                    "inventory": ["healing_potion", "whetstone"],
+                    "alignment": "lawful_good",
+                    "difficulty": "hard",
+                },
+                {
+                    "name": "cato",
+                    "level": 12,
+                    "xp": 46000,
+                    "money": 1200,
+                    "hp_max": 95,
+                    "armour_class": 19,
+                    "armor": 4,
+                    "attack_bonus": 9,
+                    "speed": 25,
+                    "damage_die": "d12",
+                    "inventory": ["focus_potion", "sturdy_rations", "map"],
+                    "alignment": "chaotic_good",
+                    "difficulty": "easy",
+                },
+            ]
+
+            for case in cases:
+                hp_current = max(1, int(case["hp_max"]) - 1)
+                flags = {
+                    "alignment": str(case["alignment"]),
+                    "difficulty": str(case["difficulty"]),
+                    "travel_prep": {"rations": len(list(case["inventory"]))},
+                    "meta": {"seed": int(case["level"]) * 13 + int(case["attack_bonus"])},
+                }
+
+                created = self.repo.create(
+                    Character(
+                        id=None,
+                        name=str(case["name"]),
+                        class_name="fighter",
+                        level=int(case["level"]),
+                        xp=int(case["xp"]),
+                        money=int(case["money"]),
+                        hp_current=hp_current,
+                        hp_max=int(case["hp_max"]),
+                        armour_class=int(case["armour_class"]),
+                        armor=int(case["armor"]),
+                        attack_bonus=int(case["attack_bonus"]),
+                        damage_die=str(case["damage_die"]),
+                        speed=int(case["speed"]),
+                        inventory=list(case["inventory"]),
+                        flags=flags,
+                        attributes={},
+                    ),
+                    location_id=1,
+                )
+
+                loaded = self.repo.get(int(created.id or 0))
+                self.assertIsNotNone(loaded)
+                assert loaded is not None
+
+                self.assertEqual(str(case["name"]), loaded.name)
+                self.assertEqual(int(case["level"]), loaded.level)
+                self.assertEqual(int(case["xp"]), loaded.xp)
+                self.assertEqual(int(case["money"]), loaded.money)
+                self.assertEqual(hp_current, loaded.hp_current)
+                self.assertEqual(int(case["hp_max"]), loaded.hp_max)
+                self.assertEqual(int(case["armour_class"]), loaded.armour_class)
+                self.assertEqual(int(case["armor"]), loaded.armor)
+                self.assertEqual(int(case["attack_bonus"]), loaded.attack_bonus)
+                self.assertEqual(str(case["damage_die"]), loaded.damage_die)
+                self.assertEqual(int(case["speed"]), loaded.speed)
+                self.assertEqual(list(case["inventory"]), loaded.inventory)
+
+                expected_flags = json.loads(json.dumps(flags))
+                self.assertEqual(expected_flags.get("alignment"), loaded.flags.get("alignment"))
+                self.assertEqual(expected_flags.get("difficulty"), loaded.flags.get("difficulty"))
+                self.assertEqual(expected_flags.get("travel_prep"), loaded.flags.get("travel_prep"))
 
 
 if __name__ == "__main__":

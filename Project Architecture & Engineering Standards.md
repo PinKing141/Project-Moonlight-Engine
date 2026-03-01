@@ -56,8 +56,10 @@ rpg_project/
 │     │  └─ renderers.py
 │     └─ bootstrap.py
 ├─ db/
-│  ├─ create_tables.sql
-│  ├─ create_history_tables.sql
+│  ├─ migrations/
+│  │  ├─ 000_base_schema.sql
+│  │  ├─ 001_*.sql
+│  │  └─ ...
 │  └─ seed_data.sql
 ├─ scripts/
 │  ├─ import_open5e_monsters.py
@@ -267,7 +269,7 @@ Preventing partial state commits ensures the world cannot desynchronise or corru
 
 ## **Rule 7 — Every Change Generates History**
 
-The history tables from `create_history_tables.sql` are mandatory for debugging.
+The history tables from `migrations/000_base_schema.sql` are mandatory for debugging.
 
 Any update to:
 
@@ -478,5 +480,4 @@ Following them guarantees that you will have:
 * professional-grade reliability
 
 This is the same style of architecture used in large-scale studios because it works and scales for decades.
-
 

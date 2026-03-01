@@ -12,12 +12,18 @@ from rpg.infrastructure.db.mysql.migrate import (
     MigrationFilePlan,
     build_migration_plan,
     build_linear_migration_plan,
+    build_seed_migration_plan,
     discover_linear_migration_files,
     execute_linear_migration_plan,
 )
 
 
 class MysqlMigrationRunnerTests(unittest.TestCase):
+    def test_real_linear_plan_starts_with_numbered_baseline_schema(self) -> None:
+        file_names = [plan.file_path.name for plan in build_linear_migration_plan()]
+        self.assertTrue(file_names, "Expected at least one migration file in strict linear plan")
+        self.assertEqual("000_base_schema.sql", file_names[0])
+
     def test_build_plan_resolves_source_chain_in_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -89,16 +95,46 @@ class MysqlMigrationRunnerTests(unittest.TestCase):
             (migration_dir / "001_first.sql").write_text("SELECT 1;", encoding="utf-8")
             (migration_dir / "003_third.sql").write_text("SELECT 3;", encoding="utf-8")
 
-            base_a = Path(tmp) / "create_tables.sql"
-            base_b = Path(tmp) / "create_history_tables.sql"
-            base_a.write_text("SELECT 10;", encoding="utf-8")
-            base_b.write_text("SELECT 20;", encoding="utf-8")
-
-            with mock.patch("rpg.infrastructure.db.mysql.migrate._migrations_dir", return_value=migration_dir), mock.patch(
-                "rpg.infrastructure.db.mysql.migrate._base_schema_files", return_value=[base_a, base_b]
-            ):
+            with mock.patch("rpg.infrastructure.db.mysql.migrate._migrations_dir", return_value=migration_dir):
                 with self.assertRaises(ValueError):
                     build_linear_migration_plan()
+
+    def test_build_linear_plan_excludes_seed_migrations_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            migration_dir = Path(tmp) / "migrations"
+            migration_dir.mkdir(parents=True, exist_ok=True)
+            (migration_dir / "001_first.sql").write_text("SELECT 1;", encoding="utf-8")
+            (migration_dir / "002_seed_factions.sql").write_text("INSERT INTO faction(name) VALUES ('x');", encoding="utf-8")
+
+            with mock.patch("rpg.infrastructure.db.mysql.migrate._migrations_dir", return_value=migration_dir):
+                file_names = [plan.file_path.name for plan in build_linear_migration_plan()]
+
+            self.assertEqual(["001_first.sql"], file_names)
+
+    def test_build_linear_plan_can_include_seed_migrations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            migration_dir = Path(tmp) / "migrations"
+            migration_dir.mkdir(parents=True, exist_ok=True)
+            (migration_dir / "001_first.sql").write_text("SELECT 1;", encoding="utf-8")
+            (migration_dir / "002_seed_factions.sql").write_text("INSERT INTO faction(name) VALUES ('x');", encoding="utf-8")
+
+            with mock.patch("rpg.infrastructure.db.mysql.migrate._migrations_dir", return_value=migration_dir):
+                file_names = [plan.file_path.name for plan in build_linear_migration_plan(include_seed_data=True)]
+
+            self.assertEqual(["001_first.sql", "002_seed_factions.sql"], file_names)
+
+    def test_build_seed_plan_includes_only_seed_migrations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            migration_dir = Path(tmp) / "migrations"
+            migration_dir.mkdir(parents=True, exist_ok=True)
+            (migration_dir / "001_first.sql").write_text("SELECT 1;", encoding="utf-8")
+            (migration_dir / "002_seed_factions.sql").write_text("INSERT INTO faction(name) VALUES ('x');", encoding="utf-8")
+            (migration_dir / "003_seed_locations.sql").write_text("INSERT INTO place(name) VALUES ('Town');", encoding="utf-8")
+
+            with mock.patch("rpg.infrastructure.db.mysql.migrate._migrations_dir", return_value=migration_dir):
+                file_names = [plan.file_path.name for plan in build_seed_migration_plan()]
+
+            self.assertEqual(["002_seed_factions.sql", "003_seed_locations.sql"], file_names)
 
     def test_execute_linear_plan_tracks_schema_migrations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

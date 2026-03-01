@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-from rpg.application.services.narrative_quality_batch import (
+from rpg.infrastructure.analysis.narrative_quality_batch import (
     DEFAULT_SCRIPT,
     SCRIPT_PRESETS,
     generate_quality_report,

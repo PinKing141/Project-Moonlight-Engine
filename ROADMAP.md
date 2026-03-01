@@ -246,7 +246,7 @@ Ensure in-memory and MySQL adapters behave equivalently for application contract
   - Test run summary: `C:/Users/Favour/Documents/Github/project-moonlight-main/.venv/Scripts/python.exe -m pytest tests/unit/test_mysql_migration_runner.py tests/unit/test_migration_chain.py tests/integration/test_atomic_persistence.py -q` → `8 passed`.
   - Dry-run execution summary: `C:/Users/Favour/Documents/Github/project-moonlight-main/.venv/Scripts/python.exe -m rpg.infrastructure.db.mysql.migrate --dry-run` resolved 6 SQL files / 136 statements across base schema + migrations.
   - Live execution summary (clean install): On local MySQL `8.4.8` at `127.0.0.1:3307`, executed `_apply_all.sql` and validated schema markers: `world` seeded (`world_rows = 1`), `spell` table present, `entity.armour_class` present, `character.hp_current` present.
-  - Live execution summary (incremental upgrade): Executed baseline (`create_tables.sql` + `create_history_tables.sql` + `001`) followed by `002` and `003`, then validated `spell` table plus `entity` combat columns (`armour_class`, `attack_bonus`, `damage_dice`, `hp_max`, `kind`).
+  - Live execution summary (incremental upgrade): Executed numbered baseline (`000_base_schema.sql`) followed by `001..003`, then validated `spell` table plus `entity` combat columns (`armour_class`, `attack_bonus`, `damage_dice`, `hp_max`, `kind`).
   - Environment note: `RPG_DATABASE_URL` set to `mysql+mysqlconnector://root@127.0.0.1:3307/rpg_game_clean` for live verification.
 
 ### Phase 3 Exit Gates
@@ -2308,7 +2308,7 @@ Stabilize V1.0 gameplay quality through hands-on playtesting and numeric tuning,
   3. Record anomalies as defects or backlog items.
 - **Anti-Overcoding Guard:** No new mechanics during playtest pass.
 - **Done Evidence:**
-  - Added reproducible playtest capture artifacts: `artifacts/phase25_cli_playtest_capture.py`, `artifacts/phase25_cli_playtest_report.json`, and `artifacts/phase25_cli_playtest_notes.md`.
+  - Added reproducible playtest capture artifacts: `tools/testing/phase25_cli_playtest_capture.py`, `artifacts/phase25_cli_playtest_report.json`, and `artifacts/phase25_cli_playtest_notes.md`.
   - Scripted CLI loop coverage captured (quest board intake + wilderness menu + rest + quit), with tracked metrics for leveling/XP/gold and quest tempo.
   - Captured anomalies were recorded under `BACKLOG.md` instead of direct feature work.
 
@@ -2520,7 +2520,7 @@ Close the two Phase 25 playtest defects by making scripted CLI loop telemetry re
   2. Capture scalar `end_*` values after loop execution.
   3. Compute deltas from scalar snapshots only.
 - **Files (actual):**
-  - `artifacts/phase25_cli_playtest_capture.py`
+  - `tools/testing/phase25_cli_playtest_capture.py`
 - **Done Evidence:**
   - Script output now reports real progression (`turn_delta: 1`) for the scripted loop run.
 
@@ -2532,7 +2532,7 @@ Close the two Phase 25 playtest defects by making scripted CLI loop telemetry re
   2. Keep `travel_hops` for destination-list choices only.
   3. Update notes/report interpretation to explain why `travel_hops` can remain `0` in single-location setups.
 - **Files (actual):**
-  - `artifacts/phase25_cli_playtest_capture.py`
+  - `tools/testing/phase25_cli_playtest_capture.py`
   - `artifacts/phase25_cli_playtest_report.json`
   - `artifacts/phase25_cli_playtest_notes.md`
 - **Done Evidence:**
@@ -2552,19 +2552,248 @@ Close the two Phase 25 playtest defects by making scripted CLI loop telemetry re
     - `pytest tests/e2e/test_cli_flow.py::CliFlowTests::test_scripted_cli_loop_records_travel_hop_and_turn_advance -q` → `1 passed`
     - `pytest tests/e2e/test_cli_flow.py -q` → `8 passed`
 
+#### `V16-T04` Artifact Notes/Report Consistency Automation
+- **Status:** `Done`
+- **Objective:** Eliminate manual drift between `phase25_cli_playtest_report.json` and `phase25_cli_playtest_notes.md`.
+- **Action:**
+  1. Generate notes markdown directly from the same computed payload used for JSON report.
+  2. Add environment context (`location_count`) to interpret zero destination hops.
+  3. Add unit test to verify notes/report consistency.
+- **Files (actual):**
+  - `tools/testing/phase25_cli_playtest_capture.py`
+  - `artifacts/phase25_cli_playtest_notes.md`
+  - `artifacts/phase25_cli_playtest_report.json`
+  - `tests/unit/test_phase25_playtest_artifacts.py`
+- **Done Evidence:**
+  - `python tools/testing/phase25_cli_playtest_capture.py` regenerated both artifact files from one payload.
+  - `pytest tests/unit/test_phase25_playtest_artifacts.py tests/e2e/test_cli_flow.py -q` → `9 passed`
+
+#### `V16-T05` Shared Scripted Selector Contract (No Drift)
+- **Status:** `Done`
+- **Objective:** Prevent divergence between scripted playtest artifact capture and e2e validation menu-selection behavior.
+- **Action:**
+  1. Extract deterministic menu selector into shared helper.
+  2. Reuse helper in both artifact capture script and CLI e2e regression.
+  3. Add focused unit coverage for selector counter semantics.
+- **Files (actual):**
+  - `src/rpg/infrastructure/playtest/phase25_scenario.py`
+  - `tools/testing/phase25_cli_playtest_capture.py`
+  - `tests/e2e/test_cli_flow.py`
+  - `tests/unit/test_phase25_playtest_scenario.py`
+- **Done Evidence:**
+  - `pytest tests/unit/test_phase25_playtest_scenario.py tests/unit/test_phase25_playtest_artifacts.py tests/e2e/test_cli_flow.py -q` → `11 passed`
+
+#### `V16-T06` Capture Script API Hardening + Import Safety
+- **Status:** `Done`
+- **Objective:** Ensure Phase25 capture script is safe to import and robust when executed directly without preconfigured package paths.
+- **Action:**
+  1. Refactor script into explicit `run_capture()`/`main()` API with `__main__` guard.
+  2. Add local `src` path bootstrap for direct script execution.
+  3. Add script API test that loads module by path and invokes `run_capture()`.
+- **Files (actual):**
+  - `tools/testing/phase25_cli_playtest_capture.py`
+  - `tests/unit/test_phase25_playtest_capture_script_api.py`
+- **Done Evidence:**
+  - `pytest tests/unit/test_phase25_playtest_capture_script_api.py tests/unit/test_phase25_playtest_scenario.py tests/unit/test_phase25_playtest_artifacts.py tests/e2e/test_cli_flow.py -q` → `12 passed`
+
+#### `V16-T07` Tooling Directory Hygiene for Playtest Capture
+- **Status:** `Done`
+- **Objective:** Remove executable code from `artifacts/` so output artifacts and tooling scripts are cleanly separated.
+- **Action:**
+  1. Move capture script to `tools/testing/phase25_cli_playtest_capture.py`.
+  2. Update script root-path resolution for new directory depth.
+  3. Update tests/docs to reference the new tooling path.
+- **Files (actual):**
+  - `tools/testing/phase25_cli_playtest_capture.py`
+  - `tests/unit/test_phase25_playtest_capture_script_api.py`
+  - `Problems.md`
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - `python tools/testing/phase25_cli_playtest_capture.py` → regenerated `artifacts/phase25_cli_playtest_report.json` and `artifacts/phase25_cli_playtest_notes.md`
+  - `pytest tests/unit/test_phase25_playtest_capture_script_api.py tests/unit/test_phase25_playtest_artifacts.py tests/e2e/test_cli_flow.py -q` → `10 passed`
+  - `pytest -q` → `550 passed`
+
+#### `V16-T08` Remove Stale Temporary Scripts from Artifacts
+- **Status:** `Done`
+- **Objective:** Eliminate accidental execution surface and repository clutter from committed `_tmp_` scripts.
+- **Action:**
+  1. Verify no in-repo references to `_tmp_` script paths.
+  2. Remove `artifacts/_tmp_check_db.py` and `artifacts/_tmp_migrate_run.py`.
+  3. Re-run full test suite for safety.
+- **Files (actual):**
+  - `artifacts/_tmp_check_db.py` (deleted)
+  - `artifacts/_tmp_migrate_run.py` (deleted)
+  - `Problems.md`
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - `rg -n "_tmp_check_db\.py|_tmp_migrate_run\.py|artifacts/_tmp_" -S .` → no matches
+  - `pytest -q` → `550 passed`
+
+#### `V16-T09` Separate Seed DML from Default Schema Migration Path
+- **Status:** `Done`
+- **Objective:** Prevent default migration runs from applying optional seed-data scripts.
+- **Action:**
+  1. Add seed-file classifier for `NNN_seed_*.sql`.
+  2. Exclude seed migrations from default strict linear plan.
+  3. Add explicit CLI flags:
+     - `--include-seeds` for schema+seed
+     - `--seed-only` for seed-only
+  4. Reclassify DML-only migration `015` as seed (`015_seed_expand_faction_roster.sql`).
+  5. Add runner unit tests for default exclusion and explicit inclusion behavior.
+- **Files (actual):**
+  - `src/rpg/infrastructure/db/mysql/migrate.py`
+  - `tests/unit/test_mysql_migration_runner.py`
+  - `Problems.md`
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - `pytest tests/unit/test_mysql_migration_runner.py -q` → `9 passed`
+  - `python -m rpg.infrastructure.db.mysql.migrate --dry-run` → strict schema plan excludes seed migrations (`011`, `013`, `015`, `016`, `017`)
+  - `pytest -q` → `554 passed`
+
+#### `V16-T10` Linear Migration Bootstrap Unification (No Standalone Base SQL Source)
+- **Status:** `Done`
+- **Objective:** Remove dual initialization sources by making strict startup rely only on numbered migrations.
+- **Action:**
+  1. Add canonical numbered baseline migration `000_base_schema.sql`.
+  2. Update migration runner to stop prepending `create_tables.sql` / `create_history_tables.sql`.
+  3. Convert standalone base SQL files into explicit no-op deprecation stubs.
+  4. Add regression test that strict plan starts with `000_base_schema.sql`.
+- **Files (actual):**
+  - `src/rpg/infrastructure/db/migrations/000_base_schema.sql`
+  - `src/rpg/infrastructure/db/mysql/migrate.py`
+  - `src/rpg/infrastructure/db/create_tables.sql`
+  - `src/rpg/infrastructure/db/create_history_tables.sql`
+  - `tests/unit/test_mysql_migration_runner.py`
+  - `Problems.md`
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - `pytest tests/unit/test_migration_chain.py tests/unit/test_mysql_migration_runner.py -q` → `14 passed`
+  - `pytest -q` → `554 passed`
+
+#### `V16-T11` MySQL Connection Pool Hardening
+- **Status:** `Done`
+- **Objective:** Prevent per-operation connection churn by adding explicit reusable MySQL pooling configuration.
+- **Action:**
+  1. Add pool-aware engine kwargs builder in MySQL connection module.
+  2. Apply explicit defaults (`pre_ping`, `recycle`, `pool_size`, `max_overflow`, `pool_timeout`) for MySQL URLs.
+  3. Read pool values from environment with safe fallback/clamping.
+  4. Ensure non-MySQL URLs skip pool-only options.
+  5. Add focused unit tests for MySQL/non-MySQL kwargs and invalid env fallback.
+- **Files (actual):**
+  - `src/rpg/infrastructure/db/mysql/connection.py`
+  - `tests/unit/test_mysql_connection_pooling.py`
+  - `Problems.md`
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - `pytest tests/unit/test_mysql_connection_pooling.py -q` → `3 passed`
+  - `pytest tests/unit -q` → `452 passed`
+  - `pytest -q` → `557 passed`
+
+#### `V16-T12` Move Narrative Batch Analysis Out of Application Services
+- **Status:** `Done`
+- **Objective:** Keep runtime application services focused on orchestration by relocating analytical batch/report generation logic to infrastructure analysis tooling.
+- **Action:**
+  1. Move narrative batch module from `src/rpg/application/services/` to `src/rpg/infrastructure/analysis/`.
+  2. Update runtime/report imports to new module location.
+  3. Add analysis package init module and remove parity-audit exclusion for the old application file.
+  4. Re-run narrative/report, parity, game-logic, and CLI flow validations.
+- **Files (actual):**
+  - `src/rpg/infrastructure/analysis/narrative_quality_batch.py`
+  - `src/rpg/infrastructure/analysis/__init__.py`
+  - `src/rpg/infrastructure/narrative_quality_report.py`
+  - `src/rpg/presentation/main_menu.py`
+  - `tests/unit/test_narrative_simulation_batch.py`
+  - `tests/unit/test_narrative_quality_report.py`
+  - `tests/unit/test_session_quality_hook.py`
+  - `tests/unit/test_repository_parity_audit.py`
+  - `Problems.md`
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - `pytest tests/unit/test_narrative_simulation_batch.py tests/unit/test_narrative_quality_report.py tests/unit/test_session_quality_hook.py tests/unit/test_repository_parity_audit.py tests/test_game_logic.py tests/e2e/test_cli_flow.py -q` → `101 passed`
+  - `pytest tests/unit -q` → `452 passed`
+  - `pytest -q` → `557 passed`
+
+#### `V16-T13` Entrypoint Unification (Remove `run_game.py` Duplication)
+- **Status:** `Done`
+- **Objective:** Eliminate duplicated startup paths and standardize package execution entrypoint configuration.
+- **Action:**
+  1. Remove root-level `run_game.py`.
+  2. Add console-script mapping in `pyproject.toml` (`moonlight = "rpg.__main__:main"`).
+  3. Validate startup/error-handling and CLI-flow tests remain green.
+- **Files (actual):**
+  - `pyproject.toml`
+  - `run_game.py` (deleted)
+  - `Problems.md`
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - `Select-String -Path pyproject.toml -Pattern 'moonlight = "rpg.__main__:main"'` → present
+  - `pytest tests/unit/test_main_entry_error_handling.py tests/e2e/test_cli_flow.py -q` → `11 passed`
+  - `pytest -q` → `557 passed`
+
+#### `V16-T14` Root Verification Artifact Hygiene
+- **Status:** `Done`
+- **Objective:** Remove ambiguous verification/log text artifacts from repository root and keep outputs in documentation area.
+- **Action:**
+  1. Move root verification/log files into `docs/verification/`.
+  2. Add root-output guard patterns to `.gitignore`.
+  3. Re-run full regression to ensure no runtime dependency on old root paths.
+- **Files (actual):**
+  - `docs/verification/sanity.txt`
+  - `docs/verification/final_verify.txt`
+  - `docs/verification/full_test_report.txt`
+  - `docs/verification/pytest_e2e_out.txt`
+  - `docs/verification/tmp_progression_tests.log`
+  - `.gitignore`
+  - `Problems.md`
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - `Get-ChildItem docs/verification -File` → verification/log artifacts consolidated under docs.
+  - `pytest -q` → `557 passed`
+
+#### `V16-T15` Rolling UI Animation Non-Blocking Cleanup
+- **Status:** `Done`
+- **Objective:** Remove legacy blocking sleep path and eliminate duplicated final animation render flow in rolling UI.
+- **Action:**
+  1. Replace synchronous sleep-driven animation with sync wrapper delegating to async animator.
+  2. Remove duplicate final render/prompt block in async animation routine.
+  3. Add focused tests covering delegation and single-prompt finalization behavior.
+- **Files (actual):**
+  - `src/rpg/presentation/rolling_ui.py`
+  - `tests/unit/test_rolling_ui_animation.py`
+  - `Problems.md`
+  - `ROADMAP.md`
+- **Done Evidence:**
+  - `pytest tests/unit/test_rolling_ui_animation.py -q` → `2 passed`
+  - `pytest tests/unit/test_character_creation_races.py tests/e2e/test_cli_flow.py -q` → `27 passed`
+  - `pytest tests/unit -q` → `454 passed`
+  - `pytest -q` → `559 passed`
+
 ### 27.3 Exit Gates (Strict)
 - [x] **Scope Gate:** Changes limited to scripted capture artifact telemetry, e2e regression, and roadmap/docs evidence.
 - [x] **Defect Gate:** Scripted run no longer reports false zero turn progression when travel executes.
 - [x] **Quality Gate:** Added CLI e2e regression passes.
+- [x] **Consistency Gate:** Report and notes artifacts are generated in sync and covered by unit test.
+- [x] **Drift Gate:** Scripted selection contract is shared across capture/e2e and covered by focused unit test.
+- [x] **API Safety Gate:** Capture script can be imported without side effects and invoked via explicit callable API.
+- [x] **Tooling Hygiene Gate:** Executable Phase25 capture script moved out of `artifacts/` and into `tools/testing/`.
+- [x] **Artifact Cleanup Gate:** Stale `_tmp_` executable scripts removed from `artifacts/`.
+- [x] **Schema/Seed Gate:** Default strict migration mode excludes `NNN_seed_*.sql` unless explicitly requested.
+- [x] **Linear Init Gate:** Strict migration path starts from numbered baseline `000_base_schema.sql` and no longer prepends standalone base schema files.
+- [x] **Connection Pool Gate:** MySQL engine uses explicit pooling config with env-tunable bounds and pre-ping.
+- [x] **Analysis Boundary Gate:** Narrative batch/report analytics no longer live under `application/services`.
+- [x] **Entrypoint Gate:** Duplicated root launcher removed; package console script maps to `rpg.__main__:main`.
+- [x] **Root Hygiene Gate:** Verification/log text artifacts no longer live at repository root.
+- [x] **UI Animation Gate:** Rolling UI no longer uses blocking sleep path or duplicate final render sequence.
 - [x] **Purity Gate:** No new gameplay features introduced.
 
 ### 27.4 Done Evidence
 - Script execution:
-  - `python artifacts/phase25_cli_playtest_capture.py` wrote updated report at `artifacts/phase25_cli_playtest_report.json`.
+  - `python tools/testing/phase25_cli_playtest_capture.py` wrote updated report at `artifacts/phase25_cli_playtest_report.json`.
 - Report summary:
   - `turn_delta: 1`
   - `travel_actions: 1`
   - `travel_hops: 0` (expected in single-location in-memory seed).
 - Full regression confirmation:
-  - `pytest -q` → `545 passed, 1 skipped`
+  - `pytest -q` → `559 passed`
+  - `pytest tests/unit/test_sql_repository_roundtrip_property.py -q` → `1 passed` (fallback parity matrix active when Hypothesis is absent)
 

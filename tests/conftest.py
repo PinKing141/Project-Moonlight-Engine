@@ -57,4 +57,4 @@ def e2e_minimal_world_simulation(request: pytest.FixtureRequest, monkeypatch: py
     if not _is_e2e_test(request):
         return
 
-    monkeypatch.setattr("rpg.infrastructure.legacy_cli_compat.register_story_director_handlers", lambda **_kwargs: None)
+    monkeypatch.setattr("rpg.bootstrap.register_story_director_handlers", lambda **_kwargs: None)

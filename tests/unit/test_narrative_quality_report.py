@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from rpg.application.services.narrative_quality_batch import (
+from rpg.infrastructure.analysis.narrative_quality_batch import (
     DEFAULT_SCRIPT,
     REPORT_SCHEMA_NAME,
     REPORT_SCHEMA_VERSION,

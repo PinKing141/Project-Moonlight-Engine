@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from rpg.application.services.event_bus import EventBus
 from rpg.application.services.game_service import GameService
-from rpg.application.services.narrative_quality_batch import (
+from rpg.infrastructure.analysis.narrative_quality_batch import (
     quality_profile_thresholds as shared_quality_profile_thresholds,
     quality_targets as shared_quality_targets,
     resolved_quality_profiles as shared_resolved_quality_profiles,

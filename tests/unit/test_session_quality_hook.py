@@ -8,7 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from rpg.application.services.narrative_quality_batch import maybe_emit_session_quality_report
+from rpg.infrastructure.analysis.narrative_quality_batch import maybe_emit_session_quality_report
 from rpg.bootstrap import create_game_service
 from rpg.presentation import main_menu as main_menu_module
 

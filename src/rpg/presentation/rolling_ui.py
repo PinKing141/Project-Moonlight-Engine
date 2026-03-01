@@ -1,6 +1,5 @@
 import asyncio
 import random
-import time
 
 from rpg.presentation.menu_controls import clear_screen
 
@@ -64,26 +63,8 @@ def _render_roll_panel(title: str, lines: list[str], border_style: str = "yellow
 
 
 def _animate_stat_roll(stat_name: str, final_total: int, final_rolls: list[int], *, rng: random.Random | None = None) -> None:
-    """Show a quick rolling animation then reveal the final result."""
-    frames = 12
-    sleep_time = 0.05
-    resolved_rng = rng or random.Random()
-
-    for _ in range(frames):
-        clear_screen()
-        fake_rolls = [resolved_rng.randint(1, 6) for _ in range(4)]
-        _render_roll_panel(
-            f"ROLLING {stat_name} (4d6, drop lowest)",
-            [
-                f"Dice: {_render_dice_row(fake_rolls)}",
-                "",
-                "Rolling...",
-            ],
-        )
-        time.sleep(sleep_time)
-
-    # Final reveal
-    clear_screen()
+    """Synchronous wrapper that executes the async roll animation flow."""
+    asyncio.run(_animate_stat_roll_async(stat_name, final_total, final_rolls, rng=rng))
 
 async def _animate_stat_roll_async(
     stat_name: str,
@@ -111,21 +92,6 @@ async def _animate_stat_roll_async(
         await asyncio.sleep(sleep_time)
 
     clear_screen()
-    lowest = min(final_rolls)
-    lowest_idx = final_rolls.index(lowest)
-
-    _render_roll_panel(
-        f"{stat_name} RESULT",
-        [
-            f"Final dice: {_render_dice_row(final_rolls, highlight_index=lowest_idx)}",
-            f"(Lowest die ({lowest}) is dropped.)",
-            "",
-            f"{stat_name} = {final_total}",
-        ],
-    )
-    _prompt_continue("Press ENTER to continue...")
-
-
     lowest = min(final_rolls)
     lowest_idx = final_rolls.index(lowest)
 

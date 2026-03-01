@@ -1,5 +1,5 @@
 from rpg.application.services.game_service import GameService
-from rpg.application.services.narrative_quality_batch import maybe_emit_session_quality_report
+from rpg.infrastructure.analysis.narrative_quality_batch import maybe_emit_session_quality_report
 from rpg.presentation.character_creation_ui import run_character_creation
 from rpg.presentation.game_loop import run_game_loop
 from rpg.presentation.load_menu import choose_existing_character
