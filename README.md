@@ -95,6 +95,17 @@ Run locally (prefers MySQL persistence, falls back to in-memory if unreachable):
 python -m rpg
 ```
 
+Optional Live FSM CLI mode (Rich layout + deferred background event queue):
+
+```bash
+set RPG_CLI_LIVE_FSM=1
+python -m rpg
+```
+
+Notes:
+- Live mode is opt-in and leaves the existing arrow-menu loop as default.
+- If Rich is unavailable, runtime automatically falls back to the default loop.
+
 Optional dependency groups:
 
 - Dev/testing tools:

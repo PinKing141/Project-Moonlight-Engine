@@ -43,7 +43,7 @@ def _render_dice_row(rolls: list[int], highlight_index: int | None = None) -> st
     return "  ".join(parts)
 
 
-def _render_roll_panel(title: str, lines: list[str], border_style: str = "yellow") -> None:
+def _render_roll_panel(title: str, lines: list[str], border_style: str = "cyan") -> None:
     body = "\n".join(lines)
     if _CONSOLE is not None and Panel is not None:
         _CONSOLE.print(
@@ -114,33 +114,54 @@ def roll_attributes_with_animation() -> dict[str, int]:
       - Roll 4d6 drop lowest
       - Return a dict like {'STR': 16, 'DEX': 12, ...}
     """
-    clear_screen()
-    _render_roll_panel(
-        "ATTRIBUTE ROLLING",
-        [
-            "You will roll 4d6 for each attribute, dropping the lowest die.",
-            "Order: STR, DEX, CON, INT, WIS, CHA.",
-        ],
-    )
-    _prompt_continue("Press ENTER to begin rolling...")
-
+    detailed = roll_values_with_animation(count=len(ATTR_ORDER), show_intro=True, show_summary=True)
     results: dict[str, int] = {}
-    session_rng = random.Random()
-
+    for idx, stat in enumerate(ATTR_ORDER):
+        if idx >= len(detailed):
+            break
+        total, _rolls = detailed[idx]
+        results[stat] = int(total)
     for stat in ATTR_ORDER:
-        total, rolls = roll_4d6_drop_lowest(rng=session_rng)
-        _animate_stat_roll(stat, total, rolls, rng=session_rng)
-        results[stat] = total
-
-    # Summary screen
-    clear_screen()
-    _render_roll_panel(
-        "FINAL ATTRIBUTE ROLLS",
-        [f"{stat}: {results[stat]}" for stat in ATTR_ORDER],
-    )
-    _prompt_continue("Press ENTER to accept these rolls...")
-
+        if stat not in results:
+            results[stat] = 8
     return results
+
+
+def roll_values_with_animation(
+    count: int = 6,
+    *,
+    show_intro: bool = False,
+    show_summary: bool = False,
+) -> list[tuple[int, list[int]]]:
+    if show_intro:
+        clear_screen()
+        _render_roll_panel(
+            "ATTRIBUTE ROLLING",
+            [
+                "You will roll 4d6 for each score, dropping the lowest die.",
+                f"Total rolls: {int(max(1, count))}.",
+            ],
+        )
+        _prompt_continue("Press ENTER to begin rolling...")
+    else:
+        clear_screen()
+
+    session_rng = random.Random()
+    total_rolls = max(1, int(count))
+    rows: list[tuple[int, list[int]]] = []
+    for index in range(total_rolls):
+        total, rolls = roll_4d6_drop_lowest(rng=session_rng)
+        _animate_stat_roll(f"ROLL {index + 1}", total, rolls, rng=session_rng)
+        rows.append((int(total), list(rolls)))
+
+    if show_summary:
+        clear_screen()
+        summary_lines: list[str] = []
+        for idx, (total, rolls) in enumerate(rows, start=1):
+            summary_lines.append(f"[{idx}] {int(total)} ({', '.join(str(value) for value in list(rolls))})")
+        _render_roll_panel("FINAL ROLLED VALUES", summary_lines)
+        _prompt_continue("Press ENTER to assign these rolls...")
+    return rows
 
 
 async def roll_attributes_with_animation_async() -> dict[str, int]:

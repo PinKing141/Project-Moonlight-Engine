@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import random
+from pathlib import Path
 from typing import Dict, List
 
 from rpg.application.dtos import CharacterClassDetailView
@@ -13,6 +15,7 @@ from rpg.domain.models.character_options import Background, DifficultyPreset, Ra
 from rpg.domain.repositories import CharacterRepository, ClassRepository, FeatureRepository, LocationRepository
 from rpg.domain.services.character_factory import ABILITY_ALIASES, create_new_character
 from rpg.domain.services.subclass_catalog import resolve_subclass, subclasses_for_class
+from rpg.domain.services.subclass_progression import subclass_tier_levels_for_class
 
 
 ABILITY_ORDER = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
@@ -49,6 +52,208 @@ class CharacterCreationService:
         CharacterAlignment.NEUTRAL_EVIL.value,
         CharacterAlignment.CHAOTIC_EVIL.value,
     )
+    _STARTING_GOLD_SPEC_BY_CLASS: dict[str, str] = {
+        "artificer": "5d4x10",
+        "barbarian": "2d4x10",
+        "bard": "5d4x10",
+        "cleric": "5d4x10",
+        "druid": "2d4x10",
+        "fighter": "5d4x10",
+        "monk": "5d4",
+        "paladin": "5d4x10",
+        "ranger": "5d4x10",
+        "rogue": "4d4x10",
+        "sorcerer": "3d4x10",
+        "warlock": "4d4x10",
+        "wizard": "4d4x10",
+    }
+    _EQUIPMENT_PACKAGE_BY_CLASS: dict[str, list[dict[str, object]]] = {
+        "fighter": [
+            {
+                "id": "fighter_chain_mail",
+                "label": "(A) Chain Mail + Longsword + Shield",
+                "items": ["Chain Mail", "Longsword", "Shield"],
+            },
+            {
+                "id": "fighter_leather_bow",
+                "label": "(B) Leather Armor + Longbow + Arrows x20",
+                "items": ["Leather Armor", "Longbow", "Arrows x20"],
+            },
+        ],
+        "wizard": [
+            {
+                "id": "wizard_quarterstaff",
+                "label": "(A) Quarterstaff + Spellbook + Component Pouch",
+                "items": ["Quarterstaff", "Spellbook", "Component Pouch"],
+            },
+            {
+                "id": "wizard_dagger_focus",
+                "label": "(B) Dagger + Spellbook + Arcane Focus",
+                "items": ["Dagger", "Spellbook", "Arcane Focus"],
+            },
+        ],
+        "cleric": [
+            {
+                "id": "cleric_mace_shield",
+                "label": "(A) Mace + Shield + Chain Shirt + Holy Symbol",
+                "items": ["Mace", "Shield", "Chain Shirt", "Holy Symbol"],
+            },
+            {
+                "id": "cleric_warhammer_scale",
+                "label": "(B) Warhammer + Scale Mail + Holy Symbol",
+                "items": ["Warhammer", "Scale Mail", "Holy Symbol"],
+            },
+        ],
+    }
+    _CLASS_LEVEL1_SPELL_REQUIREMENTS: dict[str, dict[str, int]] = {
+        "artificer": {"cantrips": 2, "spells": 2},
+        "bard": {"cantrips": 2, "spells": 4},
+        "cleric": {"cantrips": 3, "spells": 2},
+        "druid": {"cantrips": 2, "spells": 2},
+        "paladin": {"cantrips": 0, "spells": 1},
+        "ranger": {"cantrips": 0, "spells": 1},
+        "sorcerer": {"cantrips": 4, "spells": 2},
+        "warlock": {"cantrips": 2, "spells": 2},
+        "wizard": {"cantrips": 3, "spells": 6},
+    }
+    _RACE_SPELLCASTING_GRANTS: dict[str, dict[str, object]] = {
+        "high elf": {
+            "bonus_cantrip_choices": 1,
+            "bonus_cantrip_class": "wizard",
+            "granted_cantrips": [],
+            "granted_spells": [],
+        },
+        "tiefling": {
+            "bonus_cantrip_choices": 0,
+            "bonus_cantrip_class": "",
+            "granted_cantrips": ["Thaumaturgy"],
+            "granted_spells": [],
+        },
+    }
+    _UNIFIED_SPELLS_CACHE: list[dict[str, object]] | None = None
+    _BACKGROUND_EXTRA_CHOICES: dict[str, dict[str, object]] = {
+        "temple envoy": {
+            "tool_choices": 1,
+            "tool_pool": ["Calligrapher's Supplies", "Herbalism Kit", "Musical Instrument"],
+            "language_choices": 1,
+            "language_pool": ["Celestial", "Draconic", "Elvish", "Sylvan"],
+        },
+        "lorekeeper": {
+            "tool_choices": 1,
+            "tool_pool": ["Calligrapher's Supplies", "Cartographer's Tools", "Navigator's Tools"],
+            "language_choices": 2,
+            "language_pool": ["Draconic", "Elvish", "Dwarvish", "Gnomish", "Infernal"],
+        },
+        "night runner": {
+            "tool_choices": 1,
+            "tool_pool": ["Thieves' Tools", "Disguise Kit", "Forgery Kit", "Gaming Set"],
+            "language_choices": 1,
+            "language_pool": ["Thieves' Cant", "Undercommon", "Goblin", "Elvish"],
+        },
+        "forgehand": {
+            "tool_choices": 1,
+            "tool_pool": ["Smith's Tools", "Mason's Tools", "Tinker's Tools", "Alchemist's Supplies"],
+            "language_choices": 1,
+            "language_pool": ["Dwarvish", "Giant", "Draconic"],
+        },
+        "frontier tender": {
+            "tool_choices": 1,
+            "tool_pool": ["Herbalism Kit", "Leatherworker's Tools", "Woodcarver's Tools"],
+            "language_choices": 1,
+            "language_pool": ["Elvish", "Sylvan", "Giant", "Orc"],
+        },
+        "watch sentinel": {
+            "tool_choices": 1,
+            "tool_pool": ["Gaming Set", "Calligrapher's Supplies", "Navigator's Tools"],
+            "language_choices": 1,
+            "language_pool": ["Dwarvish", "Draconic", "Orc", "Common Sign"],
+        },
+    }
+    _BACKGROUND_PERSONALITY_TABLES: dict[str, dict[str, list[str]]] = {
+        "temple envoy": {
+            "traits": [
+                "I quote old rites for everyday advice.",
+                "I treat strangers with patient courtesy.",
+                "I keep careful notes about omens and signs.",
+                "I speak softly, but with conviction.",
+            ],
+            "ideals": ["Mercy", "Duty", "Tradition", "Hope"],
+            "bonds": [
+                "My temple trust must be restored.",
+                "I owe my life to a wandering priest.",
+                "A sacred relic was stolen and I will recover it.",
+            ],
+            "flaws": [
+                "I am judgmental toward those without faith.",
+                "I struggle to forgive old insults.",
+                "I avoid hard choices until too late.",
+            ],
+        },
+        "lorekeeper": {
+            "traits": [
+                "I collect stories as if they were treasure.",
+                "I cannot resist correcting bad history.",
+                "I always carry ink, quills, and spare paper.",
+                "I ask too many questions in dangerous places.",
+            ],
+            "ideals": ["Knowledge", "Truth", "Discovery", "Legacy"],
+            "bonds": [
+                "A lost archive map is hidden in my journal.",
+                "My mentor vanished while researching forbidden lore.",
+                "I swore to preserve stories no one else remembers.",
+            ],
+            "flaws": [
+                "I underestimate practical dangers.",
+                "I can be arrogant about my learning.",
+                "I hoard secrets even from allies.",
+            ],
+        },
+        "night runner": {
+            "traits": [
+                "I always know at least one way out.",
+                "I grin when plans get risky.",
+                "I trust silence more than promises.",
+                "I never sit with my back to a door.",
+            ],
+            "ideals": ["Freedom", "Survival", "Opportunity", "Independence"],
+            "bonds": [
+                "My old crew still watches from the shadows.",
+                "I protect the district that raised me.",
+                "A debt to a crime boss hangs over me.",
+            ],
+            "flaws": [
+                "I lie when the truth would be easier.",
+                "I assume betrayal before trust.",
+                "I overreach when stakes are high.",
+            ],
+        },
+    }
+    _FIGHTING_STYLE_OPTIONS: tuple[str, ...] = (
+        "Archery",
+        "Defence",
+        "Dueling",
+        "Great Weapon Fighting",
+        "Protection",
+    )
+    _DRACONIC_ANCESTRY_OPTIONS: tuple[str, ...] = (
+        "Black (Acid)",
+        "Blue (Lightning)",
+        "Brass (Fire)",
+        "Bronze (Lightning)",
+        "Copper (Acid)",
+        "Gold (Fire)",
+        "Green (Poison)",
+        "Red (Fire)",
+        "Silver (Cold)",
+        "White (Cold)",
+    )
+    _LEVEL1_FEAT_OPTIONS: tuple[dict[str, str], ...] = (
+        {"slug": "alert", "label": "Alert"},
+        {"slug": "athlete", "label": "Athlete"},
+        {"slug": "durable", "label": "Durable"},
+        {"slug": "tough", "label": "Tough"},
+        {"slug": "war_caster", "label": "War Caster"},
+    )
 
     def __init__(
         self,
@@ -63,6 +268,7 @@ class CharacterCreationService:
         self.class_repo = class_repo
         self.location_repo = location_repo
         self.name_generator = name_generator
+        self._name_generation_sequence = 0
         self.feature_repo = feature_repo
         self.backgrounds: List[Background] = self._default_backgrounds()
         self.difficulties: List[DifficultyPreset] = self._default_difficulties()
@@ -127,6 +333,12 @@ class CharacterCreationService:
     def list_subclasses_for_class(self, class_slug_or_name: str | None) -> List[ClassSubclass]:
         return list(subclasses_for_class(class_slug_or_name))
 
+    def subclass_selection_level_for_class(self, class_slug_or_name: str | None) -> int:
+        levels = tuple(subclass_tier_levels_for_class(class_slug_or_name) or ())
+        if not levels:
+            return 3
+        return max(1, int(levels[0]))
+
     def list_creation_reference_categories(self) -> List[str]:
         return [label for _, label in self.CREATION_REFERENCE_CATEGORIES]
 
@@ -136,6 +348,86 @@ class CharacterCreationService:
         if limit > 0:
             rows = rows[: int(limit)]
         return rows
+
+    def list_background_choice_options(self, background_name: str | None) -> dict[str, object]:
+        key = str(background_name or "").strip().lower()
+        payload = dict(self._BACKGROUND_EXTRA_CHOICES.get(key, {}))
+        return {
+            "tool_choices": int(payload.get("tool_choices", 0) or 0),
+            "tool_pool": [str(row) for row in list(payload.get("tool_pool", []) or []) if str(row).strip()],
+            "language_choices": int(payload.get("language_choices", 0) or 0),
+            "language_pool": [str(row) for row in list(payload.get("language_pool", []) or []) if str(row).strip()],
+        }
+
+    def list_background_personality_tables(self, background_name: str | None) -> dict[str, list[str]]:
+        key = str(background_name or "").strip().lower()
+        payload = dict(self._BACKGROUND_PERSONALITY_TABLES.get(key, {}))
+        return {
+            "traits": [str(row) for row in list(payload.get("traits", []) or []) if str(row).strip()],
+            "ideals": [str(row) for row in list(payload.get("ideals", []) or []) if str(row).strip()],
+            "bonds": [str(row) for row in list(payload.get("bonds", []) or []) if str(row).strip()],
+            "flaws": [str(row) for row in list(payload.get("flaws", []) or []) if str(row).strip()],
+        }
+
+    def roll_background_personality(
+        self,
+        background_name: str | None,
+        *,
+        rng: random.Random | None = None,
+    ) -> dict[str, str]:
+        tables = self.list_background_personality_tables(background_name)
+        roller = rng or random.Random()
+
+        def _pick(rows: list[str], fallback: str) -> str:
+            if not rows:
+                return fallback
+            return str(rows[roller.randint(0, len(rows) - 1)])
+
+        return {
+            "trait": _pick(tables.get("traits", []), "I keep my own counsel."),
+            "ideal": _pick(tables.get("ideals", []), "Balance"),
+            "bond": _pick(tables.get("bonds", []), "I protect those who depend on me."),
+            "flaw": _pick(tables.get("flaws", []), "I take on too much alone."),
+        }
+
+    def list_level1_class_feature_choices(self, class_slug: str) -> dict[str, object]:
+        class_key = str(class_slug or "").strip().lower()
+        if class_key == "fighter":
+            return {
+                "fighting_style": list(self._FIGHTING_STYLE_OPTIONS),
+            }
+        if class_key == "rogue":
+            skill_rows = list(self.creation_reference.get("skills", []) or [])
+            if not skill_rows:
+                skill_rows = [
+                    "Acrobatics", "Animal Handling", "Arcana", "Athletics", "Deception",
+                    "History", "Insight", "Intimidation", "Investigation", "Medicine",
+                    "Nature", "Perception", "Performance", "Persuasion", "Religion",
+                    "Sleight of Hand", "Stealth", "Survival",
+                ]
+            return {
+                "expertise_count": 2,
+                "expertise_pool": [str(row) for row in skill_rows if str(row).strip()],
+            }
+        if class_key == "sorcerer":
+            return {
+                "draconic_ancestry": list(self._DRACONIC_ANCESTRY_OPTIONS),
+            }
+        return {}
+
+    @classmethod
+    def list_level1_feat_options(cls) -> list[dict[str, str]]:
+        return [dict(row) for row in cls._LEVEL1_FEAT_OPTIONS]
+
+    @staticmethod
+    def is_feat_selection_eligible(race_name: str | None, subrace_name: str | None = None) -> bool:
+        race_key = str(race_name or "").strip().lower()
+        subrace_key = str(subrace_name or "").strip().lower()
+        if "variant human" in subrace_key:
+            return True
+        if "custom lineage" in race_key or "custom lineage" in subrace_key:
+            return True
+        return False
 
     def race_option_labels(self) -> List[str]:
         labels: List[str] = []
@@ -168,6 +460,282 @@ class CharacterCreationService:
             f"{mode.name:<12} | {mode.description}"
             for mode in self.list_difficulties()
         ]
+
+    @staticmethod
+    def _normalize_race_spell_key(race_name: str | None, subrace_name: str | None = None) -> list[str]:
+        race_key = str(race_name or "").strip().lower()
+        subrace_key = str(subrace_name or "").strip().lower()
+        keys: list[str] = []
+        if subrace_key:
+            keys.append(subrace_key)
+        if race_key:
+            keys.append(race_key)
+        if "(" in race_key and ")" in race_key:
+            fragment = race_key.split("(", 1)[1].split(")", 1)[0].strip()
+            if fragment:
+                keys.append(fragment)
+        return keys
+
+    def race_spellcasting_grants(self, race_name: str | None, subrace_name: str | None = None) -> dict[str, object]:
+        keys = self._normalize_race_spell_key(race_name, subrace_name)
+        for key in keys:
+            payload = self._RACE_SPELLCASTING_GRANTS.get(key)
+            if payload is None:
+                continue
+            return {
+                "bonus_cantrip_choices": int(payload.get("bonus_cantrip_choices", 0) or 0),
+                "bonus_cantrip_class": str(payload.get("bonus_cantrip_class", "") or "").strip().lower(),
+                "granted_cantrips": [str(row) for row in list(payload.get("granted_cantrips", []) or []) if str(row).strip()],
+                "granted_spells": [str(row) for row in list(payload.get("granted_spells", []) or []) if str(row).strip()],
+            }
+        return {
+            "bonus_cantrip_choices": 0,
+            "bonus_cantrip_class": "",
+            "granted_cantrips": [],
+            "granted_spells": [],
+        }
+
+    def get_starting_equipment_options(self, class_slug: str) -> list[dict[str, object]]:
+        class_key = str(class_slug or "").strip().lower()
+        packages = list(self._EQUIPMENT_PACKAGE_BY_CLASS.get(class_key, []))
+        if not packages:
+            default_items = list(self.starting_equipment.get(class_key, self.starting_equipment.get("_default", [])))
+            packages = [
+                {
+                    "id": f"{class_key}_default",
+                    "label": "Use standard class equipment",
+                    "items": default_items,
+                }
+            ]
+
+        gold_spec = str(self._STARTING_GOLD_SPEC_BY_CLASS.get(class_key, "4d4x10") or "4d4x10")
+        packages.append(
+            {
+                "id": "starting_gold",
+                "label": f"Use starting gold ({gold_spec}) and buy gear later",
+                "items": [],
+                "gold_spec": gold_spec,
+            }
+        )
+        return packages
+
+    @staticmethod
+    def _roll_gold_from_spec(spec: str, rng: random.Random | None = None) -> int:
+        source = str(spec or "").strip().lower().replace(" ", "")
+        if "d" not in source:
+            try:
+                return max(0, int(source))
+            except Exception:
+                return 0
+        parts = source.split("d", 1)
+        count = int(parts[0] or 1)
+        tail = parts[1]
+        multiplier = 1
+        if "x" in tail:
+            die_raw, mult_raw = tail.split("x", 1)
+            die = int(die_raw or 4)
+            multiplier = max(1, int(mult_raw or 1))
+        else:
+            die = int(tail or 4)
+        roller = rng or random.Random()
+        total = 0
+        for _ in range(max(1, count)):
+            total += roller.randint(1, max(1, die))
+        return max(0, total * multiplier)
+
+    def resolve_starting_equipment_choice(
+        self,
+        class_slug: str,
+        choice_id: str,
+        *,
+        rng: random.Random | None = None,
+    ) -> dict[str, object]:
+        class_key = str(class_slug or "").strip().lower()
+        choice_key = str(choice_id or "").strip().lower()
+        options = self.get_starting_equipment_options(class_key)
+        selected = next((row for row in options if str(row.get("id", "")).strip().lower() == choice_key), None)
+        if selected is None:
+            selected = options[0]
+
+        if str(selected.get("id", "")) == "starting_gold":
+            spec = str(selected.get("gold_spec", self._STARTING_GOLD_SPEC_BY_CLASS.get(class_key, "4d4x10")) or "4d4x10")
+            return {
+                "mode": "starting_gold",
+                "items": [],
+                "gold_bonus": self._roll_gold_from_spec(spec, rng=rng),
+                "label": str(selected.get("label", "Starting gold") or "Starting gold"),
+                "gold_spec": spec,
+            }
+
+        return {
+            "mode": "standard_equipment",
+            "items": [str(row) for row in list(selected.get("items", []) or []) if str(row).strip()],
+            "gold_bonus": 0,
+            "label": str(selected.get("label", "Standard equipment") or "Standard equipment"),
+            "gold_spec": "",
+        }
+
+    @classmethod
+    def _load_unified_spells_rows(cls) -> list[dict[str, object]]:
+        if cls._UNIFIED_SPELLS_CACHE is not None:
+            return list(cls._UNIFIED_SPELLS_CACHE)
+        path = Path(__file__).resolve().parents[4] / "data" / "spells" / "unified_spells.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            cls._UNIFIED_SPELLS_CACHE = []
+            return []
+        spells = payload.get("spells") if isinstance(payload, dict) else []
+        if not isinstance(spells, list):
+            cls._UNIFIED_SPELLS_CACHE = []
+            return []
+        rows: list[dict[str, object]] = []
+        for row in spells:
+            if isinstance(row, dict):
+                rows.append(dict(row))
+        cls._UNIFIED_SPELLS_CACHE = rows
+        return list(rows)
+
+    @staticmethod
+    def _row_classes(row: dict[str, object]) -> set[str]:
+        raw = str(row.get("classes", "") or "")
+        parts = [part.strip().lower() for part in raw.replace(";", ",").split(",") if part.strip()]
+        return set(parts)
+
+    def list_starting_spell_options(
+        self,
+        class_slug: str,
+        *,
+        race_name: str | None = None,
+        subrace_name: str | None = None,
+    ) -> dict[str, object]:
+        class_key = str(class_slug or "").strip().lower()
+        class_profile = dict(self._CLASS_LEVEL1_SPELL_REQUIREMENTS.get(class_key, {"cantrips": 0, "spells": 0}))
+        race_profile = self.race_spellcasting_grants(race_name, subrace_name)
+
+        class_name = class_key.replace("_", " ").strip().title()
+        rows = self._load_unified_spells_rows()
+        cantrip_pool: list[str] = []
+        spell_pool: list[str] = []
+        seen_cantrips: set[str] = set()
+        seen_spells: set[str] = set()
+        for row in rows:
+            if class_name.lower() not in self._row_classes(row):
+                continue
+            spell_name = str(row.get("name", "") or "").strip()
+            if not spell_name:
+                continue
+            try:
+                level = int(row.get("level_int", 0) or 0)
+            except Exception:
+                level = 0
+            key = spell_name.lower()
+            if level <= 0 and key not in seen_cantrips:
+                seen_cantrips.add(key)
+                cantrip_pool.append(spell_name)
+            elif level == 1 and key not in seen_spells:
+                seen_spells.add(key)
+                spell_pool.append(spell_name)
+
+        bonus_class = str(race_profile.get("bonus_cantrip_class", "") or "").strip().replace("_", " ").title()
+        if bonus_class:
+            for row in rows:
+                if bonus_class.lower() not in self._row_classes(row):
+                    continue
+                spell_name = str(row.get("name", "") or "").strip()
+                if not spell_name:
+                    continue
+                try:
+                    level = int(row.get("level_int", 0) or 0)
+                except Exception:
+                    level = 0
+                key = spell_name.lower()
+                if level <= 0 and key not in seen_cantrips:
+                    seen_cantrips.add(key)
+                    cantrip_pool.append(spell_name)
+
+        cantrip_pool.sort()
+        spell_pool.sort()
+
+        required_cantrips = int(class_profile.get("cantrips", 0) or 0) + int(race_profile.get("bonus_cantrip_choices", 0) or 0)
+        required_spells = int(class_profile.get("spells", 0) or 0)
+        return {
+            "class_slug": class_key,
+            "required_cantrips": max(0, required_cantrips),
+            "required_spells": max(0, required_spells),
+            "cantrip_pool": cantrip_pool,
+            "spell_pool": spell_pool,
+            "granted_cantrips": list(race_profile.get("granted_cantrips", []) or []),
+            "granted_spells": list(race_profile.get("granted_spells", []) or []),
+            "spellcasting": bool(required_cantrips or required_spells or race_profile.get("granted_cantrips") or race_profile.get("granted_spells")),
+        }
+
+    @staticmethod
+    def _normalize_unique_spell_names(rows: list[str]) -> list[str]:
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for row in list(rows or []):
+            text = str(row or "").strip()
+            key = text.lower()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            normalized.append(text)
+        return normalized
+
+    def resolve_starting_spell_selection(
+        self,
+        profile: dict[str, object],
+        *,
+        selected_cantrips: list[str] | None = None,
+        selected_spells: list[str] | None = None,
+    ) -> tuple[list[str], list[str]]:
+        granted_cantrips = self._normalize_unique_spell_names(list(profile.get("granted_cantrips", []) or []))
+        granted_spells = self._normalize_unique_spell_names(list(profile.get("granted_spells", []) or []))
+        pool_cantrips = self._normalize_unique_spell_names(list(profile.get("cantrip_pool", []) or []))
+        pool_spells = self._normalize_unique_spell_names(list(profile.get("spell_pool", []) or []))
+        required_cantrips = max(0, int(profile.get("required_cantrips", 0) or 0))
+        required_spells = max(0, int(profile.get("required_spells", 0) or 0))
+
+        cantrips: list[str] = list(granted_cantrips)
+        spells: list[str] = list(granted_spells)
+
+        selected_cantrip_rows = self._normalize_unique_spell_names(list(selected_cantrips or []))
+        selected_spell_rows = self._normalize_unique_spell_names(list(selected_spells or []))
+
+        for row in selected_cantrip_rows:
+            if row in pool_cantrips and row not in cantrips:
+                cantrips.append(row)
+            if len(cantrips) >= required_cantrips:
+                break
+        for row in pool_cantrips:
+            if row not in cantrips:
+                cantrips.append(row)
+            if len(cantrips) >= required_cantrips:
+                break
+
+        for row in selected_spell_rows:
+            if row in pool_spells and row not in spells:
+                spells.append(row)
+            if len(spells) >= required_spells:
+                break
+        for row in pool_spells:
+            if row not in spells:
+                spells.append(row)
+            if len(spells) >= required_spells:
+                break
+
+        return cantrips[:required_cantrips] if required_cantrips > 0 else cantrips, spells[:required_spells] if required_spells > 0 else spells
+
+    def requires_starting_spell_selection(
+        self,
+        class_slug: str,
+        *,
+        race_name: str | None = None,
+        subrace_name: str | None = None,
+    ) -> bool:
+        profile = self.list_starting_spell_options(class_slug, race_name=race_name, subrace_name=subrace_name)
+        return bool(profile.get("spellcasting", False))
 
     def class_detail_view(self, chosen_class: CharacterClass) -> CharacterClassDetailView:
         recommended = self.format_attribute_line(chosen_class.base_attributes)
@@ -207,22 +775,24 @@ class CharacterCreationService:
         difficulty: DifficultyPreset | None = None,
         subclass_slug: str | None = None,
         alignment: str | None = None,
+        starting_equipment_override: list[str] | None = None,
+        starting_gold_bonus: int = 0,
+        selected_cantrips: list[str] | None = None,
+        selected_known_spells: list[str] | None = None,
+        selected_tool_proficiencies: list[str] | None = None,
+        selected_languages: list[str] | None = None,
+        personality_profile: dict[str, str] | None = None,
+        class_feature_choices: dict[str, object] | None = None,
+        selected_feat_slug: str | None = None,
+        generated_name_gender: str | None = None,
     ) -> "Character":
         provided_name = (name or "").strip()
-        if not provided_name and self.name_generator is not None:
-            existing_count = 0
-            try:
-                existing_count = len(self.character_repo.list_all())
-            except Exception:
-                existing_count = 0
-            generated = self.name_generator.suggest_character_name(
+        if not provided_name:
+            name = self.suggest_generated_name(
                 race_name=race.name if race else None,
-                context={
-                    "class_index": class_index,
-                    "existing_count": existing_count,
-                },
+                class_index=class_index,
+                gender=generated_name_gender,
             )
-            name = self.sanitize_name(generated)
         else:
             name = self.sanitize_name(name)
         classes = self.class_repo.list_playable()
@@ -251,9 +821,81 @@ class CharacterCreationService:
             alignment=CharacterAlignment.normalize(alignment),
         )
 
+        if starting_equipment_override is not None:
+            character.inventory = [str(item) for item in list(starting_equipment_override or []) if str(item).strip()]
+
+        if int(starting_gold_bonus or 0) > 0:
+            character.money = int(getattr(character, "money", 0) or 0) + int(starting_gold_bonus)
+
+        if selected_cantrips is not None or selected_known_spells is not None:
+            spell_profile = self.list_starting_spell_options(
+                chosen.slug,
+                race_name=getattr(effective_race, "name", "") if effective_race is not None else "",
+                subrace_name=getattr(subrace, "name", "") if subrace is not None else "",
+            )
+            resolved_cantrips, resolved_spells = self.resolve_starting_spell_selection(
+                spell_profile,
+                selected_cantrips=list(selected_cantrips or []),
+                selected_spells=list(selected_known_spells or []),
+            )
+            character.cantrips = list(resolved_cantrips)
+            character.known_spells = list(resolved_spells)
+
+        if selected_tool_proficiencies:
+            tools = self._normalize_unique_spell_names([str(row) for row in list(selected_tool_proficiencies or [])])
+            flags = getattr(character, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                character.flags = flags
+            flags["tool_proficiencies"] = list(tools)
+            existing = list(getattr(character, "proficiencies", []) or [])
+            for tool in tools:
+                marker = f"Tool: {tool}"
+                if marker not in existing:
+                    existing.append(marker)
+            character.proficiencies = existing
+
+        if selected_languages:
+            languages = self._normalize_unique_spell_names([str(row) for row in list(selected_languages or [])])
+            flags = getattr(character, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                character.flags = flags
+            flags["languages"] = list(languages)
+
+        if isinstance(personality_profile, dict) and personality_profile:
+            trait = str(personality_profile.get("trait", "") or "").strip()
+            ideal = str(personality_profile.get("ideal", "") or "").strip()
+            bond = str(personality_profile.get("bond", "") or "").strip()
+            flaw = str(personality_profile.get("flaw", "") or "").strip()
+            flags = getattr(character, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                character.flags = flags
+            flags["personality_profile"] = {
+                "trait": trait,
+                "ideal": ideal,
+                "bond": bond,
+                "flaw": flaw,
+            }
+
+        self._apply_level1_class_feature_choices(
+            character,
+            class_slug=chosen.slug,
+            choices=dict(class_feature_choices or {}),
+        )
+        self._apply_level1_feat_choice(
+            character,
+            race_name=getattr(effective_race, "name", "") if effective_race is not None else "",
+            subrace_name=getattr(subrace, "name", "") if subrace is not None else "",
+            feat_slug=selected_feat_slug,
+        )
+
         selected_subclass = resolve_subclass(chosen.slug, subclass_slug)
         if subclass_slug and selected_subclass is None:
             raise ValueError("Invalid subclass selection.")
+        if selected_subclass is not None and int(self.subclass_selection_level_for_class(chosen.slug)) > 1:
+            raise ValueError("Subclass cannot be selected at level 1 for this class.")
         if selected_subclass is not None:
             flags = getattr(character, "flags", None)
             if not isinstance(flags, dict):
@@ -278,6 +920,95 @@ class CharacterCreationService:
                     pass
 
         return character
+
+    def _apply_level1_class_feature_choices(
+        self,
+        character,
+        *,
+        class_slug: str,
+        choices: dict[str, object],
+    ) -> None:
+        if not isinstance(choices, dict) or not choices:
+            return
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        class_key = str(class_slug or "").strip().lower()
+
+        if class_key == "fighter":
+            style = str(choices.get("fighting_style", "") or "").strip()
+            if style and style in self._FIGHTING_STYLE_OPTIONS:
+                flags["fighting_style"] = style
+                style_key = style.lower()
+                if style_key == "defence":
+                    character.armour_class = int(getattr(character, "armour_class", 10) or 10) + 1
+                elif style_key == "dueling":
+                    character.attack_bonus = int(getattr(character, "attack_bonus", 0) or 0) + 1
+                elif style_key == "archery":
+                    character.attack_bonus = int(getattr(character, "attack_bonus", 0) or 0) + 1
+                elif style_key == "great weapon fighting":
+                    character.attack_max = int(getattr(character, "attack_max", 4) or 4) + 1
+                elif style_key == "protection":
+                    character.armour_class = int(getattr(character, "armour_class", 10) or 10) + 1
+
+        if class_key == "rogue":
+            expertise_rows = [str(row) for row in list(choices.get("expertise_skills", []) or []) if str(row).strip()]
+            if expertise_rows:
+                normalized = self._normalize_unique_spell_names(expertise_rows)[:2]
+                flags["expertise_skills"] = list(normalized)
+                training = flags.get("skill_training")
+                if not isinstance(training, dict):
+                    training = {}
+                    flags["skill_training"] = training
+                modifiers = training.get("modifiers")
+                if not isinstance(modifiers, dict):
+                    modifiers = {}
+                    training["modifiers"] = modifiers
+                for skill_label in normalized:
+                    slug = str(skill_label).strip().lower().replace(" ", "_").replace("-", "_")
+                    current = int(modifiers.get(slug, 0) or 0)
+                    modifiers[slug] = max(current, 2)
+
+        if class_key == "sorcerer":
+            ancestry = str(choices.get("draconic_ancestry", "") or "").strip()
+            if ancestry and ancestry in self._DRACONIC_ANCESTRY_OPTIONS:
+                flags["draconic_ancestry"] = ancestry
+
+    def _apply_level1_feat_choice(
+        self,
+        character,
+        *,
+        race_name: str,
+        subrace_name: str,
+        feat_slug: str | None,
+    ) -> None:
+        if not self.is_feat_selection_eligible(race_name, subrace_name):
+            return
+        slug = str(feat_slug or "").strip().lower()
+        if not slug:
+            return
+        valid = {str(row.get("slug", "") or "").strip().lower() for row in self._LEVEL1_FEAT_OPTIONS}
+        if slug not in valid:
+            return
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        flags["level1_feat"] = slug
+
+        if slug == "tough":
+            character.hp_max = int(getattr(character, "hp_max", 1) or 1) + 2
+            character.hp_current = int(getattr(character, "hp_current", 1) or 1) + 2
+        elif slug == "durable":
+            character.hp_max = int(getattr(character, "hp_max", 1) or 1) + 1
+            character.hp_current = int(getattr(character, "hp_current", 1) or 1) + 1
+        elif slug == "athlete":
+            character.speed = int(getattr(character, "speed", 30) or 30) + 5
+        elif slug == "alert":
+            flags["initiative_bonus"] = int(flags.get("initiative_bonus", 0) or 0) + 1
+        elif slug == "war_caster":
+            flags["war_caster"] = True
 
     def standard_array_for_class(self, cls: CharacterClass) -> Dict[str, int]:
         primary_raw = cls.primary_ability or "STR"
@@ -324,6 +1055,34 @@ class CharacterCreationService:
     def _roll_4d6_drop_lowest(rng: random.Random) -> int:
         rolls = sorted([rng.randint(1, 6) for _ in range(4)], reverse=True)
         return sum(rolls[:3])
+
+    def suggest_generated_name(
+        self,
+        race_name: str | None = None,
+        class_index: int = 0,
+        gender: str | None = None,
+    ) -> str:
+        if self.name_generator is None:
+            return self.sanitize_name("")
+
+        existing_count = 0
+        try:
+            existing_count = len(self.character_repo.list_all())
+        except Exception:
+            existing_count = 0
+
+        safe_class_index = max(0, int(class_index or 0))
+        self._name_generation_sequence = int(self._name_generation_sequence) + 1
+        generated = self.name_generator.suggest_character_name(
+            race_name=race_name,
+            gender=gender,
+            context={
+                "class_index": safe_class_index,
+                "existing_count": existing_count,
+                "generation_index": int(self._name_generation_sequence),
+            },
+        )
+        return self.sanitize_name(generated)
 
     @staticmethod
     def sanitize_name(raw: str, max_length: int = 20) -> str:
@@ -697,6 +1456,12 @@ class CharacterCreationService:
                     parent_race="Human",
                     bonuses={"CHA": 1},
                     traits=["Silver Tongue"],
+                ),
+                Subrace(
+                    name="Variant Human",
+                    parent_race="Human",
+                    bonuses={"STR": 1, "DEX": 1},
+                    traits=["Bonus Feat", "Bonus Skill"],
                 ),
             ],
             "dragonborn": [

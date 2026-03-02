@@ -93,6 +93,9 @@ class ExploreView:
     has_encounter: bool
     message: str
     enemies: List[EnemyView] = field(default_factory=list)
+    light_level: str = "unknown"
+    detection_state: str = "unaware"
+    detection_note: str = ""
 
 
 @dataclass
@@ -100,6 +103,10 @@ class SpellOptionView:
     slug: str
     label: str
     playable: bool
+    level_int: int = 0
+    cast_levels: List[int] = field(default_factory=list)
+    components: str = ""
+    ritual: bool = False
 
 
 @dataclass
@@ -119,6 +126,14 @@ class CharacterCreationSummaryView:
     race_traits: List[str] = field(default_factory=list)
     background_features: List[str] = field(default_factory=list)
     inventory: List[str] = field(default_factory=list)
+    tool_proficiencies: List[str] = field(default_factory=list)
+    languages: List[str] = field(default_factory=list)
+    personality_trait: str = ""
+    personality_ideal: str = ""
+    personality_bond: str = ""
+    personality_flaw: str = ""
+    class_feature_summary: List[str] = field(default_factory=list)
+    feat_name: str = ""
     starting_location_name: str = "Starting Town"
     subclass_name: str = ""
 

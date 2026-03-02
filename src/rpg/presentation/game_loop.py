@@ -565,6 +565,20 @@ def _render_character_sheet(sheet) -> None:
 
 def _render_quest_journal(journal) -> None:
     clear_screen()
+
+    def _style_urgency(value: str) -> str:
+        raw = str(value or "").strip()
+        lower = raw.lower()
+        if not raw:
+            return ""
+        if any(token in lower for token in ("urgent", "due now", "hostages", "running out")):
+            return f"[red]{raw}[/red]"
+        if "failed" in lower:
+            return f"[bold red]{raw}[/bold red]"
+        if any(token in lower for token in ("stable", "due in", "ready to turn in")):
+            return f"[dim]{raw}[/dim]"
+        return raw
+
     if _CONSOLE is not None and Panel is not None and Table is not None:
         if not journal.sections:
             _CONSOLE.print(
@@ -589,7 +603,7 @@ def _render_quest_journal(journal) -> None:
                     section.title,
                     quest.title,
                     quest.objective_summary or f"{quest.progress}/{quest.target}",
-                    quest.urgency_label,
+                    _style_urgency(getattr(quest, "urgency_label", "")),
                     f"{quest.reward_xp} XP, {quest.reward_money}g",
                 )
         _CONSOLE.print(
@@ -1128,9 +1142,9 @@ def _run_town(game_service, character_id: int):
         town_name = str(getattr(town_view, "location_name", "") or "Town")
         choice = arrow_menu(
             f"Town Options — {town_name}",
-            ["Talk", "Quest Board", "Rumour Board", "Shop", "Training", "Travel Prep", "Lay Low", "View Factions", "Leave Town"],
+            ["Talk", "Quest Board", "Rumour Board", "Shop", "Training", "Downtime", "Travel Prep", "Lay Low", "View Factions", "Leave Town"],
         )
-        if choice in {-1, 8}:
+        if choice in {-1, 9}:
             return
         if choice == 1:
             _run_quest_board(game_service, character_id)
@@ -1145,12 +1159,15 @@ def _run_town(game_service, character_id: int):
             _run_training(game_service, character_id)
             continue
         if choice == 5:
-            _run_travel_prep(game_service, character_id)
+            _run_downtime(game_service, character_id)
             continue
         if choice == 6:
-            _run_pressure_relief(game_service, character_id)
+            _run_travel_prep(game_service, character_id)
             continue
         if choice == 7:
+            _run_pressure_relief(game_service, character_id)
+            continue
+        if choice == 8:
             standings_view = game_service.get_faction_standings_view_intent(character_id)
             _render_faction_standings(
                 standings_view.standings,
@@ -1409,6 +1426,34 @@ def _run_training(game_service, character_id: int):
         _prompt_continue()
 
 
+def _run_downtime(game_service, character_id: int):
+    while True:
+        context = game_service.get_location_context_intent(character_id)
+        town_name = context.current_location_name or "Town"
+        options = list(game_service.get_downtime_options_intent(character_id) or [])
+        labels = [label for _activity_id, label in options]
+        labels.append("Back")
+        selected = arrow_menu(f"Downtime — {town_name}", labels)
+        if selected in {-1, len(labels) - 1}:
+            return
+        activity_id, activity_label = options[selected]
+        if "[Locked:" in activity_label:
+            clear_screen()
+            _render_message_panel(
+                "Downtime",
+                ["That activity is currently unavailable."],
+                border_style=_BORDER_TOWN,
+                panel_key="town",
+            )
+            _prompt_continue()
+            continue
+
+        result = game_service.submit_downtime_intent(character_id, activity_id)
+        clear_screen()
+        _render_message_panel("Downtime Result", list(result.messages or []), border_style=_BORDER_TOWN, panel_key="town")
+        _prompt_continue()
+
+
 def _run_travel_prep(game_service, character_id: int):
     while True:
         prep_view = game_service.get_travel_prep_view_intent(character_id)
@@ -1490,6 +1535,17 @@ def _run_quest_board(game_service, character_id: int):
 
 def _run_explore(game_service, character_id: int):
     while True:
+        clear_screen()
+        environment = game_service.get_exploration_environment_intent(character_id)
+        env_lines = [
+            f"Lighting: {str(environment.get('light_level', 'Unknown') or 'Unknown')}",
+            f"Status: {str(environment.get('detection_state', 'Unaware') or 'Unaware')}",
+        ]
+        note = str(environment.get("detection_note", "") or "").strip()
+        if note:
+            env_lines.append(f"Note: {note}")
+        _render_message_panel("Environment", env_lines, border_style=_BORDER_LOOP, panel_key="loop")
+
         choice = arrow_menu(
             "Wilderness Actions",
             [
@@ -1498,10 +1554,12 @@ def _run_explore(game_service, character_id: int):
                 "Investigate (INT - Investigation)",
                 "Forage (WIS - Nature)",
                 "Sneak (DEX - Stealth)",
+                "Wait and Observe (Pass Time)",
+                "Throw Distraction (DEX - Deception/Sleight)",
                 "Back",
             ],
         )
-        if choice in {-1, 5}:
+        if choice in {-1, 7}:
             return
 
         if choice == 1:
@@ -1526,6 +1584,18 @@ def _run_explore(game_service, character_id: int):
             result = game_service.wilderness_action_intent(character_id, "sneak")
             clear_screen()
             _render_message_panel("Sneak", list(result.messages or []), border_style=_BORDER_LOOP, panel_key="loop")
+            _prompt_continue()
+            continue
+        if choice == 5:
+            result = game_service.wilderness_action_intent(character_id, "wait")
+            clear_screen()
+            _render_message_panel("Observe", list(result.messages or []), border_style=_BORDER_LOOP, panel_key="loop")
+            _prompt_continue()
+            continue
+        if choice == 6:
+            result = game_service.wilderness_action_intent(character_id, "distract")
+            clear_screen()
+            _render_message_panel("Distract", list(result.messages or []), border_style=_BORDER_LOOP, panel_key="loop")
             _prompt_continue()
             continue
 
@@ -1556,6 +1626,7 @@ def _run_explore(game_service, character_id: int):
         lines = [
             game_service.encounter_intro_intent(enemies[0], character_id=character_id),
             _scene_flavour(scene, verbosity=game_service.get_combat_verbosity()),
+            f"Lighting: {str(getattr(explore_view, 'light_level', 'Unknown') or 'Unknown')} | Status: {str(getattr(explore_view, 'detection_state', 'Unaware') or 'Unaware')}",
             f"Hostiles: {', '.join(f'{enemy.name} ({enemy.hp_current}/{enemy.hp_max})' for enemy in enemies)}",
         ]
         _render_message_panel("Encounter", lines, border_style=_BORDER_LOOP, panel_key="loop")

@@ -26,6 +26,11 @@ def _print_help_surface() -> None:
     print("- Startup issues: verify RPG_DATABASE_URL or unset it to use in-memory mode.")
 
 
+def _is_mysql_rng_seed_schema_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "unknown column 'rng_seed'" in text or ("unknown column" in text and "rng_seed" in text)
+
+
 
 def _is_mysql_connectivity_error(exc: Exception) -> bool:
     text = str(exc).lower()
@@ -61,6 +66,8 @@ def main():
                 exc = fallback_exc
         print("An unexpected error occurred. The game closed safely.")
         print(f"Reason: {exc}")
+        if _is_mysql_rng_seed_schema_error(exc):
+            print("Hint: run `python -m rpg.infrastructure.db.mysql.migrate` to apply missing schema updates.")
         _print_help_surface()
 
 

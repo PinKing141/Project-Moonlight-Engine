@@ -1,121 +1,19 @@
 from __future__ import annotations
 
-from rpg.application.services.balance_tables import (
-    FIRST_HUNT_QUEST_ID,
-    FIRST_HUNT_REWARD_MONEY,
-    FIRST_HUNT_REWARD_XP,
-    FIRST_HUNT_TARGET_KILLS,
-)
 from rpg.application.services.event_bus import EventBus
 from rpg.application.services.seed_policy import derive_seed
 from rpg.domain.events import MonsterSlain, TickAdvanced
+from rpg.domain.models.quest import (
+    cataclysm_quest_templates,
+    quest_payload_from_template,
+    quest_template_objective_kind,
+    standard_quest_templates,
+)
 from rpg.domain.repositories import CharacterRepository, WorldRepository
 
 
 class QuestService:
-    QUEST_ID = FIRST_HUNT_QUEST_ID
-    QUEST_TEMPLATES = (
-        {
-            "quest_id": FIRST_HUNT_QUEST_ID,
-            "status": "available",
-            "objective_kind": "kill_any",
-            "progress": 0,
-            "target": FIRST_HUNT_TARGET_KILLS,
-            "reward_xp": FIRST_HUNT_REWARD_XP,
-            "reward_money": FIRST_HUNT_REWARD_MONEY,
-        },
-        {
-            "quest_id": "trail_patrol",
-            "status": "available",
-            "objective_kind": "kill_any",
-            "progress": 0,
-            "target": 2,
-            "reward_xp": 16,
-            "reward_money": 7,
-        },
-        {
-            "quest_id": "supply_drop",
-            "status": "available",
-            "objective_kind": "travel_count",
-            "progress": 0,
-            "target": 2,
-            "reward_xp": 12,
-            "reward_money": 8,
-        },
-        {
-            "quest_id": "crown_hunt_order",
-            "status": "available",
-            "objective_kind": "kill_any",
-            "progress": 0,
-            "target": 2,
-            "reward_xp": 18,
-            "reward_money": 9,
-        },
-        {
-            "quest_id": "syndicate_route_run",
-            "status": "available",
-            "objective_kind": "travel_count",
-            "progress": 0,
-            "target": 3,
-            "reward_xp": 16,
-            "reward_money": 10,
-        },
-        {
-            "quest_id": "forest_path_clearance",
-            "status": "available",
-            "objective_kind": "kill_any",
-            "progress": 0,
-            "target": 3,
-            "reward_xp": 20,
-            "reward_money": 8,
-        },
-        {
-            "quest_id": "ruins_wayfinding",
-            "status": "available",
-            "objective_kind": "travel_count",
-            "progress": 0,
-            "target": 2,
-            "reward_xp": 14,
-            "reward_money": 9,
-        },
-    )
-    CATACLYSM_QUEST_TEMPLATES = (
-        {
-            "quest_id": "cataclysm_scout_front",
-            "status": "available",
-            "objective_kind": "kill_any",
-            "progress": 0,
-            "target": 3,
-            "reward_xp": 26,
-            "reward_money": 12,
-            "cataclysm_pushback": True,
-            "pushback_tier": 1,
-        },
-        {
-            "quest_id": "cataclysm_supply_lines",
-            "status": "available",
-            "objective_kind": "travel_count",
-            "progress": 0,
-            "target": 2,
-            "reward_xp": 24,
-            "reward_money": 14,
-            "cataclysm_pushback": True,
-            "pushback_tier": 1,
-        },
-        {
-            "quest_id": "cataclysm_alliance_accord",
-            "status": "available",
-            "objective_kind": "kill_any",
-            "progress": 0,
-            "target": 4,
-            "reward_xp": 34,
-            "reward_money": 18,
-            "cataclysm_pushback": True,
-            "pushback_tier": 2,
-            "requires_alliance_reputation": 10,
-            "requires_alliance_count": 2,
-        },
-    )
+    QUEST_ID = "first_hunt"
 
     def __init__(
         self,
@@ -202,8 +100,8 @@ class QuestService:
         for quest_id in removable:
             quests.pop(quest_id, None)
 
-        for template in self.QUEST_TEMPLATES:
-            quest_id = str(template.get("quest_id", ""))
+        for template in standard_quest_templates():
+            quest_id = str(template.slug)
             if not quest_id or quest_id in quests:
                 continue
             seed_value = derive_seed(
@@ -211,18 +109,12 @@ class QuestService:
                 context={
                     "world_turn": int(world_turn),
                     "quest_id": quest_id,
-                    "objective_kind": str(template.get("objective_kind", "kill_any")),
+                    "objective_kind": quest_template_objective_kind(template),
                 },
             )
-            quests[quest_id] = {
-                "status": str(template.get("status", "available")),
-                "objective_kind": str(template.get("objective_kind", "kill_any")),
-                "progress": int(template.get("progress", 0)),
-                "target": int(template.get("target", 1)),
-                "reward_xp": int(template.get("reward_xp", 0)),
-                "reward_money": int(template.get("reward_money", 0)),
-                "seed_key": f"quest:{quest_id}:{int(seed_value)}",
-            }
+            payload = quest_payload_from_template(template)
+            payload["seed_key"] = f"quest:{quest_id}:{int(seed_value)}"
+            quests[quest_id] = payload
 
     def _sync_cataclysm_templates(self, *, world, quests: dict, world_turn: int) -> None:
         state = world.flags.get("cataclysm_state", {}) if isinstance(world.flags, dict) else {}
@@ -240,8 +132,8 @@ class QuestService:
         for quest_id in removable:
             quests.pop(quest_id, None)
 
-        for template in self.CATACLYSM_QUEST_TEMPLATES:
-            quest_id = str(template.get("quest_id", ""))
+        for template in cataclysm_quest_templates():
+            quest_id = str(template.slug)
             if not quest_id:
                 continue
             existing = quests.get(quest_id)
@@ -261,11 +153,9 @@ class QuestService:
                     "phase": phase,
                 },
             )
-            payload = dict(template)
+            payload = quest_payload_from_template(template, cataclysm_kind=kind, cataclysm_phase=phase)
             payload["seed_key"] = f"quest:{quest_id}:{int(seed_value)}"
             payload["spawned_turn"] = int(world_turn)
-            payload["pushback_focus"] = kind
-            payload["phase"] = phase
             quests[quest_id] = payload
 
     def on_monster_slain(self, event: MonsterSlain) -> None:

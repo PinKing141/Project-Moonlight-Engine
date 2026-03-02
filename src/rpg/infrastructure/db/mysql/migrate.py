@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Set
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 
@@ -232,16 +232,16 @@ def _ensure_schema_migrations_table(conn) -> None:
 
 
 def _already_applied(conn, migration_name: str) -> bool:
-    row = conn.exec_driver_sql(
-        "SELECT migration_name FROM schema_migrations WHERE migration_name = :name",
+    row = conn.execute(
+        text("SELECT migration_name FROM schema_migrations WHERE migration_name = :name"),
         {"name": migration_name},
     ).first()
     return row is not None
 
 
 def _mark_applied(conn, migration_name: str) -> None:
-    conn.exec_driver_sql(
-        "INSERT INTO schema_migrations (migration_name) VALUES (:name)",
+    conn.execute(
+        text("INSERT INTO schema_migrations (migration_name) VALUES (:name)"),
         {"name": migration_name},
     )
 

@@ -256,6 +256,11 @@ def create_game_service() -> GameService:
                 "Refusing silent in-memory fallback to avoid data loss. "
                 "Set RPG_DB_ALLOW_INMEMORY_FALLBACK=1 to opt into ephemeral mode."
             )
+            text = str(exc).lower()
+            if "unknown column 'rng_seed'" in text or ("unknown column" in text and "rng_seed" in text):
+                message = (
+                    f"{message} Run `python -m rpg.infrastructure.db.mysql.migrate` to apply missing schema updates."
+                )
             if not allow_fallback:
                 raise RuntimeError(f"{message} Reason: {exc}") from exc
             print(f"WARNING: {message} Reason: {exc}")

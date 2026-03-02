@@ -58,6 +58,20 @@ class MainEntryErrorHandlingTests(unittest.TestCase):
         self.assertEqual(create_mock.call_count, 2)
         self.assertNotIn("An unexpected error occurred", text)
 
+    def test_main_prints_migration_hint_for_rng_seed_schema_mismatch(self) -> None:
+        output = io.StringIO()
+        error = RuntimeError(
+            "MySQL bootstrap probe failed: (mysql.connector.errors.ProgrammingError) "
+            "1054 (42S22): Unknown column 'rng_seed' in 'field list'"
+        )
+
+        with mock.patch.object(runtime_main, "create_game_service", side_effect=error), mock.patch("sys.stdout", output):
+            runtime_main.main()
+
+        text = output.getvalue()
+        self.assertIn("An unexpected error occurred", text)
+        self.assertIn("python -m rpg.infrastructure.db.mysql.migrate", text)
+
 
 if __name__ == "__main__":
     unittest.main()

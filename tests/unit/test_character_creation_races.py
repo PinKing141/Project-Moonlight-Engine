@@ -521,16 +521,16 @@ class CharacterCreationRacesTests(unittest.TestCase):
         self.assertIn("School of Necromancy", names)
         self.assertIn("School of Divination", names)
 
-    def test_create_character_persists_selected_subclass_in_flags(self) -> None:
+    def test_create_character_persists_selected_subclass_for_level1_class(self) -> None:
         class_repo = _FakeClassRepo(
             [
                 CharacterClass(
                     id=1,
-                    name="Artificer",
-                    slug="artificer",
+                    name="Cleric",
+                    slug="cleric",
                     hit_die="d8",
-                    primary_ability="intelligence",
-                    base_attributes={"INT": 16},
+                    primary_ability="wisdom",
+                    base_attributes={"WIS": 16},
                 )
             ]
         )
@@ -545,11 +545,45 @@ class CharacterCreationRacesTests(unittest.TestCase):
         created = service.create_character(
             name="Vara",
             class_index=0,
-            subclass_slug="iron_vanguard",
+            subclass_slug="vitality",
         )
 
-        self.assertEqual("iron_vanguard", created.flags.get("subclass_slug"))
-        self.assertEqual("The Iron Vanguard", created.flags.get("subclass_name"))
+        self.assertEqual("vitality", created.flags.get("subclass_slug"))
+        self.assertEqual("Domain of Vitality", created.flags.get("subclass_name"))
+
+    def test_create_character_rejects_subclass_for_delayed_unlock_class(self) -> None:
+        class_repo = _FakeClassRepo(
+            [
+                CharacterClass(
+                    id=1,
+                    name="Fighter",
+                    slug="fighter",
+                    hit_die="d10",
+                    primary_ability="strength",
+                    base_attributes={"STR": 15},
+                )
+            ]
+        )
+        service = CharacterCreationService(
+            _FakeCharacterRepo(),
+            class_repo,
+            _FakeLocationRepo(),
+            open5e_client=None,
+        )
+
+        with self.assertRaises(ValueError):
+            service.create_character(name="Cato", class_index=0, subclass_slug="paragon")
+
+    def test_subclass_selection_level_matches_class_progression_rules(self) -> None:
+        service = CharacterCreationService(
+            _FakeCharacterRepo(),
+            _FakeClassRepo(),
+            _FakeLocationRepo(),
+            open5e_client=None,
+        )
+        self.assertEqual(1, service.subclass_selection_level_for_class("cleric"))
+        self.assertEqual(2, service.subclass_selection_level_for_class("wizard"))
+        self.assertEqual(3, service.subclass_selection_level_for_class("fighter"))
 
     def test_create_character_rejects_invalid_subclass(self) -> None:
         class_repo = _FakeClassRepo(

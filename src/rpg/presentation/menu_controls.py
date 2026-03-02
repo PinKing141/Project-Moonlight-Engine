@@ -6,10 +6,12 @@ try:
     from rich.console import Console
     from rich.panel import Panel
     from rich.live import Live
+    from rich.align import Align
 except Exception:  # pragma: no cover - optional dependency fallback
     Console = None
     Panel = None
     Live = None
+    Align = None
 
 try:  # Windows-specific keyboard handling
     import msvcrt  # type: ignore
@@ -178,30 +180,48 @@ def arrow_menu(
         last_noise_at = now
 
     def _build_rich_panel(index: int):
+        panel_cls = Panel
         body_lines: list[str] = []
         body_lines.append("[#d6c59d]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/#d6c59d]")
         for idx, option in enumerate(options):
             if idx == index:
-                body_lines.append(f"[bold black on yellow] ▶ {option} [/bold black on yellow]")
+                body_lines.append(f"[bold black on bright_cyan] ▶ {option} [/bold black on bright_cyan]")
             else:
                 body_lines.append(f"[white]  {option}[/white]")
         body_lines.append("")
         body_lines.append("[#d6c59d]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/#d6c59d]")
         if footer_hint:
             body_lines.append(f"[yellow]{footer_hint}[/yellow]")
-        body_lines.append("[dim]Use arrow keys to move, ENTER to select, ESC to cancel.[/dim]")
-        return Panel.fit(
+        body_lines.append("[bold white]Use arrow keys to move, ENTER to select, ESC to cancel.[/bold white]")
+        panel_width = 72
+        if _CONSOLE is not None:
+            try:
+                panel_width = max(56, min(108, int(_CONSOLE.size.width) - 8))
+            except Exception:
+                panel_width = 72
+        if panel_cls is None:
+            return "\n".join(body_lines)
+        panel = panel_cls(
             "\n".join(body_lines),
             title=_decorate_title(title),
-            border_style="yellow",
-            subtitle="[dim]↑/↓ Navigate • Enter Confirm • Esc Back[/dim]",
+            border_style="cyan",
+            subtitle="[bold white]↑/↓ Navigate • Enter Confirm • Esc Back[/bold white]",
             subtitle_align="left",
             padding=(0, 1),
+            width=panel_width,
+            expand=False,
         )
+        if Align is not None and _CONSOLE is not None:
+            try:
+                viewport_height = max(1, int(_CONSOLE.size.height))
+                return Align(panel, align="center", vertical="middle", height=viewport_height)
+            except Exception:
+                return Align.center(panel)
+        return panel
 
     if _CONSOLE is not None and Panel is not None and Live is not None:
         clear_screen()
-        with Live(_build_rich_panel(selected), console=_CONSOLE, refresh_per_second=30, transient=True) as live:
+        with Live(_build_rich_panel(selected), console=_CONSOLE, refresh_per_second=30, transient=True, screen=True) as live:
             while True:
                 raw_key = read_key()
                 key = normalize_menu_key(raw_key)

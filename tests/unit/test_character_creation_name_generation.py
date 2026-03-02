@@ -54,7 +54,36 @@ class _FakeNameGenerator:
         return "Borin"
 
 
+class _TrackingNameGenerator:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def suggest_character_name(self, race_name, gender=None, context=None):
+        payload = {
+            "race_name": race_name,
+            "gender": gender,
+            "context": dict(context or {}),
+        }
+        self.calls.append(payload)
+        index = int(payload["context"].get("generation_index", 0) or 0)
+        gender_token = str(gender or "random")
+        return f"{gender_token.title()}{index}"
+
+
 class CharacterCreationNameGenerationTests(unittest.TestCase):
+    def test_suggest_generated_name_uses_generator(self) -> None:
+        service = CharacterCreationService(
+            character_repo=_FakeCharacterRepo(),
+            class_repo=_FakeClassRepo(),
+            location_repo=_FakeLocationRepo(),
+            open5e_client=None,
+            name_generator=_FakeNameGenerator(),
+        )
+
+        generated = service.suggest_generated_name(race_name="Elf", class_index=0)
+
+        self.assertEqual("Aeris", generated)
+
     def test_blank_name_uses_generator(self) -> None:
         char_repo = _FakeCharacterRepo()
         service = CharacterCreationService(
@@ -74,6 +103,24 @@ class CharacterCreationNameGenerationTests(unittest.TestCase):
         self.assertEqual("Aeris", character.name)
         self.assertEqual(1, character.id)
         self.assertEqual("Aeris", char_repo.created[0].name)
+
+    def test_suggest_generated_name_forwards_gender_and_advances_sequence(self) -> None:
+        generator = _TrackingNameGenerator()
+        service = CharacterCreationService(
+            character_repo=_FakeCharacterRepo(),
+            class_repo=_FakeClassRepo(),
+            location_repo=_FakeLocationRepo(),
+            open5e_client=None,
+            name_generator=generator,
+        )
+
+        first = service.suggest_generated_name(race_name="Elf", class_index=0, gender="male")
+        second = service.suggest_generated_name(race_name="Elf", class_index=0, gender="male")
+
+        self.assertNotEqual(first, second)
+        self.assertEqual("male", generator.calls[0]["gender"])
+        self.assertEqual(1, int(generator.calls[0]["context"].get("generation_index", 0) or 0))
+        self.assertEqual(2, int(generator.calls[1]["context"].get("generation_index", 0) or 0))
 
 
 if __name__ == "__main__":

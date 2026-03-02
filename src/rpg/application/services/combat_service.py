@@ -8,11 +8,12 @@ from rpg.application.services.feature_effect_registry import (
     FeatureEffectContext,
     default_feature_effect_registry,
 )
-from rpg.domain.events import CombatFeatureTriggered
+from rpg.domain.events import CombatFeatureTriggered, ConcentrationBrokenEvent, EntityDamagedEvent
 from rpg.domain.models.character import Character
 from rpg.domain.models.entity import Entity
 from rpg.domain.models.feature import Feature
 from rpg.domain.models.stats import ability_modifier, ability_scores_from_mapping
+from rpg.domain.services.spellcasting import available_slot_levels, consume_slot, normalize_slot_ledger, restore_slots
 from rpg.domain.repositories import FeatureRepository, SpellRepository
 from rpg.application.spells.spell_definitions import SPELL_DEFINITIONS
 
@@ -247,6 +248,7 @@ class CombatService:
         "petrified": "Petrified",
         "prone": "Prone",
         "restrained": "Restrained",
+        "silenced": "Silenced",
         "exhaustion": "Exhaustion",
         "unconscious": "Unconscious",
     }
@@ -263,6 +265,11 @@ class CombatService:
         "exposed": "Exposed",
         "dodging": "Dodging",
         "disengaged": "Disengaged",
+    }
+    _COVER_BONUS_BY_LEVEL: Dict[str, int] = {
+        "none": 0,
+        "half": 2,
+        "three_quarters": 5,
     }
 
     @staticmethod
@@ -296,6 +303,7 @@ class CombatService:
                 "potency": max(1, int(row.get("potency", 1) or 1)),
                 "source_id": int(row.get("source_id", 0) or 0),
                 "source_name": str(row.get("source_name", "") or "").strip(),
+                "source_spell": str(row.get("source_spell", "") or "").strip().lower(),
             }
             for row in statuses
             if str(row.get("id", "")).strip()
@@ -490,6 +498,7 @@ class CombatService:
         potency: int = 1,
         source_name: str = "Effect",
         source_actor=None,
+        source_spell: str = "",
     ) -> None:
         key = str(status_id or "").strip().lower()
         if key not in self._STATUS_LABELS:
@@ -500,6 +509,7 @@ class CombatService:
         existing = next((row for row in statuses if str(row.get("id", "")).strip().lower() == key), None)
         source_id = int(getattr(source_actor, "id", 0) or 0)
         source_label = str(getattr(source_actor, "name", "") or "").strip() or str(source_name or "")
+        source_spell_key = str(source_spell or "").strip().lower()
         if existing is not None:
             existing["rounds"] = max(int(existing.get("rounds", 0) or 0), next_rounds)
             existing["potency"] = max(int(existing.get("potency", 1) or 1), next_potency)
@@ -507,6 +517,8 @@ class CombatService:
                 existing["source_id"] = source_id
             if source_label:
                 existing["source_name"] = source_label
+            if source_spell_key:
+                existing["source_spell"] = source_spell_key
         else:
             statuses.append(
                 {
@@ -515,6 +527,7 @@ class CombatService:
                     "potency": next_potency,
                     "source_id": source_id,
                     "source_name": source_label,
+                    "source_spell": source_spell_key,
                 }
             )
             self._log(log, f"{source_name}: {getattr(actor, 'name', 'Target')} is now {self._STATUS_LABELS[key]} ({next_rounds} rounds).", level="compact")
@@ -526,6 +539,7 @@ class CombatService:
                         "potency": 1,
                         "source_id": source_id,
                         "source_name": source_label,
+                        "source_spell": source_spell_key,
                     }
                 )
         self._set_actor_statuses(actor, statuses)
@@ -558,6 +572,7 @@ class CombatService:
                 damage = self._modify_incoming_damage(actor, damage)
                 hp_now = max(0, hp_now - damage)
                 self._log(log, f"{getattr(actor, 'name', 'Target')} burns for {damage} damage ({hp_now}/{hp_max}).", level="compact")
+                self._check_concentration_after_damage(target_actor=actor, source_actor=None, damage=damage, log=log)
             elif key == "poisoned":
                 if self._has_status(actor, "petrified"):
                     continue
@@ -565,6 +580,7 @@ class CombatService:
                 damage = self._modify_incoming_damage(actor, damage)
                 hp_now = max(0, hp_now - damage)
                 self._log(log, f"{getattr(actor, 'name', 'Target')} suffers {damage} poison damage ({hp_now}/{hp_max}).", level="compact")
+                self._check_concentration_after_damage(target_actor=actor, source_actor=None, damage=damage, log=log)
             elif key == "exhaustion":
                 if potency >= 6:
                     hp_now = 0
@@ -673,6 +689,288 @@ class CombatService:
     def _clear_actor_tactical_tags(self, actor) -> None:
         self._set_actor_tactical_tags(actor, {})
 
+    def _actor_runtime_state(self, actor) -> Dict[str, object]:
+        if isinstance(actor, Character):
+            flags = getattr(actor, "flags", None)
+            if not isinstance(flags, dict):
+                flags = {}
+                actor.flags = flags
+            payload = flags.get("combat_runtime_state")
+            if not isinstance(payload, dict):
+                payload = {}
+                flags["combat_runtime_state"] = payload
+            return payload
+
+        payload = getattr(actor, "_combat_runtime_state", None)
+        if not isinstance(payload, dict):
+            payload = {}
+            setattr(actor, "_combat_runtime_state", payload)
+        return payload
+
+    def _actor_tactical_state(self, actor) -> Dict[str, object]:
+        runtime = self._actor_runtime_state(actor)
+        payload = runtime.get("tactical_state")
+        if not isinstance(payload, dict):
+            payload = {
+                "stance": "neutral",
+                "cover": "none",
+                "engaged_with": [],
+            }
+            runtime["tactical_state"] = payload
+        engaged = payload.get("engaged_with")
+        if not isinstance(engaged, list):
+            payload["engaged_with"] = []
+        return payload
+
+    def _set_actor_tactical_state(self, actor, *, stance: str, cover: str | None = None, engaged_with: Optional[list[int]] = None) -> None:
+        state = self._actor_tactical_state(actor)
+        state["stance"] = str(stance or "neutral").strip().lower() or "neutral"
+        if cover is not None:
+            cover_key = str(cover or "none").strip().lower() or "none"
+            if cover_key not in self._COVER_BONUS_BY_LEVEL:
+                cover_key = "none"
+            state["cover"] = cover_key
+        if engaged_with is not None:
+            state["engaged_with"] = [int(row) for row in list(engaged_with) if int(row) > 0]
+
+    def _is_engaged_with(self, actor, other_actor) -> bool:
+        actor_id = int(getattr(other_actor, "id", 0) or 0)
+        if actor_id <= 0:
+            return False
+        state = self._actor_tactical_state(actor)
+        engaged_with = [int(row) for row in list(state.get("engaged_with", []) or []) if int(row) > 0]
+        return actor_id in engaged_with
+
+    def _actor_cover_bonus(self, actor) -> int:
+        state = self._actor_tactical_state(actor)
+        cover_key = str(state.get("cover", "none") or "none").strip().lower()
+        base = int(self._COVER_BONUS_BY_LEVEL.get(cover_key, 0))
+        if self._has_tactical_tag(actor, "cover"):
+            base = max(base, 2)
+        return int(base)
+
+    def _sync_pair_tactical_state(self, actor_a, actor_b, *, distance: str) -> None:
+        actor_a_id = int(getattr(actor_a, "id", 0) or 0)
+        actor_b_id = int(getattr(actor_b, "id", 0) or 0)
+        engaged = self._is_melee_range(distance)
+
+        if engaged and actor_b_id > 0:
+            stance_a = "disengaged" if self._has_tactical_tag(actor_a, "disengaged") else "engaged"
+            self._set_actor_tactical_state(actor_a, stance=stance_a, engaged_with=[actor_b_id])
+        else:
+            stance_a = "in_cover" if self._has_tactical_tag(actor_a, "cover") else "neutral"
+            self._set_actor_tactical_state(actor_a, stance=stance_a, engaged_with=[])
+
+        if engaged and actor_a_id > 0:
+            stance_b = "disengaged" if self._has_tactical_tag(actor_b, "disengaged") else "engaged"
+            self._set_actor_tactical_state(actor_b, stance=stance_b, engaged_with=[actor_a_id])
+        else:
+            stance_b = "in_cover" if self._has_tactical_tag(actor_b, "cover") else "neutral"
+            self._set_actor_tactical_state(actor_b, stance=stance_b, engaged_with=[])
+
+        if self._has_tactical_tag(actor_a, "cover"):
+            self._set_actor_tactical_state(actor_a, stance=str(self._actor_tactical_state(actor_a).get("stance", "neutral")), cover="half")
+        if self._has_tactical_tag(actor_b, "cover"):
+            self._set_actor_tactical_state(actor_b, stance=str(self._actor_tactical_state(actor_b).get("stance", "neutral")), cover="half")
+
+    def _actor_concentration(self, actor) -> Optional[Dict[str, object]]:
+        runtime = self._actor_runtime_state(actor)
+        payload = runtime.get("concentration")
+        return payload if isinstance(payload, dict) else None
+
+    def _set_actor_concentration(self, actor, payload: Optional[Dict[str, object]]) -> None:
+        runtime = self._actor_runtime_state(actor)
+        if isinstance(payload, dict):
+            runtime["concentration"] = payload
+        else:
+            runtime.pop("concentration", None)
+
+    def _start_concentration(self, *, caster, spell_slug: str, spell_name: str, targets: list, log: List[CombatLogEntry], round_no: int = 0) -> None:
+        previous = self._actor_concentration(caster)
+        if previous is not None:
+            prev_name = str(previous.get("spell_name", "spell") or "spell")
+            self._log(log, f"{getattr(caster, 'name', 'Caster')} releases concentration on {prev_name}.", level="compact")
+            self._break_concentration(actor=caster, reason="new concentration spell", log=log, round_no=round_no)
+
+        target_ids = [int(getattr(row, "id", 0) or 0) for row in list(targets or []) if int(getattr(row, "id", 0) or 0) > 0]
+        target_names = [str(getattr(row, "name", "") or "").strip() for row in list(targets or []) if str(getattr(row, "name", "") or "").strip()]
+        self._set_actor_concentration(
+            caster,
+            {
+                "spell_slug": str(spell_slug or "").strip().lower(),
+                "spell_name": str(spell_name or spell_slug).strip() or "Spell",
+                "target_ids": target_ids,
+                "target_names": target_names,
+                "target_refs": [row for row in list(targets or []) if row is not None],
+                "started_round": int(round_no),
+            },
+        )
+        self._log(log, f"{getattr(caster, 'name', 'Caster')} is now concentrating on {spell_name}.", level="compact")
+
+    def _remove_concentration_statuses(self, *, target, source_actor, spell_slug: str) -> list[str]:
+        spell_key = str(spell_slug or "").strip().lower()
+        if not spell_key:
+            return []
+        statuses = self._actor_statuses(target)
+        if not statuses:
+            return []
+
+        source_id = int(getattr(source_actor, "id", 0) or 0)
+        source_name = str(getattr(source_actor, "name", "") or "").strip().lower()
+        kept: list[dict[str, int | str]] = []
+        removed: list[str] = []
+        for row in statuses:
+            row_source_id = int(row.get("source_id", 0) or 0)
+            row_source_name = str(row.get("source_name", "") or "").strip().lower()
+            row_spell = str(row.get("source_spell", "") or "").strip().lower()
+            source_matches = (source_id > 0 and row_source_id == source_id) or (bool(source_name) and source_name == row_source_name)
+            spell_matches = row_spell == spell_key
+            if source_matches and spell_matches:
+                removed.append(str(row.get("id", "") or "effect").strip().lower())
+                continue
+            kept.append(row)
+
+        if len(kept) != len(statuses):
+            self._set_actor_statuses(target, kept)
+        return removed
+
+    def _clear_concentration_effects(self, *, actor, payload: Dict[str, object], log: List[CombatLogEntry]) -> None:
+        spell_slug = str(payload.get("spell_slug", "") or "").strip().lower()
+        if not spell_slug:
+            return
+        target_refs = [row for row in list(payload.get("target_refs", []) or []) if row is not None]
+        for target in target_refs:
+            removed = self._remove_concentration_statuses(target=target, source_actor=actor, spell_slug=spell_slug)
+            if removed:
+                effects = ", ".join(sorted({entry.replace("_", " ") for entry in removed}))
+                self._log(log, f"Concentration ends: {getattr(target, 'name', 'Target')} loses {effects}.", level="compact")
+
+    def _break_concentration(self, *, actor, reason: str, log: List[CombatLogEntry], round_no: int = 0) -> None:
+        payload = self._actor_concentration(actor)
+        if payload is None:
+            return
+
+        spell_name = str(payload.get("spell_name", "spell") or "spell")
+        spell_slug = str(payload.get("spell_slug", "") or "")
+        target_ids = [int(row) for row in list(payload.get("target_ids", []) or []) if int(row) > 0]
+        self._clear_concentration_effects(actor=actor, payload=payload, log=log)
+        self._set_actor_concentration(actor, None)
+        self._log(log, f"{getattr(actor, 'name', 'Caster')}'s {spell_name} fades ({reason}).", level="compact")
+
+        if self.event_publisher is None:
+            return
+        try:
+            self.event_publisher(
+                ConcentrationBrokenEvent(
+                    entity_id=int(getattr(actor, "id", 0) or 0),
+                    entity_name=str(getattr(actor, "name", "") or ""),
+                    spell_slug=spell_slug,
+                    spell_name=spell_name,
+                    targets=target_ids,
+                    reason=str(reason or "broken"),
+                    round_number=int(round_no),
+                )
+            )
+        except Exception:
+            return
+
+    def _concentration_save_modifier(self, actor) -> int:
+        if isinstance(actor, Character):
+            return int(self._ability_scores(actor).constitution_mod)
+        return 0
+
+    @staticmethod
+    def _has_war_caster(actor) -> bool:
+        if not isinstance(actor, Character):
+            return False
+        flags = getattr(actor, "flags", None)
+        if not isinstance(flags, dict):
+            return False
+        return bool(flags.get("war_caster", False))
+
+    @staticmethod
+    def _character_initiative_bonus(actor) -> int:
+        if not isinstance(actor, Character):
+            return 0
+        flags = getattr(actor, "flags", None)
+        if not isinstance(flags, dict):
+            return 0
+        return int(flags.get("initiative_bonus", 0) or 0)
+
+    def _publish_damage_event(self, *, target_actor, source_actor, damage: int, round_no: int = 0) -> None:
+        if self.event_publisher is None or int(damage) <= 0:
+            return
+        try:
+            self.event_publisher(
+                EntityDamagedEvent(
+                    entity_id=int(getattr(target_actor, "id", 0) or 0),
+                    entity_name=str(getattr(target_actor, "name", "") or ""),
+                    damage_amount=int(damage),
+                    source_entity_id=int(getattr(source_actor, "id", 0) or 0) if source_actor is not None else None,
+                    source_name=str(getattr(source_actor, "name", "") or "") if source_actor is not None else "",
+                    round_number=int(round_no),
+                )
+            )
+        except Exception:
+            return
+
+    def _check_concentration_after_damage(self, *, target_actor, source_actor, damage: int, log: List[CombatLogEntry], round_no: int = 0) -> None:
+        amount = int(damage or 0)
+        if amount <= 0:
+            return
+
+        self._publish_damage_event(target_actor=target_actor, source_actor=source_actor, damage=amount, round_no=round_no)
+
+        concentration = self._actor_concentration(target_actor)
+        if concentration is None:
+            return
+
+        dc = max(10, amount // 2)
+        save_mod = self._concentration_save_modifier(target_actor)
+        if self._has_war_caster(target_actor):
+            roll = max(self.rng.randint(1, 20), self.rng.randint(1, 20))
+        else:
+            roll = self.rng.randint(1, 20)
+        total = int(roll + save_mod)
+        self._log(
+            log,
+            f"Concentration check ({getattr(target_actor, 'name', 'Target')}) DC {dc}: rolled {roll} + {save_mod} = {total}.",
+            level="compact",
+        )
+        if total < dc:
+            self._break_concentration(actor=target_actor, reason="failed concentration check", log=log, round_no=round_no)
+
+    def _resolve_opportunity_attack(self, *, attacker, defender, log: List[CombatLogEntry], reason: str, round_no: int = 0) -> None:
+        if self._has_tactical_tag(defender, "disengaged"):
+            return
+        if int(getattr(attacker, "hp_current", 0) or 0) <= 0:
+            return
+        if int(getattr(defender, "hp_current", 0) or 0) <= 0:
+            return
+        if self._turn_blocked(attacker):
+            return
+
+        hit, is_crit, _, _ = self._attack_roll(
+            int(getattr(attacker, "attack_bonus", 0) or 0) + self._status_attack_roll_shift(attacker),
+            0,
+            0,
+            int(getattr(defender, "armour_class", 10) or 10),
+            None,
+            log,
+            str(getattr(attacker, "name", "Enemy")),
+            str(getattr(defender, "name", "Target")),
+        )
+        if not hit:
+            self._log(log, f"Opportunity attack misses as {reason}.", level="compact")
+            return
+        dmg = self._deal_damage(str(getattr(attacker, "damage_die", "d4") or "d4"), 0, bool(is_crit), None, 0)
+        dmg = self._modify_incoming_damage(defender, dmg)
+        hp_now = int(getattr(defender, "hp_current", 0) or 0)
+        hp_max = int(getattr(defender, "hp_max", hp_now) or hp_now)
+        defender.hp_current = max(0, hp_now - dmg)
+        self._log(log, f"Opportunity attack lands for {dmg} damage ({defender.hp_current}/{hp_max}).", level="compact")
+        self._check_concentration_after_damage(target_actor=defender, source_actor=attacker, damage=dmg, log=log, round_no=round_no)
+
     def _terrain_supports_hiding(self, *, terrain: str, distance: str) -> bool:
         terrain_key = str(terrain or "").strip().lower()
         if terrain_key in {"forest", "jungle", "woodland", "swamp", "wetland", "marsh", "bog", "cramped"}:
@@ -715,16 +1013,17 @@ class CombatService:
 
     def _apply_spell_status_effects(self, *, caster: Character, target, definition, log: List[CombatLogEntry]) -> None:
         damage_type = str(getattr(definition, "damage_type", "") or "").strip().lower()
+        source_spell = str(getattr(definition, "slug", "") or "").strip().lower()
         if int(getattr(target, "hp_current", 0) or 0) <= 0:
             return
         if damage_type == "fire" and self.rng.randint(1, 100) <= 35:
-            self._apply_status(actor=target, status_id="burning", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster)
+            self._apply_status(actor=target, status_id="burning", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster, source_spell=source_spell)
         elif damage_type == "healing":
-            self._apply_status(actor=target, status_id="blessed", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster)
+            self._apply_status(actor=target, status_id="blessed", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster, source_spell=source_spell)
         elif damage_type == "psychic" and self.rng.randint(1, 100) <= 20:
-            self._apply_status(actor=target, status_id="stunned", rounds=1, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster)
+            self._apply_status(actor=target, status_id="stunned", rounds=1, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster, source_spell=source_spell)
         elif damage_type in {"poison", "acid", "necrotic"} and self.rng.randint(1, 100) <= 30:
-            self._apply_status(actor=target, status_id="poisoned", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster)
+            self._apply_status(actor=target, status_id="poisoned", rounds=2, potency=1, log=log, source_name=getattr(caster, "name", "Spell"), source_actor=caster, source_spell=source_spell)
 
     def _primary_attack_mod(self, player: Character) -> int:
         scores = self._ability_scores(player)
@@ -1167,6 +1466,7 @@ class CombatService:
         player.proficiencies = list(getattr(player, "proficiencies", []) or [])
         player.cantrips = list(getattr(player, "cantrips", []) or [])
         player.known_spells = list(getattr(player, "known_spells", []) or [])
+        normalize_slot_ledger(player)
         player_hp = player.hp_current
         player.hp_max = getattr(player, "hp_max", player.hp_current)
 
@@ -1199,7 +1499,8 @@ class CombatService:
             target_actor=foe,
             log=log,
         )
-        initiative_player = _roll_initiative(surprise == "player", scores.initiative + initiative_bonus)
+        feat_initiative_bonus = self._character_initiative_bonus(player)
+        initiative_player = _roll_initiative(surprise == "player", scores.initiative + initiative_bonus + feat_initiative_bonus)
         initiative_enemy = _roll_initiative(surprise == "enemy", getattr(foe, "attack_bonus", 0))
         player_has_opening = initiative_player >= initiative_enemy
         self._log(log, f"Initiative: You {initiative_player} vs {foe.name} {initiative_enemy}.", level="normal")
@@ -1212,6 +1513,7 @@ class CombatService:
         weather = str((scene or {}).get("weather", "") or "")
         flavour_tracker: dict[str, bool] = {}
         while player_hp > 0 and foe.hp_current > 0:
+            self._sync_pair_tactical_state(player, foe, distance=str(distance))
             if player.class_name == "rogue":
                 sneak_available = True
             self._log(log, f"-- Round {round_no} --", level="debug")
@@ -1264,7 +1566,7 @@ class CombatService:
                         "Use Item",
                         "Flee",
                     ]
-                    has_magic = (getattr(player, "spell_slots_current", 0) > 0) or bool(getattr(player, "cantrips", []))
+                    has_magic = bool(available_slot_levels(player, min_level=1)) or bool(getattr(player, "cantrips", []))
                     if has_magic:
                         options.insert(1, "Cast Spell")
                     if rage_available and rage_rounds <= 0:
@@ -1316,11 +1618,12 @@ class CombatService:
                             attack_advantage_state,
                             self._tactical_advantage_delta(attacker=player, defender=foe),
                         )
+                        effective_foe_ac = int(getattr(foe, "armour_class", 10) or 10) + self._actor_cover_bonus(foe)
                         hit, is_crit, _, _ = self._attack_roll(
                             roll_attack_bonus + self._status_attack_roll_shift(player) + int(weather_shift),
                             prof,
                             attack_mod,
-                            foe.armour_class,
+                            effective_foe_ac,
                             attack_advantage_state,
                             log,
                             player.name,
@@ -1353,6 +1656,7 @@ class CombatService:
                             dmg = self._modify_incoming_damage(foe, dmg)
                             foe.hp_current = max(0, foe.hp_current - dmg)
                             self._log(log, f"You deal {dmg} damage to {foe.name} ({foe.hp_current}/{foe.hp_max}).", level="compact")
+                            self._check_concentration_after_damage(target_actor=foe, source_actor=player, damage=dmg, log=log, round_no=round_no)
                             sneak_available = False
                             self._consume_tactical_tag(player, "hidden_strike")
                             self._consume_tactical_tag(player, "helped")
@@ -1374,6 +1678,17 @@ class CombatService:
                         )
 
                     elif action == "Cast Spell":
+                        if self._is_melee_range(distance) and self._is_engaged_with(player, foe):
+                            self._resolve_opportunity_attack(
+                                attacker=foe,
+                                defender=player,
+                                log=log,
+                                reason="you cast in melee",
+                                round_no=round_no,
+                            )
+                            player_hp = int(getattr(player, "hp_current", player_hp) or player_hp)
+                            if player_hp <= 0:
+                                break
                         if not self._is_attack_viable_for_range(is_melee_attack=False, distance=distance):
                             self._log(log, f"Target is out of spell range ({self._range_label(distance)}).", level="compact")
                             self._tick_actor_statuses_end_turn(player, log)
@@ -1420,8 +1735,10 @@ class CombatService:
                             self._tick_actor_tactical_tags_end_turn(player)
                             continue
                         self._add_tactical_tag(player, tag="disengaged", rounds=2)
+                        self._set_actor_tactical_state(player, stance="disengaged", engaged_with=[])
                         if self._is_dense_cover_terrain(str(terrain)):
                             self._add_tactical_tag(player, tag="cover", rounds=2)
+                            self._set_actor_tactical_state(player, stance="in_cover", cover="half")
                             self._log(log, "You disengage into cover.", level="compact")
                         else:
                             self._log(log, "You disengage and deny a clean strike.", level="compact")
@@ -1523,6 +1840,17 @@ class CombatService:
                             self._tick_actor_statuses_end_turn(player, log)
                             self._tick_actor_tactical_tags_end_turn(player)
                             continue
+                        if self._is_melee_range(distance) and self._is_engaged_with(player, foe):
+                            self._resolve_opportunity_attack(
+                                attacker=foe,
+                                defender=player,
+                                log=log,
+                                reason="you try to flee",
+                                round_no=round_no,
+                            )
+                            player_hp = int(getattr(player, "hp_current", player_hp) or player_hp)
+                            if player_hp <= 0:
+                                break
                         flee_roll = self._ability_check_roll(player, attack_mod, requires_sight=False)
                         if flee_roll >= 12:
                             self._log(log, "You slip away from the fight!", level="compact")
@@ -1532,6 +1860,7 @@ class CombatService:
                             player.flags.pop("shield_rounds", None)
                             player.flags.pop("combat_statuses", None)
                             player.flags.pop("combat_tactical_tags", None)
+                            player.flags.pop("combat_runtime_state", None)
                             if "rage_rounds" in player.flags:
                                 player.flags["rage_rounds"] = 0
                             self._clear_actor_tactical_tags(foe)
@@ -1654,6 +1983,7 @@ class CombatService:
                         continue
 
                     target_ac = player.armour_class
+                    target_ac += self._actor_cover_bonus(player)
                     if enemy_action == "reckless":
                         enemy_advantage = "advantage"
                         foe_armour_class = getattr(foe, "armour_class", 10) - 2
@@ -1700,6 +2030,8 @@ class CombatService:
                         dmg = self._modify_incoming_damage(player, dmg)
                         player_hp = max(0, player_hp - dmg)
                         self._log(log, f"{foe.name} hits you for {dmg} damage ({player_hp}/{player.hp_max}).", level="compact")
+                        player.hp_current = int(player_hp)
+                        self._check_concentration_after_damage(target_actor=player, source_actor=foe, damage=dmg, log=log, round_no=round_no)
                         self._consume_tactical_tag(foe, "hidden_strike")
                         self._consume_tactical_tag(foe, "helped")
                         self._consume_tactical_tag(player, "exposed")
@@ -1735,6 +2067,7 @@ class CombatService:
                 player.flags.pop("shield_rounds", None)
                 player.flags.pop("combat_statuses", None)
                 player.flags.pop("combat_tactical_tags", None)
+                player.flags.pop("combat_runtime_state", None)
                 if "rage_rounds" in player.flags:
                     player.flags["rage_rounds"] = 0
                 player.hp_current = player_hp
@@ -1753,6 +2086,7 @@ class CombatService:
         player.flags.pop("shield_rounds", None)
         player.flags.pop("combat_statuses", None)
         player.flags.pop("combat_tactical_tags", None)
+        player.flags.pop("combat_runtime_state", None)
         if "rage_rounds" in player.flags:
             player.flags["rage_rounds"] = 0
         self._clear_actor_tactical_tags(foe)
@@ -1789,6 +2123,7 @@ class CombatService:
             row.known_spells = list(getattr(ally, "known_spells", []) or [])
             row.hp_max = int(getattr(row, "hp_max", getattr(row, "hp_current", 1)) or 1)
             row.hp_current = int(getattr(row, "hp_current", row.hp_max) or row.hp_max)
+            normalize_slot_ledger(row)
             active_allies.append(row)
 
         for enemy in enemies:
@@ -1810,6 +2145,7 @@ class CombatService:
         distance = self._normalize_range_band(str((scene or {}).get("distance", "engaged")))
         weather = str((scene or {}).get("weather", "") or "")
         surprise = (scene or {}).get("surprise")
+        flanking_enabled = self._scene_flag_enabled(scene, "enable_flanking", default=False)
         player_actor_id = int(getattr(active_allies[0], "id", 0) or 0)
 
         def _initiative_for_ally(actor: Character) -> int:
@@ -1817,7 +2153,7 @@ class CombatService:
             roll = self.rng.randint(1, 20)
             if surprise == "player":
                 roll = max(roll, self.rng.randint(1, 20))
-            total = int(roll + scores.initiative)
+            total = int(roll + scores.initiative + self._character_initiative_bonus(actor))
             if self._is_swamp_terrain(terrain) and self._is_heavy_armor_user(actor):
                 total -= 100
             return total
@@ -1903,7 +2239,7 @@ class CombatService:
                             "Use Item",
                             "Flee",
                         ]
-                        has_magic = (getattr(actor_character, "spell_slots_current", 0) > 0) or bool(getattr(actor_character, "cantrips", []))
+                        has_magic = bool(available_slot_levels(actor_character, min_level=1)) or bool(getattr(actor_character, "cantrips", []))
                         if has_magic:
                             options.insert(1, "Cast Spell")
                         choice = choose_action(options, actor_character, target, round_no, {"distance": distance, "terrain": terrain, "surprise": surprise})
@@ -1919,7 +2255,8 @@ class CombatService:
                     if isinstance(choice, tuple):
                         action, action_payload = choice
 
-                    spell_slug = str(action_payload or "").strip().lower() if str(action) == "Cast Spell" else ""
+                    payload_slug, _, _ = self._decode_spell_action_payload(str(action_payload or "")) if str(action) == "Cast Spell" else ("", None, False)
+                    spell_slug = str(payload_slug or "").strip().lower() if str(action) == "Cast Spell" else ""
                     should_target_allies = bool(spell_slug and self._is_healing_spell(spell_slug))
                     if should_target_allies:
                         target_candidates = list(living_allies)
@@ -2157,7 +2494,7 @@ class CombatService:
                     target_key = self._combat_actor_key(target)
                     actor_key = self._combat_actor_key(actor_character)
                     engaged = round_engagements.setdefault(target_key, set())
-                    flank_active = any(existing != actor_key for existing in engaged)
+                    flank_active = flanking_enabled and any(existing != actor_key for existing in engaged)
                     engaged.add(actor_key)
                     if flank_active:
                         self._log(log, f"{actor_character.name} flanks {target.name}.", level="compact")
@@ -2205,6 +2542,13 @@ class CombatService:
                         dmg = self._modify_incoming_damage(target, dmg)
                         target.hp_current = max(0, int(getattr(target, "hp_current", 0) or 0) - dmg)
                         self._log(log, f"{actor_character.name} hits {target.name} for {dmg} damage ({target.hp_current}/{target.hp_max}).", level="compact")
+                        self._check_concentration_after_damage(
+                            target_actor=target,
+                            source_actor=actor_character,
+                            damage=dmg,
+                            log=log,
+                            round_no=round_no,
+                        )
                     self._consume_tactical_tag(actor_character, "hidden_strike")
                     self._consume_tactical_tag(actor_character, "helped")
                     self._consume_tactical_tag(target, "exposed")
@@ -2375,6 +2719,13 @@ class CombatService:
                     dmg = self._modify_incoming_damage(target, dmg)
                     target.hp_current = max(0, int(getattr(target, "hp_current", 0) or 0) - dmg)
                     self._log(log, f"{enemy_actor.name} hits {target.name} for {dmg} damage ({target.hp_current}/{target.hp_max}).", level="compact")
+                    self._check_concentration_after_damage(
+                        target_actor=target,
+                        source_actor=enemy_actor,
+                        damage=dmg,
+                        log=log,
+                        round_no=round_no,
+                    )
                 else:
                     self._log(log, f"{enemy_actor.name} misses {target.name}.", level="compact")
                 self._consume_tactical_tag(enemy_actor, "hidden_strike")
@@ -2398,12 +2749,15 @@ class CombatService:
             if isinstance(getattr(ally, "flags", None), dict):
                 ally.flags.pop("combat_statuses", None)
                 ally.flags.pop("combat_tactical_tags", None)
+                ally.flags.pop("combat_runtime_state", None)
         for enemy in active_enemies:
             try:
                 if hasattr(enemy, "_combat_statuses"):
                     delattr(enemy, "_combat_statuses")
                 if hasattr(enemy, "_combat_tactical_tags"):
                     delattr(enemy, "_combat_tactical_tags")
+                if hasattr(enemy, "_combat_runtime_state"):
+                    delattr(enemy, "_combat_runtime_state")
             except Exception:
                 pass
         return PartyCombatResult(
@@ -2580,8 +2934,97 @@ class CombatService:
 
     @staticmethod
     def _is_healing_spell(spell_slug: str) -> bool:
-        definition = SPELL_DEFINITIONS.get(str(spell_slug or "").strip().lower())
+        slug, _, _ = CombatService._decode_spell_action_payload(spell_slug)
+        definition = SPELL_DEFINITIONS.get(str(slug or "").strip().lower())
         return bool(definition and str(getattr(definition, "damage_type", "")).lower() == "healing")
+
+    @staticmethod
+    def _decode_spell_action_payload(payload: Optional[str]) -> tuple[str, Optional[int], bool]:
+        text = str(payload or "").strip().lower()
+        if not text:
+            return "", None, False
+        if "=" not in text:
+            return text, None, False
+        parts = [segment.strip() for segment in text.split("|") if segment.strip()]
+        values: dict[str, str] = {}
+        for part in parts:
+            if "=" not in part:
+                continue
+            key, value = part.split("=", 1)
+            values[str(key or "").strip().lower()] = str(value or "").strip().lower()
+        slug = str(values.get("slug", "") or "").strip().lower()
+        cast_level: Optional[int] = None
+        level_text = str(values.get("level", "") or "").strip()
+        if level_text:
+            try:
+                cast_level = max(1, int(level_text))
+            except Exception:
+                cast_level = None
+        ritual = str(values.get("ritual", "") or "").strip().lower() in {"1", "true", "yes", "y"}
+        return slug, cast_level, ritual
+
+    @staticmethod
+    def _upcast_bonus_dice(*, slug: str, base_level: int, cast_level: int) -> str:
+        if cast_level <= base_level:
+            return ""
+        delta = cast_level - base_level
+        key = str(slug or "").strip().lower()
+        if key == "burning-hands":
+            return f"{delta}d6"
+        if key == "cure-wounds":
+            return f"{delta}d8"
+        if key == "magic-missile":
+            return f"{delta}d4+{delta}"
+        return ""
+
+    @staticmethod
+    def _spell_base_level(spell, slug: str) -> int:
+        if spell is not None:
+            try:
+                return max(0, int(getattr(spell, "level_int", 0) or 0))
+            except Exception:
+                return 0
+        cantrip_slugs = {"fire-bolt", "ray-of-frost", "sacred-flame", "eldritch-blast", "vicious-mockery"}
+        return 0 if str(slug or "").strip().lower() in cantrip_slugs else 1
+
+    @staticmethod
+    def _spell_components(components: str | None) -> tuple[bool, bool, bool, str]:
+        raw = str(components or "")
+        token = raw.upper()
+        has_verbal = "V" in token
+        has_somatic = "S" in token
+        has_material = "M" in token
+        material_text = ""
+        if "(" in raw and ")" in raw:
+            material_text = raw[raw.find("(") + 1 : raw.rfind(")")].strip()
+        return has_verbal, has_somatic, has_material, material_text
+
+    def _material_components_available(self, caster: Character, *, material_text: str) -> tuple[bool, str]:
+        inventory = [str(item or "").strip() for item in list(getattr(caster, "inventory", []) or [])]
+        lowered_inventory = [row.lower() for row in inventory]
+
+        equipment = self._equipment_state(caster)
+        equipped_values = [str(equipment.get(slot, "") or "").strip().lower() for slot in ("weapon", "armor", "trinket")]
+        focus_sources = lowered_inventory + equipped_values
+        has_focus = any(
+            keyword in row
+            for row in focus_sources
+            for keyword in ("arcane focus", "focus ring", "holy symbol", "component pouch", "spellbook")
+        )
+        if has_focus:
+            return True, ""
+
+        note = str(material_text or "").strip()
+        if note and "consum" in note.lower():
+            candidate = note.split(",", 1)[0].strip().lower()
+            if candidate:
+                for idx, value in enumerate(list(inventory)):
+                    lowered = str(value).strip().lower()
+                    if candidate in lowered or lowered in candidate:
+                        del inventory[idx]
+                        caster.inventory = inventory
+                        return True, f"Consumes material component: {value}."
+        return False, "Missing material components (requires Arcane Focus or Component Pouch)."
 
     def _evaluate_ai_action(self, actor, allies: list, enemies: list, round_no: int, scene_ctx: dict):
         _ = round_no
@@ -2609,7 +3052,7 @@ class CombatService:
                 ),
                 None,
             )
-            if healing_slug and int(getattr(actor, "spell_slots_current", 0) or 0) > 0:
+            if healing_slug and bool(available_slot_levels(actor, min_level=1)):
                 critical_ally = next(
                     (
                         row
@@ -2632,6 +3075,15 @@ class CombatService:
             return int(raw_id)
         except Exception:
             return abs(hash(str(raw_id)))
+
+    @staticmethod
+    def _scene_flag_enabled(scene: Optional[dict], key: str, default: bool = False) -> bool:
+        if not isinstance(scene, dict):
+            return bool(default)
+        raw = scene.get(str(key), default)
+        if isinstance(raw, bool):
+            return raw
+        return str(raw or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
     def _apply_round_lair_action(
         self,
@@ -2784,7 +3236,8 @@ class CombatService:
         log: List[CombatLogEntry],
     ) -> None:
         known = getattr(caster, "known_spells", []) or []
-        target_slug = spell_slug or (_slugify_spell_name(known[0]) if known else None)
+        payload_slug, requested_level, ritual_requested = self._decode_spell_action_payload(spell_slug)
+        target_slug = payload_slug or spell_slug or (_slugify_spell_name(known[0]) if known else None)
         if not target_slug:
             self._log(log, f"{caster.name} has no spells to cast.", level="compact")
             return
@@ -2795,14 +3248,42 @@ class CombatService:
             return
 
         spell = self.spell_repo.get_by_slug(target_slug) if self.spell_repo else None
-        level_int = spell.level_int if spell else 0
-        if level_int > 0:
-            slots = int(getattr(caster, "spell_slots_current", 0) or 0)
-            if slots <= 0:
-                self._log(log, f"{caster.name} has no spell slots remaining.", level="compact")
+        level_int = self._spell_base_level(spell, str(target_slug))
+        cast_level = max(level_int, int(requested_level or level_int or 1)) if level_int > 0 else 0
+
+        if ritual_requested:
+            self._log(log, f"{caster.name} cannot perform ritual casting during combat.", level="compact")
+            return
+
+        components = str(getattr(spell, "components", "") or "") if spell is not None else ""
+        has_verbal, _has_somatic, has_material, material_text = self._spell_components(components)
+        if has_verbal and self._has_status(caster, "silenced"):
+            self._log(log, f"{caster.name} cannot cast while silenced (verbal component blocked).", level="compact")
+            return
+        if has_material:
+            material_ok, material_note = self._material_components_available(caster, material_text=material_text)
+            if not material_ok:
+                self._log(log, material_note, level="compact")
                 return
-            caster.spell_slots_current = max(slots - 1, 0)
-            self._log(log, f"{caster.name} expends a spell slot.", level="compact")
+            if material_note:
+                self._log(log, material_note, level="compact")
+
+        if level_int > 0:
+            normalize_slot_ledger(caster)
+            if not consume_slot(caster, cast_level=cast_level):
+                self._log(log, f"{caster.name} has no level {cast_level} spell slots remaining.", level="compact")
+                return
+            self._log(log, f"{caster.name} expends a level {cast_level} spell slot.", level="compact")
+
+        if bool(getattr(definition, "concentration", False)):
+            spell_name = str(getattr(spell, "name", "") or "").strip() or str(target_slug).replace("-", " ").title()
+            self._start_concentration(
+                caster=caster,
+                spell_slug=str(target_slug),
+                spell_name=spell_name,
+                targets=[target],
+                log=log,
+            )
 
         target_name = str(getattr(target, "name", "target"))
         target_ac = int(getattr(target, "armour_class", 10) or 10)
@@ -2820,6 +3301,7 @@ class CombatService:
                 hp_max = int(getattr(target, "hp_max", hp_now) or hp_now)
                 target.hp_current = max(0, hp_now - amount)
                 self._log(log, f"{caster.name}'s spell hits {target_name} for {amount} {damage_type or 'damage'} ({target.hp_current}/{hp_max}).", level="compact")
+                self._check_concentration_after_damage(target_actor=target, source_actor=caster, damage=amount, log=log)
 
         if definition.resolution == "spell_attack":
             if attack_roll_shift:
@@ -2838,7 +3320,10 @@ class CombatService:
                 self._log(log, f"{caster.name}'s spell misses.", level="compact")
                 return
             dice_expr = definition.damage_dice or "1d6"
+            bonus_expr = self._upcast_bonus_dice(slug=str(target_slug), base_level=level_int, cast_level=cast_level)
             dmg = _roll_dice_expr(dice_expr, ability_mod=int(spell_mod), rng=self.rng)
+            if bonus_expr:
+                dmg += _roll_dice_expr(bonus_expr, ability_mod=0, rng=self.rng)
             if is_crit:
                 dmg += _roll_dice_expr(dice_expr, ability_mod=0, rng=self.rng)
             _apply_damage(dmg, definition.damage_type)
@@ -2852,11 +3337,17 @@ class CombatService:
                 self._log(log, f"{target_name} resists the spell.", level="compact")
                 return
             dmg = _roll_dice_expr(definition.damage_dice or "1d6", ability_mod=int(spell_mod), rng=self.rng)
+            bonus_expr = self._upcast_bonus_dice(slug=str(target_slug), base_level=level_int, cast_level=cast_level)
+            if bonus_expr:
+                dmg += _roll_dice_expr(bonus_expr, ability_mod=0, rng=self.rng)
             _apply_damage(dmg, definition.damage_type)
             self._apply_spell_status_effects(caster=caster, target=target, definition=definition, log=log)
             return
 
         dmg = _roll_dice_expr(definition.damage_dice or "1d4", ability_mod=int(spell_mod), rng=self.rng)
+        bonus_expr = self._upcast_bonus_dice(slug=str(target_slug), base_level=level_int, cast_level=cast_level)
+        if bonus_expr:
+            dmg += _roll_dice_expr(bonus_expr, ability_mod=0, rng=self.rng)
         if definition.slug == "shield":
             bonus = 5
             caster.flags["temp_ac_bonus"] = bonus
@@ -2914,11 +3405,11 @@ class CombatService:
 
         if selected_item == "Focus Potion":
             player.inventory.remove("Focus Potion")
+            normalize_slot_ledger(player)
             slot_max = int(getattr(player, "spell_slots_max", 0) or 0)
             slots_now = int(getattr(player, "spell_slots_current", 0) or 0)
             if slot_max > 0:
-                restored = 1 if slots_now < slot_max else 0
-                player.spell_slots_current = min(slot_max, slots_now + 1)
+                restored = restore_slots(player, amount=1)
                 if restored:
                     self._log(
                         log,
@@ -2951,25 +3442,54 @@ class CombatService:
     ) -> None:
         # Fallback to first known spell if none provided
         known = getattr(player, "known_spells", []) or []
-        target_slug = spell_slug or (_slugify_spell_name(known[0]) if known else None)
+        payload_slug, requested_level, ritual_requested = self._decode_spell_action_payload(spell_slug)
+        target_slug = payload_slug or spell_slug or (_slugify_spell_name(known[0]) if known else None)
         if not target_slug:
             self._log(log, "You have no spells to cast.", level="compact")
             return
 
-        definition = SPELL_DEFINITIONS.get(target_slug)
+        definition = SPELL_DEFINITIONS.get(str(target_slug).strip().lower())
         if not definition:
             self._log(log, f"{target_slug} is not implemented in combat yet.", level="compact")
             return
 
         spell = self.spell_repo.get_by_slug(target_slug) if self.spell_repo else None
-        level_int = spell.level_int if spell else 0
-        if level_int > 0:
-            slots = getattr(player, "spell_slots_current", 0)
-            if slots <= 0:
-                self._log(log, "No spell slots remaining.", level="compact")
+        level_int = self._spell_base_level(spell, str(target_slug))
+        cast_level = max(level_int, int(requested_level or level_int or 1)) if level_int > 0 else 0
+
+        if ritual_requested:
+            self._log(log, "You cannot perform ritual casting during combat.", level="compact")
+            return
+
+        components = str(getattr(spell, "components", "") or "") if spell is not None else ""
+        has_verbal, _has_somatic, has_material, material_text = self._spell_components(components)
+        if has_verbal and self._has_status(player, "silenced"):
+            self._log(log, "You are silenced and cannot provide the verbal component.", level="compact")
+            return
+        if has_material:
+            material_ok, material_note = self._material_components_available(player, material_text=material_text)
+            if not material_ok:
+                self._log(log, material_note, level="compact")
                 return
-            player.spell_slots_current = max(slots - 1, 0)
-            self._log(log, "You expend a spell slot.", level="compact")
+            if material_note:
+                self._log(log, material_note, level="compact")
+
+        if level_int > 0:
+            normalize_slot_ledger(player)
+            if not consume_slot(player, cast_level=cast_level):
+                self._log(log, f"No level {cast_level} spell slots remaining.", level="compact")
+                return
+            self._log(log, f"You expend a level {cast_level} spell slot.", level="compact")
+
+        if bool(getattr(definition, "concentration", False)):
+            spell_name = str(getattr(spell, "name", "") or "").strip() or str(target_slug).replace("-", " ").title()
+            self._start_concentration(
+                caster=player,
+                spell_slug=str(target_slug),
+                spell_name=spell_name,
+                targets=[foe],
+                log=log,
+            )
 
         spell_attack_bonus = prof + spell_mod
         spell_dc = 8 + prof + spell_mod
@@ -2990,6 +3510,7 @@ class CombatService:
             else:
                 foe.hp_current = max(0, foe.hp_current - amount)
                 self._log(log, f"The spell hits {foe.name} for {amount} {damage_type or 'damage'} ({foe.hp_current}/{foe.hp_max}).", level="compact")
+                self._check_concentration_after_damage(target_actor=foe, source_actor=player, damage=amount, log=log)
 
         if definition.resolution == "spell_attack":
             if weather_shift:
@@ -3006,7 +3527,10 @@ class CombatService:
             )
             if hit:
                 dice_expr = definition.damage_dice or "1d6"
+                bonus_expr = self._upcast_bonus_dice(slug=str(target_slug), base_level=level_int, cast_level=cast_level)
                 dmg = _roll_dice_expr(dice_expr, ability_mod=spell_mod, rng=self.rng)
+                if bonus_expr:
+                    dmg += _roll_dice_expr(bonus_expr, ability_mod=0, rng=self.rng)
                 if is_crit:
                     dmg += _roll_dice_expr(dice_expr, ability_mod=0, rng=self.rng)
                 _apply_damage(dmg, definition.damage_type)
@@ -3021,10 +3545,16 @@ class CombatService:
                 self._log(log, f"{foe.name} resists the spell.", level="compact")
                 return
             dmg = _roll_dice_expr(definition.damage_dice or "1d6", ability_mod=spell_mod, rng=self.rng)
+            bonus_expr = self._upcast_bonus_dice(slug=str(target_slug), base_level=level_int, cast_level=cast_level)
+            if bonus_expr:
+                dmg += _roll_dice_expr(bonus_expr, ability_mod=0, rng=self.rng)
             _apply_damage(dmg, definition.damage_type)
             self._apply_spell_status_effects(caster=player, target=foe, definition=definition, log=log)
         else:  # auto
             dmg = _roll_dice_expr(definition.damage_dice or "1d4", ability_mod=spell_mod, rng=self.rng)
+            bonus_expr = self._upcast_bonus_dice(slug=str(target_slug), base_level=level_int, cast_level=cast_level)
+            if bonus_expr:
+                dmg += _roll_dice_expr(bonus_expr, ability_mod=0, rng=self.rng)
             if definition.damage_type == "healing":
                 _apply_damage(dmg, "healing")
                 self._apply_spell_status_effects(caster=player, target=player, definition=definition, log=log)

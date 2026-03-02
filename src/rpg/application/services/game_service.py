@@ -78,12 +78,23 @@ from rpg.application.services.dialogue_service import DialogueService
 from rpg.application.services.world_progression import WorldProgression
 from rpg.application.services.encounter_flavour import random_intro
 from rpg.application.services.progression_service import ProgressionService
+from rpg.application.services.downtime_service import DowntimeService
+from rpg.domain.services.spellcasting import available_slot_levels, consume_slot, normalize_slot_ledger, restore_slots
 from rpg.infrastructure.world_import.reference_dataset_loader import load_reference_world_dataset
 from rpg.domain.events import FactionReputationChangedEvent, MonsterSlain
 from rpg.domain.models.character import Character
 from rpg.domain.models.entity import Entity
+from rpg.domain.models.exploration import DetectionState, LightLevel
 from rpg.domain.models.faction import calculate_price_modifier
 from rpg.domain.models.location import Location
+from rpg.domain.models.quest import (
+    cataclysm_quest_templates,
+    quest_acceptance_block_reason,
+    quest_escalation_path_for,
+    quest_payload_from_template,
+    quest_template_for,
+    quest_title_for,
+)
 from rpg.domain.models.world import World
 from rpg.domain.repositories import (
     CharacterRepository,
@@ -105,6 +116,7 @@ class GameService:
     _BIOME_SEVERITY_DEFAULT_CACHE: dict[str, dict[str, int]] = {}
     _RUMOUR_HISTORY_MAX = 12
     _RUMOUR_HISTORY_TURN_WINDOW = 8
+    _RUMOUR_VALIDITY_DAYS = 3
     _TRAVEL_MAX_RADIUS = 150.0
     _TRAVEL_SPEED_DIVISOR = 25.0
     _TRAVEL_PREVIEW_RISK_WIDTH = 8
@@ -765,19 +777,6 @@ class GameService:
             "binding",
         ),
     }
-    _QUEST_TITLES = {
-        FIRST_HUNT_QUEST_ID: "First Hunt",
-        "trail_patrol": "Trail Patrol",
-        "supply_drop": "Supply Drop",
-        "crown_hunt_order": "Crown Hunt Order",
-        "syndicate_route_run": "Syndicate Route Run",
-        "forest_path_clearance": "Forest Path Clearance",
-        "ruins_wayfinding": "Ruins Wayfinding",
-        "cataclysm_scout_front": "Frontline Scout Sweep",
-        "cataclysm_supply_lines": "Seal Fractured Supply Lines",
-        "cataclysm_alliance_accord": "Alliance Accord Muster",
-        "cataclysm_apex_clash": "Apex Clash",
-    }
     _TOWN_NPCS = (
         {
             "id": "innkeeper_mara",
@@ -1007,6 +1006,15 @@ class GameService:
             "lute",
         ),
     }
+    _ATTUNEMENT_MAX = 3
+    _ATTUNEMENT_ITEM_KEYWORDS = (
+        "focus ring",
+        "arcane focus",
+        "amulet",
+        "talisman",
+        "relic",
+        "sigil",
+    )
     _EXPLORE_CACHE_ITEMS = (
         "Old Coin Pouch",
         "Scout Notes",
@@ -1059,6 +1067,7 @@ class GameService:
         dialogue_service: DialogueService | None = None,
         encounter_intro_builder: Callable[[Entity], str] | None = None,
         mechanical_flavour_builder: Callable[..., str] | None = None,
+        downtime_service: DowntimeService | None = None,
     ) -> None:
         from rpg.application.services.character_creation_service import CharacterCreationService
         from rpg.application.services.encounter_service import EncounterService
@@ -1089,6 +1098,7 @@ class GameService:
         if self.progression and getattr(self.progression, "event_bus", None):
             event_publisher = self.progression.event_bus.publish
         self.progression_service = ProgressionService(event_publisher=event_publisher)
+        self.downtime_service = downtime_service or DowntimeService()
 
         if class_repo and location_repo:
             client = None
@@ -1113,7 +1123,11 @@ class GameService:
                 faction_repo=faction_repo,
                 rng_factory=lambda seed: random.Random(seed),
             )
-            self.combat_service = CombatService(feature_repo=feature_repo, event_publisher=event_publisher)
+            self.combat_service = CombatService(
+                spell_repo=spell_repo,
+                feature_repo=feature_repo,
+                event_publisher=event_publisher,
+            )
             if self.combat_service is not None and mechanical_flavour_builder is not None:
                 self.combat_service.mechanical_flavour_builder = mechanical_flavour_builder
 
@@ -1376,7 +1390,7 @@ class GameService:
         character.hp_current = min(character.hp_current + heal_amount, character.hp_max)
         character.alive = True
         if hasattr(character, "spell_slots_max"):
-            character.spell_slots_current = getattr(character, "spell_slots_max", 0)
+            restore_slots(character, amount=None)
         self._recover_party_runtime_state(character, context="rest")
         self._apply_cataclysm_rest_corruption(character, world_before=world_before, context="long_rest")
 
@@ -1422,9 +1436,7 @@ class GameService:
             heal_amount = max(1, int(round(heal_amount * 0.7)))
         character.hp_current = min(int(getattr(character, "hp_max", 1) or 1), int(getattr(character, "hp_current", 1) or 1) + heal_amount)
         if hasattr(character, "spell_slots_max"):
-            max_slots = int(getattr(character, "spell_slots_max", 0) or 0)
-            current_slots = int(getattr(character, "spell_slots_current", 0) or 0)
-            character.spell_slots_current = min(max_slots, current_slots + int(self._SHORT_REST_MAX_SPELL_RECOVERY))
+            restore_slots(character, amount=int(self._SHORT_REST_MAX_SPELL_RECOVERY))
         self._recover_party_runtime_state(character, context="travel")
         corruption_loss = self._apply_cataclysm_rest_corruption(character, world_before=world_before, context="short_rest")
 
@@ -1540,12 +1552,10 @@ class GameService:
         character.hp_current = min(int(getattr(character, "hp_max", 1) or 1), before_hp + heal_amount)
         character.alive = True
         if hasattr(character, "spell_slots_max"):
-            max_slots = int(getattr(character, "spell_slots_max", 0) or 0)
-            current_slots = int(getattr(character, "spell_slots_current", 0) or 0)
             if key == "watch":
-                character.spell_slots_current = min(max_slots, current_slots + 1)
+                restore_slots(character, amount=1)
             else:
-                character.spell_slots_current = max_slots
+                restore_slots(character, amount=None)
 
         ambush_seed = derive_seed(
             namespace="camp.ambush",
@@ -1645,13 +1655,17 @@ class GameService:
         if self.progression:
             world = self._require_world()
             self.progression.tick(world, ticks=ticks, persist=persist)
+            changed = self._sync_timebound_world_state(world)
+            if changed and persist and self.world_repo:
+                self.world_repo.save(world)
             return world
 
         world = self.world_repo.load_default()
         if world is None:
             raise ValueError("World not initialized")
         world.advance_turns(ticks)
-        if persist:
+        changed = self._sync_timebound_world_state(world)
+        if persist or changed:
             self.world_repo.save(world)
         return world
 
@@ -1700,26 +1714,80 @@ class GameService:
 
     def explore_intent(self, character_id: int) -> tuple[ExploreView, Character, list[Entity]]:
         plan, character, _ = self.explore(character_id)
+        environment = self.get_exploration_environment_intent(character_id)
+        light_level = str(environment.get("light_level", "Unknown") or "Unknown")
+        detection_state = str(environment.get("detection_state", "Unaware") or "Unaware")
+        detection_note = str(environment.get("detection_note", "") or "")
         hazard_message = ""
         if plan.hazards:
             hazard_message, skip_encounter = self._resolve_explore_hazard(character, plan)
             if skip_encounter:
-                return ExploreView(has_encounter=False, message=hazard_message, enemies=[]), character, []
+                return ExploreView(
+                    has_encounter=False,
+                    message=hazard_message,
+                    enemies=[],
+                    light_level=light_level,
+                    detection_state=detection_state,
+                    detection_note=detection_note,
+                ), character, []
 
         if plan.enemies and not self.is_combat_ready():
             message = self._apply_explore_no_combat_fallback(character, plan.enemies)
             if hazard_message:
                 message = f"{hazard_message} {message}".strip()
-            return ExploreView(has_encounter=False, message=message, enemies=[]), character, []
+            return ExploreView(
+                has_encounter=False,
+                message=message,
+                enemies=[],
+                light_level=light_level,
+                detection_state=detection_state,
+                detection_note=detection_note,
+            ), character, []
 
         view = self.build_explore_view(plan)
+        if detection_state.lower() == self._detection_label(DetectionState.DETECTED).lower() and view.has_encounter:
+            flags = getattr(character, "flags", None)
+            if isinstance(flags, dict):
+                flags["next_explore_surprise"] = "enemy"
+            self.character_repo.save(character)
+            view = ExploreView(
+                has_encounter=view.has_encounter,
+                message=f"Hostiles are already searching. {view.message}".strip(),
+                enemies=view.enemies,
+                light_level=light_level,
+                detection_state=detection_state,
+                detection_note=detection_note,
+            )
         if hazard_message:
-            view = ExploreView(has_encounter=view.has_encounter, message=f"{hazard_message} {view.message}".strip(), enemies=view.enemies)
+            view = ExploreView(
+                has_encounter=view.has_encounter,
+                message=f"{hazard_message} {view.message}".strip(),
+                enemies=view.enemies,
+                light_level=light_level,
+                detection_state=detection_state,
+                detection_note=detection_note,
+            )
+        elif not view.light_level:
+            view = ExploreView(
+                has_encounter=view.has_encounter,
+                message=view.message,
+                enemies=view.enemies,
+                light_level=light_level,
+                detection_state=detection_state,
+                detection_note=detection_note,
+            )
         if not view.has_encounter:
             event_message = self._apply_noncombat_explore_event(character)
             if event_message:
                 message = f"{hazard_message} {event_message}".strip() if hazard_message else event_message
-                view = ExploreView(has_encounter=False, message=message, enemies=[])
+                view = ExploreView(
+                    has_encounter=False,
+                    message=message,
+                    enemies=[],
+                    light_level=light_level,
+                    detection_state=detection_state,
+                    detection_note=detection_note,
+                )
         return view, character, list(plan.enemies)
 
     def _resolve_explore_hazard(self, character: Character, plan: EncounterPlan) -> tuple[str, bool]:
@@ -2090,6 +2158,129 @@ class GameService:
         centered = cls._biome_severity_score(biome_name) - 50
         return max(-10, min(10, int(round(centered / 5.0))))
 
+    @staticmethod
+    def _light_level_step_down(level: LightLevel) -> LightLevel:
+        if level == LightLevel.BRIGHT:
+            return LightLevel.DIM
+        if level == LightLevel.DIM:
+            return LightLevel.DARKNESS
+        return LightLevel.DARKNESS
+
+    @staticmethod
+    def _light_level_step_up(level: LightLevel) -> LightLevel:
+        if level == LightLevel.DARKNESS:
+            return LightLevel.DIM
+        if level == LightLevel.DIM:
+            return LightLevel.BRIGHT
+        return LightLevel.BRIGHT
+
+    @staticmethod
+    def _detection_label(state: DetectionState) -> str:
+        return str(state.value).replace("_", " ").title()
+
+    @staticmethod
+    def _light_label(level: LightLevel) -> str:
+        return str(level.value).replace("_", " ").title()
+
+    @staticmethod
+    def _has_darkvision(character: Character) -> bool:
+        traits = [str(row or "").strip().lower() for row in list(getattr(character, "race_traits", []) or [])]
+        if any("darkvision" in row for row in traits):
+            return True
+        flags = getattr(character, "flags", None)
+        if isinstance(flags, dict):
+            if bool(flags.get("darkvision", False)):
+                return True
+        return False
+
+    @classmethod
+    def _exploration_state(cls, character: Character) -> dict[str, object]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        state = flags.setdefault("exploration_state", {})
+        if not isinstance(state, dict):
+            state = {}
+            flags["exploration_state"] = state
+        raw_detection = str(state.get("detection_state", DetectionState.UNAWARE.value) or DetectionState.UNAWARE.value).strip().lower()
+        valid = {row.value for row in DetectionState}
+        if raw_detection not in valid:
+            raw_detection = DetectionState.UNAWARE.value
+        state["detection_state"] = raw_detection
+        state["cause"] = str(state.get("cause", "") or "").strip()
+        state["updated_turn"] = int(state.get("updated_turn", 0) or 0)
+        return state
+
+    @classmethod
+    def _set_detection_state(
+        cls,
+        character: Character,
+        *,
+        state: DetectionState,
+        cause: str,
+        world_turn: int,
+    ) -> None:
+        payload = cls._exploration_state(character)
+        payload["detection_state"] = str(state.value)
+        payload["cause"] = str(cause or "").strip()
+        payload["updated_turn"] = int(world_turn)
+
+    def _exploration_light_level(
+        self,
+        *,
+        character: Character,
+        world: World,
+        biome_name: str,
+    ) -> LightLevel:
+        immersion = self._world_immersion_state(world, biome_name=biome_name)
+        phase = str(immersion.get("phase", "") or "").strip().lower()
+        weather = str(immersion.get("weather", "") or "").strip().lower()
+
+        if phase in {"night", "midnight"}:
+            level = LightLevel.DARKNESS
+        elif phase == "dusk":
+            level = LightLevel.DIM
+        else:
+            level = LightLevel.BRIGHT
+
+        if weather in {"fog", "rain"}:
+            level = self._light_level_step_down(level)
+        elif weather in {"storm", "blizzard"}:
+            level = self._light_level_step_down(self._light_level_step_down(level))
+
+        has_torch = self._inventory_has_item(character, "Torch")
+        if has_torch:
+            level = self._light_level_step_up(level)
+
+        if self._has_darkvision(character) and level == LightLevel.DARKNESS:
+            level = LightLevel.DIM
+        return level
+
+    @classmethod
+    def _sight_disadvantage_for_action(cls, *, action_key: str, light_level: LightLevel) -> bool:
+        if str(action_key or "").strip().lower() not in {"scout", "investigate", "wait"}:
+            return False
+        return light_level != LightLevel.BRIGHT
+
+    def get_exploration_environment_intent(self, character_id: int) -> dict[str, str]:
+        character = self._require_character(character_id)
+        world = self._require_world()
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        biome_name = str(getattr(location, "biome", "") or "")
+        location_name = str(getattr(location, "name", "") or "Wilderness")
+
+        light = self._exploration_light_level(character=character, world=world, biome_name=biome_name)
+        state = self._exploration_state(character)
+        detection = DetectionState(str(state.get("detection_state", DetectionState.UNAWARE.value) or DetectionState.UNAWARE.value))
+        cause = str(state.get("cause", "") or "").strip()
+        return {
+            "location_name": location_name,
+            "light_level": self._light_label(light),
+            "detection_state": self._detection_label(detection),
+            "detection_note": cause,
+        }
+
     def wilderness_action_intent(self, character_id: int, action_id: str) -> ActionResult:
         character = self._require_character(character_id)
         world = self._require_world()
@@ -2101,6 +2292,8 @@ class GameService:
             "investigate": {"ability": "intelligence", "skill": "Investigation", "dc": 13},
             "forage": {"ability": "wisdom", "skill": "Nature", "dc": 11},
             "sneak": {"ability": "dexterity", "skill": "Stealth", "dc": 12},
+            "wait": {"ability": "wisdom", "skill": "Observation", "dc": 11},
+            "distract": {"ability": "dexterity", "skill": "Deception / Sleight", "dc": 13},
         }
         payload = action_defs.get(action_key)
         if payload is None:
@@ -2140,20 +2333,35 @@ class GameService:
         biome_name = str(getattr(location, "biome", "") or "")
         immersion = self._world_immersion_state(world, biome_name=biome_name)
         weather_label = str(immersion.get("weather", "Unknown"))
+        light_level = self._exploration_light_level(character=character, world=world, biome_name=biome_name)
+        exploration_state = self._exploration_state(character)
+        detection_state = DetectionState(
+            str(exploration_state.get("detection_state", DetectionState.UNAWARE.value) or DetectionState.UNAWARE.value)
+        )
         severe_visibility = weather_label in {"Rain", "Fog", "Storm", "Blizzard"}
-        uses_perception = action_key in {"scout", "investigate"}
-        if severe_visibility and uses_perception:
+        weather_disadvantage = severe_visibility and action_key in {"scout", "investigate"}
+        light_disadvantage = self._sight_disadvantage_for_action(action_key=action_key, light_level=light_level)
+        if weather_disadvantage or light_disadvantage:
             roll = min(rng.randint(1, 20), rng.randint(1, 20))
-            dc += 1 if weather_label in {"Rain", "Fog"} else 2
+            if weather_disadvantage:
+                dc += 1 if weather_label in {"Rain", "Fog"} else 2
         else:
             roll = rng.randint(1, 20)
+        if detection_state == DetectionState.SUSPECTED and action_key in {"sneak", "distract"}:
+            dc += 1
+        elif detection_state == DetectionState.DETECTED and action_key in {"sneak", "distract"}:
+            dc += 2
         total = roll + modifier
         success = total >= dc
 
         skill_name = str(payload.get("skill", "Check"))
         messages = [f"{skill_name} check: d20 ({roll}) + {modifier} = {total} vs DC {dc}."]
-        if severe_visibility and uses_perception:
+        messages.append(f"Light: {self._light_label(light_level)}.")
+        messages.append(f"Detection status: {self._detection_label(detection_state)}.")
+        if weather_disadvantage:
             messages.append(f"{weather_label} imposes disadvantage on field awareness checks.")
+        if light_disadvantage:
+            messages.append("Low light imposes disadvantage on sight-based awareness checks.")
 
         if action_key == "scout":
             if success:
@@ -2222,11 +2430,127 @@ class GameService:
                 messages.append("Foraging fails to yield anything safe to consume.")
 
         elif action_key == "sneak":
-            if success:
+            margin = int(total - dc)
+            if margin >= 3:
                 flags["next_explore_surprise"] = "player"
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.HIDDEN,
+                    cause="silent movement",
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                )
                 messages.append("You advance quietly; your next encounter starts with surprise.")
+            elif margin >= 0:
+                flags.pop("next_explore_surprise", None)
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.SUSPECTED,
+                    cause="borderline stealth",
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                )
+                messages.append("You stay mostly hidden, but patrols are now suspicious.")
+            elif margin >= -2:
+                flags.pop("next_explore_surprise", None)
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.SUSPECTED,
+                    cause="noise",
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                )
+                messages.append("You snap a branch; nearby enemies begin searching.")
             else:
-                messages.append("You snap a branch and lose the element of stealth.")
+                flags["next_explore_surprise"] = "enemy"
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.DETECTED,
+                    cause="spotted while sneaking",
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                )
+                messages.append("You are spotted outright; enemies are alerted.")
+
+        elif action_key == "distract":
+            margin = int(total - dc)
+            if margin >= 0:
+                flags["next_explore_surprise"] = "player"
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.HIDDEN,
+                    cause="successful distraction",
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                )
+                messages.append("Your distraction pulls patrol eyes away from your position.")
+            elif margin >= -2:
+                flags.pop("next_explore_surprise", None)
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.SUSPECTED,
+                    cause="failed distraction",
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                )
+                messages.append("The feint half-works; patrols are suspicious but uncertain.")
+            else:
+                flags["next_explore_surprise"] = "enemy"
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.DETECTED,
+                    cause="failed distraction",
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                )
+                messages.append("The distraction backfires and your position is revealed.")
+
+        elif action_key == "wait":
+            world_after = self.advance_world(ticks=1)
+            if world_after is not None:
+                world = world_after
+            current_turn = int(getattr(world, "current_turn", 0) or 0)
+            messages.append("You wait and observe, letting the patrol rhythm evolve.")
+            if detection_state == DetectionState.SUSPECTED:
+                if success:
+                    self._set_detection_state(
+                        character,
+                        state=DetectionState.HIDDEN,
+                        cause="search cooled off",
+                        world_turn=current_turn,
+                    )
+                    messages.append("Search patterns drift away; suspicion fades.")
+                else:
+                    flags["next_explore_surprise"] = "enemy"
+                    self._set_detection_state(
+                        character,
+                        state=DetectionState.DETECTED,
+                        cause="search converged",
+                        world_turn=current_turn,
+                    )
+                    messages.append("The search converges on your position.")
+            elif detection_state == DetectionState.DETECTED and success:
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.SUSPECTED,
+                    cause="line of sight broken",
+                    world_turn=current_turn,
+                )
+                messages.append("You briefly break line of sight; enemies remain suspicious.")
+            else:
+                messages.append("No major change in enemy alertness.")
+
+        if action_key in {"scout", "investigate", "forage"}:
+            if success and detection_state == DetectionState.SUSPECTED:
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.HIDDEN,
+                    cause="careful movement",
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                )
+                messages.append("Your careful pace helps shake enemy suspicion.")
+            elif not success and detection_state in {DetectionState.SUSPECTED, DetectionState.DETECTED} and int(dc - total) >= 3:
+                flags["next_explore_surprise"] = "enemy"
+                self._set_detection_state(
+                    character,
+                    state=DetectionState.DETECTED,
+                    cause="failed wilderness action under pressure",
+                    world_turn=int(getattr(world, "current_turn", 0) or 0),
+                )
+                messages.append("The failed action exposes your position to searching enemies.")
 
         self.character_repo.save(character)
         if self.world_repo:
@@ -3929,6 +4253,7 @@ class GameService:
             if str(equipped.get(slot, "")) == str(selected) and before_count <= 1:
                 equipped.pop(slot, None)
                 unequipped_slot = slot
+        unattuned = self._unattune_item(character, str(selected)) if before_count <= 1 else False
 
         character.money = int(getattr(character, "money", 0)) + int(sale_price)
         self.character_repo.save(character)
@@ -3939,6 +4264,8 @@ class GameService:
         ]
         if unequipped_slot:
             messages.append(f"{selected} was automatically unequipped from {unequipped_slot} slot.")
+        if unattuned:
+            messages.append(f"{selected} is no longer attuned.")
         return ActionResult(messages=messages, game_over=False)
 
     def get_equipment_view_intent(self, character_id: int) -> EquipmentView:
@@ -3971,13 +4298,33 @@ class GameService:
 
         equipped = self._equipment_state(character)
         prior = equipped.get(slot)
+        prior_unattuned = False
+        if prior and str(prior) != str(selected):
+            prior_unattuned = self._unattune_item(character, str(prior))
         equipped[slot] = selected
+
+        can_attune, attune_message = self._attune_item(character, str(selected))
+        if not can_attune:
+            if prior and str(prior) != str(selected):
+                equipped[slot] = prior
+                if prior_unattuned:
+                    attuned = self._attunement_state(character)
+                    if not any(str(row).strip().lower() == str(prior).strip().lower() for row in attuned):
+                        attuned.append(str(prior))
+            else:
+                equipped.pop(slot, None)
+            return ActionResult(messages=[attune_message], game_over=False)
+
         self.character_repo.save(character)
 
         if prior and prior != selected:
             messages = [f"Equipped {selected} in {slot} slot.", f"Replaced {prior}."]
         else:
             messages = [f"Equipped {selected} in {slot} slot."]
+        if prior_unattuned:
+            messages.append(f"{prior} is no longer attuned.")
+        if attune_message:
+            messages.append(attune_message)
         return ActionResult(messages=messages, game_over=False)
 
     def unequip_slot_intent(self, character_id: int, slot_name: str) -> ActionResult:
@@ -3992,8 +4339,42 @@ class GameService:
             return ActionResult(messages=[f"{slot.title()} slot is already empty."], game_over=False)
 
         equipped.pop(slot, None)
+        unattuned = self._unattune_item(character, str(current))
         self.character_repo.save(character)
-        return ActionResult(messages=[f"Unequipped {current} from {slot} slot."], game_over=False)
+        messages = [f"Unequipped {current} from {slot} slot."]
+        if unattuned:
+            messages.append(f"{current} is no longer attuned.")
+        return ActionResult(messages=messages, game_over=False)
+
+    def swap_attuned_item_intent(self, character_id: int, old_item_name: str, new_item_name: str) -> ActionResult:
+        character = self._require_character(character_id)
+        if not self._can_manage_attunement_here(character):
+            return ActionResult(messages=["Attunement swaps require a safe location in town."], game_over=False)
+
+        old_item = str(old_item_name or "").strip()
+        new_item = str(new_item_name or "").strip()
+        if not old_item or not new_item:
+            return ActionResult(messages=["Select both an old and new attunement target."], game_over=False)
+        if old_item.lower() == new_item.lower():
+            return ActionResult(messages=["Those items are the same."], game_over=False)
+        if not self._item_requires_attunement(new_item):
+            return ActionResult(messages=[f"{new_item} does not require attunement."], game_over=False)
+
+        inventory = [str(row) for row in list(getattr(character, "inventory", []) or [])]
+        if new_item not in inventory:
+            return ActionResult(messages=[f"{new_item} is not in your inventory."], game_over=False)
+
+        attuned = self._attunement_state(character)
+        old_idx = next((idx for idx, row in enumerate(attuned) if str(row).strip().lower() == old_item.lower()), None)
+        if old_idx is None:
+            return ActionResult(messages=[f"{old_item} is not currently attuned."], game_over=False)
+        if any(str(row).strip().lower() == new_item.lower() for row in attuned):
+            return ActionResult(messages=[f"{new_item} is already attuned."], game_over=False)
+
+        attuned.pop(old_idx)
+        attuned.append(new_item)
+        self.character_repo.save(character)
+        return ActionResult(messages=[f"Attunement swapped: {old_item} -> {new_item}."], game_over=False)
 
     def drop_inventory_item_intent(self, character_id: int, item_name: str) -> ActionResult:
         character = self._require_character(character_id)
@@ -4012,12 +4393,15 @@ class GameService:
             if str(equipped.get(slot, "")) == str(selected) and before_count <= 1:
                 equipped.pop(slot, None)
                 unequipped_slot = slot
+        unattuned = self._unattune_item(character, str(selected)) if before_count <= 1 else False
 
         self.character_repo.save(character)
 
         messages = [f"Dropped {selected}."]
         if unequipped_slot:
             messages.append(f"{selected} was also unequipped from {unequipped_slot} slot.")
+        if unattuned:
+            messages.append(f"{selected} is no longer attuned.")
         return ActionResult(messages=messages, game_over=False)
 
     def get_training_view_intent(self, character_id: int) -> TrainingView:
@@ -4086,6 +4470,86 @@ class GameService:
             active_summary=self._travel_prep_summary(active),
             options=options,
         )
+
+    def get_downtime_options_intent(self, character_id: int) -> list[tuple[str, str]]:
+        character = self._require_character(character_id)
+        rows: list[tuple[str, str]] = []
+        for activity in self.downtime_service.list_activities():
+            can_do, reason = self.downtime_service.can_perform(activity=activity, character=character)
+            cost_part = ""
+            if int(activity.gold_cost) > 0:
+                cost_part = f"cost {int(activity.gold_cost)}g"
+            elif int(activity.gold_reward) > 0:
+                cost_part = f"gain {int(activity.gold_reward)}g"
+            else:
+                cost_part = "no gold change"
+            summary = f"{activity.title} ({int(activity.days)} day, {cost_part})"
+            if not can_do and reason:
+                summary = f"{summary} [Locked: {reason}]"
+            rows.append((str(activity.id), summary))
+        return rows
+
+    def submit_downtime_intent(self, character_id: int, activity_id: str) -> ActionResult:
+        character = self._require_character(character_id)
+        context = self.get_location_context_intent(character_id)
+        if str(getattr(context, "location_type", "")).strip().lower() != "town":
+            return ActionResult(messages=["Downtime activities are only available in town."], game_over=False)
+
+        activity = self.downtime_service.get_activity(activity_id)
+        if activity is None:
+            return ActionResult(messages=["That downtime activity is not available."], game_over=False)
+
+        can_do, reason = self.downtime_service.can_perform(activity=activity, character=character)
+        if not can_do:
+            return ActionResult(messages=[reason or "You cannot perform that downtime activity right now."], game_over=False)
+
+        outcome = self.downtime_service.perform(activity=activity, character=character)
+
+        world_after = None
+        if self.world_repo and int(outcome.days_spent) > 0:
+            if self.atomic_state_persistor:
+                world_after = self.advance_world(ticks=int(outcome.days_spent), persist=False)
+            else:
+                world_after = self.advance_world(ticks=int(outcome.days_spent))
+
+        world_turn = int(getattr(world_after, "current_turn", 0) or 0)
+        if world_turn <= 0 and self.world_repo:
+            world_turn = int(getattr(self._require_world(), "current_turn", 0) or 0)
+
+        reputation_messages: list[str] = []
+        if self.faction_repo and outcome.reputation_deltas:
+            target = f"character:{character_id}"
+            for faction_id, delta in outcome.reputation_deltas.items():
+                faction = self.faction_repo.get(str(faction_id))
+                if faction is None or int(delta) == 0:
+                    continue
+                before = int(faction.reputation.get(target, 0) or 0)
+                faction.adjust_reputation(target, int(delta))
+                after = int(faction.reputation.get(target, 0) or 0)
+                self.faction_repo.save(faction)
+                faction_label = self._faction_display_name_from_repo(self.faction_repo, str(faction_id))
+                reputation_messages.append(f"{faction_label} reputation: {before} → {after}.")
+
+                event_bus = getattr(getattr(self.progression, "event_bus", None), "publish", None)
+                if callable(event_bus):
+                    event_bus(
+                        FactionReputationChangedEvent(
+                            faction_id=str(faction_id),
+                            character_id=int(character_id),
+                            delta=int(delta),
+                            reason=f"downtime:{activity.id}",
+                            changed_turn=int(world_turn),
+                        )
+                    )
+
+        if self.atomic_state_persistor and self.world_repo and world_after is not None:
+            self.atomic_state_persistor(character, world_after)
+        else:
+            self.character_repo.save(character)
+
+        messages = list(outcome.messages) + reputation_messages
+        messages.append(f"Gold now: {int(getattr(character, 'money', 0) or 0)}.")
+        return ActionResult(messages=messages, game_over=False)
 
     def purchase_travel_prep_intent(self, character_id: int, prep_id: str) -> ActionResult:
         character = self._require_character(character_id)
@@ -4187,6 +4651,20 @@ class GameService:
         if self._has_interaction_unlock(character, "intel_leverage"):
             base_count += 1
         selection = templates[: max(2, min(4, base_count))]
+        projection_seed_entries = [
+            {
+                "id": str(row.get("id", "rumour") or "rumour"),
+                "text": str(row.get("text", "") or ""),
+                "source": str(row.get("source", "Townfolk") or "Townfolk"),
+                "confidence": str(row.get("confidence", "uncertain") or "uncertain"),
+            }
+            for row in selection
+        ]
+        projected_rows = self._sync_rumour_projection(
+            world,
+            world_turn=day,
+            entries=projection_seed_entries,
+        )
 
         items: list[RumourItemView] = []
         seed_item = self._active_story_seed_rumour(world)
@@ -4205,7 +4683,7 @@ class GameService:
         )
         if diplomacy_item is not None:
             items.append(diplomacy_item)
-        for row in selection:
+        for row in projected_rows:
             confidence = str(row.get("confidence", "uncertain"))
             if broker_disposition >= 25 and confidence == "uncertain":
                 confidence = "credible"
@@ -4214,6 +4692,10 @@ class GameService:
             text = str(row.get("text", ""))
             if confidence in {"uncertain", "speculative"}:
                 text = f"[Unverified] {text}"
+            valid_until = int(row.get("valid_until", day) or day)
+            remaining = valid_until - int(day)
+            if remaining <= 1:
+                text = f"[Expires Soon] {text}"
             items.append(
                 to_rumour_item_view(
                     rumour_id=str(row.get("id", "rumour")),
@@ -4304,6 +4786,7 @@ class GameService:
                 status=status,
                 world_turn=world_turn,
                 expires_turn=payload.get("expires_turn"),
+                urgency_override=payload.get("urgency_override", ""),
             )
             diplomacy_suffix = self._diplomacy_quest_urgency_suffix(
                 diplomacy_state=diplomacy_state,
@@ -4324,6 +4807,11 @@ class GameService:
                         objective_kind=objective_kind,
                         progress=progress,
                         target=target,
+                    )
+                    + (
+                        f" — {str(payload.get('objective_note', '')).strip()}"
+                        if str(payload.get("objective_note", "")).strip()
+                        else ""
                     ),
                     urgency_label=urgency_label,
                 )
@@ -4375,24 +4863,23 @@ class GameService:
         if quest.get("status") != "available":
             return ActionResult(messages=[f"Quest cannot be accepted right now ({quest.get('status', 'unknown')})."], game_over=False)
 
-        required_rep = max(0, int(quest.get("requires_alliance_reputation", 0) or 0))
-        required_count = max(0, int(quest.get("requires_alliance_count", 0) or 0))
-        if required_rep > 0 and required_count > 0:
-            standings = self.faction_standings_intent(character_id)
-            qualified = sum(1 for score in standings.values() if int(score) >= required_rep)
-            if qualified < required_count:
-                return ActionResult(
-                    messages=[
-                        f"This bounty requires alliance standing {required_rep}+ with at least {required_count} factions."
-                    ],
-                    game_over=False,
-                )
+        template = quest_template_for(str(quest_id))
+        needs_standings = bool(template is not None and int(getattr(template, "requires_alliance_count", 0) or 0) > 0)
+        standings = self.faction_standings_intent(character_id) if needs_standings else {}
+        block_reason = quest_acceptance_block_reason(template, faction_standings=standings)
+        if block_reason:
+            return ActionResult(messages=[str(block_reason)], game_over=False)
 
         quest["status"] = "active"
         quest["owner_character_id"] = int(character_id)
         current_turn = int(getattr(world, "current_turn", 0))
         quest["accepted_turn"] = current_turn
-        quest["expires_turn"] = current_turn + 5
+        template_expiry_days = int(getattr(template, "expires_days", 5) or 5)
+        escalation_profile = quest_escalation_path_for(str(quest_id))
+        expiry_days = int(getattr(escalation_profile, "expires_days", template_expiry_days) or template_expiry_days)
+        quest["expires_turn"] = current_turn + max(1, expiry_days)
+        if escalation_profile is not None and list(getattr(escalation_profile, "nodes", ()) or []):
+            quest["escalation_stage_index"] = -1
 
         operations: list[Callable[[object], None]] = []
         if self.quest_state_repo is not None:
@@ -4439,7 +4926,7 @@ class GameService:
         persisted = self._persist_character_world_atomic(character, world, operations=operations)
         if not persisted and self.world_repo:
             self.world_repo.save(world)
-        title = self._QUEST_TITLES.get(quest_id, quest_id)
+        title = self._quest_title(str(quest_id))
         return ActionResult(messages=[f"Accepted quest: {title}."], game_over=False)
 
     def turn_in_quest_intent(self, character_id: int, quest_id: str) -> ActionResult:
@@ -4588,7 +5075,7 @@ class GameService:
                             reason="quest_completion_peaceful_window",
                         )
 
-        title = self._QUEST_TITLES.get(quest_id, quest_id)
+        title = self._quest_title(str(quest_id))
         messages = [
             f"Turned in quest: {title}.",
             f"Rewards: +{reward_xp} XP, +{reward_money} gold.",
@@ -6894,6 +7381,13 @@ class GameService:
                     continue
                 label = slug.replace("_", " ").title()
                 conditions_list.append(f"{label}({duration})")
+        runtime_state = getattr(player, "flags", {}).get("combat_runtime_state", {})
+        if isinstance(runtime_state, dict):
+            concentration = runtime_state.get("concentration", {})
+            if isinstance(concentration, dict):
+                spell_name = str(concentration.get("spell_name", "") or "").strip()
+                if spell_name:
+                    conditions_list.append(f"Concentration({spell_name})")
         conditions = " | ".join(conditions_list) if conditions_list else "—"
 
         scene = scene_ctx or {}
@@ -6932,6 +7426,8 @@ class GameService:
         options: list[str],
         selected_index: int,
         spell_slug: Optional[str] = None,
+        cast_level: Optional[int] = None,
+        use_ritual: bool = False,
         item_name: Optional[str] = None,
     ) -> tuple[str, Optional[str]] | str:
         if selected_index < 0:
@@ -6940,7 +7436,12 @@ class GameService:
             return "Dodge"
         chosen = options[selected_index]
         if chosen == "Cast Spell":
-            return ("Cast Spell", spell_slug)
+            payload = GameService._encode_spell_action_payload(
+                spell_slug=spell_slug,
+                cast_level=cast_level,
+                use_ritual=use_ritual,
+            )
+            return ("Cast Spell", payload)
         if chosen == "Use Item":
             return ("Use Item", item_name)
         return chosen
@@ -6951,7 +7452,7 @@ class GameService:
             return []
 
         options: list[SpellOptionView] = []
-        slots_available = getattr(player, "spell_slots_current", 0)
+        normalize_slot_ledger(player)
         tower_allegiance = self._tower_allegiance(player)
         for name in known:
             slug = "".join(
@@ -6962,13 +7463,64 @@ class GameService:
                 continue
             level = spell.level_int if spell else 0
             range_text = spell.range_text if spell else ""
+            components = str(getattr(spell, "components", "") or "") if spell else ""
+            ritual = bool(getattr(spell, "ritual", False)) if spell else False
             needs_slot = level > 0
-            playable = slots_available > 0 if needs_slot else True
+            cast_levels = available_slot_levels(player, min_level=max(1, int(level))) if needs_slot else []
+            playable = bool(cast_levels) if needs_slot else True
             label = f"{name} (Lv {level}{'; ' + range_text if range_text else ''})"
             if needs_slot and not playable:
                 label += " [no slots]"
-            options.append(SpellOptionView(slug=slug, label=label, playable=playable))
+            options.append(
+                SpellOptionView(
+                    slug=slug,
+                    label=label,
+                    playable=playable,
+                    level_int=int(level),
+                    cast_levels=list(cast_levels),
+                    components=components,
+                    ritual=ritual,
+                )
+            )
         return options
+
+    def cast_world_spell_intent(
+        self,
+        character_id: int,
+        spell_slug: str,
+        cast_level: Optional[int] = None,
+        as_ritual: bool = False,
+    ) -> ActionResult:
+        character = self._require_character(character_id)
+        world = self._require_world()
+        slug = str(spell_slug or "").strip().lower()
+        if not slug:
+            return ActionResult(messages=["No spell selected."], game_over=False)
+
+        spell = self.spell_repo.get_by_slug(slug) if self.spell_repo else None
+        level = int(getattr(spell, "level_int", 0) or 0) if spell is not None else 0
+        if level > 0 and as_ritual and not bool(getattr(spell, "ritual", False)):
+            return ActionResult(messages=["That spell cannot be cast as a ritual."], game_over=False)
+
+        if as_ritual:
+            self._advance_world_minutes(world, minutes=10)
+            self.world_repo.save(world)
+            return ActionResult(messages=[f"You complete the ritual casting of {slug.replace('-', ' ').title()} (+10 minutes)."], game_over=False)
+
+        requested_level = int(cast_level or level or 1)
+        if level <= 0:
+            self.character_repo.save(character)
+            return ActionResult(messages=[f"You cast {slug.replace('-', ' ').title()}."], game_over=False)
+
+        if requested_level < level:
+            requested_level = level
+        if not consume_slot(character, cast_level=requested_level):
+            return ActionResult(messages=[f"No level {requested_level} spell slots remaining."], game_over=False)
+        self.character_repo.save(character)
+        return ActionResult(
+            messages=[f"You cast {slug.replace('-', ' ').title()} using a level {requested_level} slot."],
+            game_over=False,
+        )
 
     @staticmethod
     def _tower_allegiance(player: Character) -> str | None:
@@ -7016,8 +7568,66 @@ class GameService:
 
         flags = getattr(character, "flags", None)
         subclass_name = ""
+        tool_proficiencies: list[str] = []
+        languages: list[str] = []
+        personality_trait = ""
+        personality_ideal = ""
+        personality_bond = ""
+        personality_flaw = ""
+        class_feature_summary: list[str] = []
+        feat_name = ""
+
+        def _normalize_list(rows) -> list[str]:
+            normalized: list[str] = []
+            seen: set[str] = set()
+            for row in list(rows or []):
+                text = str(row or "").strip()
+                key = text.lower()
+                if not text or key in seen:
+                    continue
+                seen.add(key)
+                normalized.append(text)
+            return normalized
+
+        def _titleize_slug(slug: str) -> str:
+            text = str(slug or "").strip().replace("_", " ").replace("-", " ")
+            return " ".join(part.capitalize() for part in text.split())
+
         if isinstance(flags, dict):
             subclass_name = str(flags.get("subclass_name", "") or "").strip()
+            tool_proficiencies = _normalize_list(flags.get("tool_proficiencies", []))
+            languages = _normalize_list(flags.get("languages", []))
+
+            personality = flags.get("personality_profile")
+            if isinstance(personality, dict):
+                personality_trait = str(personality.get("trait", "") or "").strip()
+                personality_ideal = str(personality.get("ideal", "") or "").strip()
+                personality_bond = str(personality.get("bond", "") or "").strip()
+                personality_flaw = str(personality.get("flaw", "") or "").strip()
+
+            fighting_style = str(flags.get("fighting_style", "") or "").strip()
+            if fighting_style:
+                class_feature_summary.append(f"Fighting Style: {fighting_style}")
+
+            ancestry = str(flags.get("draconic_ancestry", "") or "").strip()
+            if ancestry:
+                class_feature_summary.append(f"Draconic Ancestry: {ancestry}")
+
+            expertise_rows = _normalize_list(flags.get("expertise_skills", []))
+            if expertise_rows:
+                class_feature_summary.append(f"Expertise: {', '.join(expertise_rows)}")
+
+            feat_slug = str(flags.get("level1_feat", "") or "").strip()
+            if feat_slug:
+                feat_name = _titleize_slug(feat_slug)
+
+        if not tool_proficiencies:
+            prof_rows = [
+                str(row).replace("Tool:", "", 1).strip()
+                for row in list(getattr(character, "proficiencies", []) or [])
+                if str(row).strip().lower().startswith("tool:")
+            ]
+            tool_proficiencies = _normalize_list(prof_rows)
 
         return CharacterCreationSummaryView(
             character_id=character.id or 0,
@@ -7035,6 +7645,14 @@ class GameService:
             race_traits=list(character.race_traits or []),
             background_features=list(character.background_features or []),
             inventory=list(character.inventory or []),
+            tool_proficiencies=tool_proficiencies,
+            languages=languages,
+            personality_trait=personality_trait,
+            personality_ideal=personality_ideal,
+            personality_bond=personality_bond,
+            personality_flaw=personality_flaw,
+            class_feature_summary=class_feature_summary,
+            feat_name=feat_name,
             starting_location_name=location_name,
             subclass_name=subclass_name,
         )
@@ -7644,7 +8262,7 @@ class GameService:
         return layers
 
     def _quest_title(self, quest_id: str) -> str:
-        return self._QUEST_TITLES.get(str(quest_id), str(quest_id).replace("_", " ").title())
+        return quest_title_for(str(quest_id))
 
     @staticmethod
     def _quest_objective_summary(*, objective_kind: str, progress: int, target: int) -> str:
@@ -7660,7 +8278,10 @@ class GameService:
         return f"Objective progress: {bounded_progress}/{bounded_target}"
 
     @staticmethod
-    def _quest_urgency_label(*, status: str, world_turn: int, expires_turn) -> str:
+    def _quest_urgency_label(*, status: str, world_turn: int, expires_turn, urgency_override: str = "") -> str:
+        override = str(urgency_override or "").strip()
+        if override:
+            return override
         normalized_status = str(status or "").lower()
         if normalized_status == "ready_to_turn_in":
             return "Ready to turn in"
@@ -7697,6 +8318,183 @@ class GameService:
             rows = []
             world.flags["rumour_history"] = rows
         return rows
+
+    @staticmethod
+    def _world_rumour_projection(world) -> list[dict]:
+        if not getattr(world, "flags", None):
+            world.flags = {}
+        rows = world.flags.setdefault("rumour_projection", [])
+        if not isinstance(rows, list):
+            rows = []
+            world.flags["rumour_projection"] = rows
+        return rows
+
+    def _sync_timebound_world_state(self, world) -> bool:
+        if world is None:
+            return False
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+        changed = False
+        if self._sync_escalating_quests(world, world_turn=world_turn):
+            changed = True
+        if self._expire_rumour_projection(world, world_turn=world_turn):
+            changed = True
+        return changed
+
+    def _sync_escalating_quests(self, world, *, world_turn: int) -> bool:
+        quests = self._world_quests(world)
+        changed = False
+        for quest_id, payload in list(quests.items()):
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("status", "")).strip().lower() != "active":
+                continue
+
+            profile = quest_escalation_path_for(str(quest_id))
+            if profile is None:
+                continue
+
+            accepted_turn = int(payload.get("accepted_turn", 0) or 0)
+            if accepted_turn <= 0:
+                continue
+
+            stage_index = int(payload.get("escalation_stage_index", -1) or -1)
+            path = sorted(
+                list(getattr(profile, "nodes", ()) or []),
+                key=lambda row: int(getattr(row, "offset_days", 0) or 0),
+            )
+
+            for idx, node in enumerate(path):
+                trigger_turn = accepted_turn + int(getattr(node, "offset_days", 0) or 0)
+                if int(world_turn) < int(trigger_turn):
+                    continue
+                if idx <= stage_index:
+                    continue
+
+                state = str(getattr(node, "state", "") or "").strip().lower()
+                if state == "escalated":
+                    payload["escalation_stage_index"] = int(idx)
+                    payload["escalation_stage"] = "escalated"
+                    note = str(getattr(node, "objective_note", "") or "").strip()
+                    if note:
+                        payload["objective_note"] = note
+                    urgency = str(getattr(node, "urgency_label", "") or "").strip()
+                    if urgency:
+                        payload["urgency_override"] = urgency
+                    target_delta = max(0, int(getattr(node, "target_delta", 0) or 0))
+                    if target_delta > 0:
+                        target_now = max(1, int(payload.get("target", 1) or 1))
+                        payload["target"] = int(target_now + target_delta)
+                    self._append_consequence(
+                        world,
+                        kind="quest_escalated",
+                        message=str(getattr(node, "message", "The situation escalates while you delay.") or "The situation escalates while you delay."),
+                        severity="major",
+                        turn=int(world_turn),
+                    )
+                    changed = True
+                    stage_index = int(payload.get("escalation_stage_index", stage_index) or stage_index)
+                    continue
+
+                if state == "failed":
+                    payload["status"] = "failed"
+                    payload["failed_turn"] = int(world_turn)
+                    payload["failed_reason"] = str(getattr(node, "failed_reason", "expired") or "expired")
+                    payload.pop("urgency_override", None)
+                    self._append_consequence(
+                        world,
+                        kind="quest_escalation_failed",
+                        message=str(getattr(node, "message", "Quest pressure resolves without your intervention.") or "Quest pressure resolves without your intervention."),
+                        severity="major",
+                        turn=int(world_turn),
+                    )
+                    owner = int(payload.get("owner_character_id", 0) or 0)
+                    self._apply_escalation_failure_faction_penalty(
+                        owner_character_id=owner,
+                        world_turn=int(world_turn),
+                        faction_id=str(getattr(node, "failure_faction_id", "") or ""),
+                        delta=int(getattr(node, "failure_reputation_delta", 0) or 0),
+                        reason=f"quest_escalation_failed:{str(quest_id)}",
+                    )
+                    changed = True
+                    break
+        return changed
+
+    def _apply_escalation_failure_faction_penalty(
+        self,
+        *,
+        owner_character_id: int,
+        world_turn: int,
+        faction_id: str,
+        delta: int,
+        reason: str,
+    ) -> None:
+        if self.faction_repo is None or owner_character_id <= 0:
+            return
+        faction_id = str(faction_id or "").strip()
+        if not faction_id:
+            return
+        if int(delta) == 0:
+            return
+        faction = self.faction_repo.get(faction_id)
+        if faction is None:
+            return
+        target = f"character:{int(owner_character_id)}"
+        faction.adjust_reputation(target, int(delta))
+        self.faction_repo.save(faction)
+        event_bus = getattr(getattr(self.progression, "event_bus", None), "publish", None)
+        if callable(event_bus):
+            event_bus(
+                FactionReputationChangedEvent(
+                    faction_id=str(faction_id),
+                    character_id=int(owner_character_id),
+                    delta=int(delta),
+                    reason=str(reason or "quest_escalation_failed"),
+                    changed_turn=int(world_turn),
+                )
+            )
+
+    def _expire_rumour_projection(self, world, *, world_turn: int) -> bool:
+        rows = self._world_rumour_projection(world)
+        kept = [
+            row
+            for row in rows
+            if isinstance(row, dict) and int(row.get("valid_until", -10_000) or -10_000) >= int(world_turn)
+        ]
+        if len(kept) == len(rows):
+            return False
+        rows[:] = kept
+        return True
+
+    def _sync_rumour_projection(self, world, *, world_turn: int, entries: list[dict[str, str]]) -> list[dict]:
+        rows = self._world_rumour_projection(world)
+        self._expire_rumour_projection(world, world_turn=world_turn)
+
+        has_today = any(
+            isinstance(row, dict) and int(row.get("created_turn", -1) or -1) == int(world_turn)
+            for row in rows
+        )
+        if not has_today:
+            valid_until = int(world_turn) + int(self._RUMOUR_VALIDITY_DAYS)
+            for row in entries:
+                rumour_id = str(row.get("id", "rumour") or "rumour")
+                rows.append(
+                    {
+                        "id": f"projection:{rumour_id}:{int(world_turn)}",
+                        "text": str(row.get("text", "") or "").strip(),
+                        "source": str(row.get("source", "Townfolk") or "Townfolk"),
+                        "confidence": str(row.get("confidence", "uncertain") or "uncertain"),
+                        "created_turn": int(world_turn),
+                        "valid_until": int(valid_until),
+                    }
+                )
+
+        rows.sort(
+            key=lambda row: (
+                int(row.get("valid_until", world_turn) or world_turn),
+                -int(row.get("created_turn", 0) or 0),
+            )
+        )
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     @classmethod
     def _world_cataclysm_state(cls, world) -> dict[str, object]:
@@ -7822,68 +8620,6 @@ class GameService:
                 )
         return self._world_cataclysm_end_state(world)
 
-    @classmethod
-    def _cataclysm_quest_templates(cls, cataclysm: dict[str, object]) -> tuple[dict[str, object], ...]:
-        kind = str(cataclysm.get("kind", "") or "")
-        phase = str(cataclysm.get("phase", "") or "")
-        return (
-            {
-                "quest_id": "cataclysm_scout_front",
-                "status": "available",
-                "objective_kind": "kill_any",
-                "progress": 0,
-                "target": 3,
-                "reward_xp": 26,
-                "reward_money": 12,
-                "cataclysm_pushback": True,
-                "pushback_tier": 1,
-                "pushback_focus": kind,
-                "phase": phase,
-            },
-            {
-                "quest_id": "cataclysm_supply_lines",
-                "status": "available",
-                "objective_kind": "travel_count",
-                "progress": 0,
-                "target": 2,
-                "reward_xp": 24,
-                "reward_money": 14,
-                "cataclysm_pushback": True,
-                "pushback_tier": 1,
-                "pushback_focus": kind,
-                "phase": phase,
-            },
-            {
-                "quest_id": "cataclysm_alliance_accord",
-                "status": "available",
-                "objective_kind": "kill_any",
-                "progress": 0,
-                "target": 4,
-                "reward_xp": 34,
-                "reward_money": 18,
-                "cataclysm_pushback": True,
-                "pushback_tier": 2,
-                "pushback_focus": kind,
-                "phase": phase,
-                "requires_alliance_reputation": 10,
-                "requires_alliance_count": 2,
-            },
-            {
-                "quest_id": "cataclysm_apex_clash",
-                "status": "available",
-                "objective_kind": "kill_any",
-                "progress": 0,
-                "target": 1,
-                "reward_xp": 50,
-                "reward_money": 25,
-                "cataclysm_pushback": True,
-                "pushback_tier": 3,
-                "pushback_focus": kind,
-                "phase": phase,
-                "is_apex_objective": True,
-            },
-        )
-
     def _sync_cataclysm_quest_pressure(self, world, *, world_turn: int) -> bool:
         quests = self._world_quests(world)
         cataclysm = self._world_cataclysm_state(world)
@@ -7914,8 +8650,10 @@ class GameService:
 
         raw_seed = cataclysm.get("seed", 1)
         seed_base = max(1, int(raw_seed if isinstance(raw_seed, (int, float, str)) else 1))
-        for row in self._cataclysm_quest_templates(cataclysm):
-            quest_id = str(row.get("quest_id", "") or "")
+        kind = str(cataclysm.get("kind", "") or "")
+        phase = str(cataclysm.get("phase", "") or "")
+        for template in cataclysm_quest_templates():
+            quest_id = str(getattr(template, "slug", "") or "")
             if not quest_id:
                 continue
             if quest_id == "cataclysm_apex_clash":
@@ -7941,11 +8679,11 @@ class GameService:
                 context={
                     "cataclysm_seed": int(seed_base),
                     "quest_id": quest_id,
-                    "kind": str(cataclysm.get("kind", "") or ""),
-                    "phase": str(cataclysm.get("phase", "") or ""),
+                    "kind": kind,
+                    "phase": phase,
                 },
             )
-            payload = dict(row)
+            payload = quest_payload_from_template(template, cataclysm_kind=kind, cataclysm_phase=phase)
             payload["seed_key"] = f"quest:{quest_id}:{int(seed_value)}"
             payload["spawned_turn"] = int(world_turn)
             quests[quest_id] = payload
@@ -9361,6 +10099,100 @@ class GameService:
             equipment = {}
             flags["equipment"] = equipment
         return equipment
+
+    @staticmethod
+    def _attunement_state(character: Character) -> list[str]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        raw = flags.setdefault("attuned_items", [])
+        if not isinstance(raw, list):
+            raw = []
+            flags["attuned_items"] = raw
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for row in raw:
+            item = str(row or "").strip()
+            key = item.lower()
+            if not item or key in seen:
+                continue
+            seen.add(key)
+            normalized.append(item)
+        flags["attuned_items"] = normalized
+        return normalized
+
+    @staticmethod
+    def _encode_spell_action_payload(
+        *,
+        spell_slug: Optional[str],
+        cast_level: Optional[int] = None,
+        use_ritual: bool = False,
+    ) -> Optional[str]:
+        slug = str(spell_slug or "").strip().lower()
+        if not slug:
+            return None
+        if (cast_level is None or int(cast_level) <= 0) and not use_ritual:
+            return slug
+        tokens = [f"slug={slug}"]
+        if cast_level is not None and int(cast_level) > 0:
+            tokens.append(f"level={int(cast_level)}")
+        if use_ritual:
+            tokens.append("ritual=1")
+        return "|".join(tokens)
+
+    @staticmethod
+    def _advance_world_minutes(world: World, *, minutes: int) -> None:
+        if not isinstance(getattr(world, "flags", None), dict):
+            world.flags = {}
+        flags = world.flags
+        current_remainder = int(flags.get("time_minutes_remainder", 0) or 0)
+        total = max(0, int(minutes or 0)) + current_remainder
+        turns = total // 60
+        remainder = total % 60
+        if turns > 0:
+            world.advance_turns(turns)
+        flags["time_minutes_remainder"] = int(remainder)
+
+    def _item_requires_attunement(self, item_name: str) -> bool:
+        lowered = str(item_name or "").strip().lower()
+        if not lowered:
+            return False
+        return any(keyword in lowered for keyword in self._ATTUNEMENT_ITEM_KEYWORDS)
+
+    def _can_manage_attunement_here(self, character: Character) -> bool:
+        location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+        return self._current_location_type(character, location) == "town"
+
+    def _attune_item(self, character: Character, item_name: str) -> tuple[bool, str]:
+        item = str(item_name or "").strip()
+        if not item:
+            return False, "Invalid attunement target."
+        if not self._item_requires_attunement(item):
+            return True, ""
+        if not self._can_manage_attunement_here(character):
+            return False, "Attunement changes require a safe location in town."
+
+        attuned = self._attunement_state(character)
+        if any(str(row).lower() == item.lower() for row in attuned):
+            return True, ""
+        if len(attuned) >= int(self._ATTUNEMENT_MAX):
+            listed = ", ".join(attuned[: self._ATTUNEMENT_MAX])
+            return False, f"Attunement cap reached ({self._ATTUNEMENT_MAX}). Currently attuned: {listed}."
+        attuned.append(item)
+        return True, f"{item} is now attuned."
+
+    def _unattune_item(self, character: Character, item_name: str) -> bool:
+        item = str(item_name or "").strip().lower()
+        if not item:
+            return False
+        attuned = self._attunement_state(character)
+        for idx, row in enumerate(list(attuned)):
+            if str(row or "").strip().lower() != item:
+                continue
+            del attuned[idx]
+            return True
+        return False
 
     def _infer_equipment_slot(self, item_name: str) -> str | None:
         lowered = str(item_name or "").strip().lower()

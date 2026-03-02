@@ -26,6 +26,27 @@ class CombatFeatureTriggered:
 
 
 @dataclass
+class EntityDamagedEvent:
+    entity_id: int
+    entity_name: str
+    damage_amount: int
+    source_entity_id: int | None = None
+    source_name: str = ""
+    round_number: int = 0
+
+
+@dataclass
+class ConcentrationBrokenEvent:
+    entity_id: int
+    entity_name: str
+    spell_slug: str
+    spell_name: str
+    targets: list[int]
+    reason: str
+    round_number: int = 0
+
+
+@dataclass
 class FactionReputationChangedEvent:
     faction_id: str
     character_id: int

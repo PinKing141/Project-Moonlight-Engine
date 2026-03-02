@@ -25,5 +25,11 @@ SPELL_DEFINITIONS: dict[str, SpellDefinition] = {
     "burning-hands": SpellDefinition("burning-hands", "save", damage_dice="3d6", damage_type="fire", save_ability="DEX"),
     "cure-wounds": SpellDefinition("cure-wounds", "auto", damage_dice="1d8+MOD", damage_type="healing"),
     "shield": SpellDefinition("shield", "auto", notes="+5 AC until your next turn"),
-    "hex": SpellDefinition("hex", "auto", damage_type="necrotic", notes="Mark target; your hits deal +1d6 (not yet implemented fully)."),
+    "hex": SpellDefinition(
+        "hex",
+        "auto",
+        damage_type="necrotic",
+        concentration=True,
+        notes="Mark target; your hits deal +1d6 (not yet implemented fully).",
+    ),
 }
