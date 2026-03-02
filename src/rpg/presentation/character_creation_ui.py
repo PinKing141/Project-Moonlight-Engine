@@ -35,11 +35,26 @@ _THEME = {
     "muted": "white",
 }
 
+_RACE_AUTO_LANGUAGES = {
+    "human": ["Common"],
+    "elf": ["Common", "Elvish"],
+    "half elf": ["Common", "Elvish"],
+    "half-elf": ["Common", "Elvish"],
+    "dwarf": ["Common", "Dwarvish"],
+    "halfling": ["Common", "Halfling"],
+    "half orc": ["Common", "Orc"],
+    "half-orc": ["Common", "Orc"],
+    "orc": ["Common", "Orc"],
+    "tiefling": ["Common", "Infernal"],
+    "dragonborn": ["Common", "Draconic"],
+    "dark elf": ["Common", "Elvish", "Undercommon"],
+}
+
 
 @dataclass
 class CreationDraft:
     name: str = ""
-    name_gender: str = "random"
+    name_gender: str = ""
     race: str = ""
     subrace: str = ""
     class_name: str = ""
@@ -50,8 +65,41 @@ class CreationDraft:
     alignment: str = ""
     equipment: str = ""
     spells: str = ""
+    show_detailed: bool = False
+    auto_languages: list[str] = field(default_factory=list)
+    chosen_languages: list[str] = field(default_factory=list)
+    chosen_tools: list[str] = field(default_factory=list)
+    racial_traits: list[str] = field(default_factory=list)
     progress_steps: list[str] = field(default_factory=list)
     progress_index: int = 0
+
+
+def _normalize_label_token(value: str | None) -> str:
+    return " ".join(str(value or "").replace("_", " ").replace("-", " ").strip().lower().split())
+
+
+def _race_auto_languages(race_name: str | None, subrace_name: str | None = None) -> list[str]:
+    keys = [
+        _normalize_label_token(subrace_name),
+        _normalize_label_token(race_name),
+    ]
+    for key in keys:
+        if not key:
+            continue
+        rows = _RACE_AUTO_LANGUAGES.get(key)
+        if rows:
+            return [str(row) for row in rows if str(row).strip()]
+    return []
+
+
+def _compact_rows(rows: list[str], limit: int = 6) -> str:
+    clean = [str(row) for row in list(rows or []) if str(row).strip()]
+    if not clean:
+        return "—"
+    if len(clean) <= limit:
+        return ", ".join(clean)
+    hidden = len(clean) - limit
+    return f"{', '.join(clean[:limit])} (+{hidden} more)"
 
 
 def _progress_markup(draft: CreationDraft) -> str:
@@ -74,12 +122,17 @@ def _draft_lines(draft: CreationDraft) -> list[str]:
     race_line = draft.race or "???"
     if draft.subrace:
         race_line = f"{race_line} ({draft.subrace})"
+    gender_value = str(getattr(draft, "name_gender", "") or "").strip().lower()
+    if gender_value in {"male", "female", "random"}:
+        gender_label = gender_value.title()
+    else:
+        gender_label = "???"
     ability_line = " / ".join(
         f"{abbr} {int(draft.ability_scores.get(abbr, 8))}" for abbr in ABILITY_ORDER
     ) if draft.ability_scores else "Not assigned"
-    return [
+    lines = [
         f"Name: {draft.name or '???'}",
-        f"Gender: {str(getattr(draft, 'name_gender', 'random') or 'random').title()}",
+        f"Gender: {gender_label}",
         f"Race: {race_line}",
         f"Class: {draft.class_name or '???'}",
         f"Subclass: {draft.subclass_name or '—'}",
@@ -91,6 +144,18 @@ def _draft_lines(draft: CreationDraft) -> list[str]:
         "",
         f"Stats: {ability_line}",
     ]
+    if bool(getattr(draft, "show_detailed", False)):
+        lines.extend(
+            [
+                "",
+                "[bold cyan]Details[/bold cyan]",
+                f"Auto Languages: {_compact_rows(list(getattr(draft, 'auto_languages', []) or []), limit=8)}",
+                f"Chosen Languages: {_compact_rows(list(getattr(draft, 'chosen_languages', []) or []), limit=8)}",
+                f"Tools: {_compact_rows(list(getattr(draft, 'chosen_tools', []) or []), limit=8)}",
+                f"Racial Traits: {_compact_rows(list(getattr(draft, 'racial_traits', []) or []), limit=6)}",
+            ]
+        )
+    return lines
 
 
 def _draft_panel(draft: CreationDraft):
@@ -119,6 +184,7 @@ def _creation_split_view(
     if footer_hint:
         left_lines.append("")
         left_lines.append(f"[yellow]{footer_hint}[/yellow]")
+    left_lines.append("[bold cyan]V[/bold cyan] Toggle draft details")
     left_lines.append("[bold white]Use arrow keys to move, ENTER to select, ESC to go back.[/bold white]")
     left_panel = Panel.fit(
         "\n".join(left_lines),
@@ -232,6 +298,10 @@ def _creation_menu(
             raw_key = read_key()
             key = normalize_menu_key(raw_key)
             raw = str(raw_key or "").strip().lower()
+            if raw == "v":
+                draft.show_detailed = not bool(getattr(draft, "show_detailed", False))
+                live.update(_render_view(), refresh=True)
+                continue
             if key == "UP":
                 selected = (selected - 1) % len(options)
                 live.update(_render_view(), refresh=True)
@@ -1062,6 +1132,8 @@ def _roll_assign_prompt(creation_service, chosen_class, draft: CreationDraft) ->
     rolling_preview = [1, 1, 1, 1]
     roll_rng = random.Random()
     frame_counter = 0
+    waiting_for_roll_continue = False
+    waiting_roll_number = 0
 
     def _ability_mod(score: int) -> int:
         return (int(score) - 10) // 2
@@ -1123,11 +1195,13 @@ def _roll_assign_prompt(creation_service, chosen_class, draft: CreationDraft) ->
             trail_rows = list(rolling_trail[-14:])
             if len(trail_rows) < 14:
                 trail_rows.extend(["[dim]·[/dim]"] * (14 - len(trail_rows)))
+            continue_line = "[bold cyan]ENTER next roll • SPACE fast-forward • ESC cancel[/bold cyan]" if waiting_for_roll_continue else ""
             center_lines = [
                 f"Rolling set {len(rolled_rows) + 1} / 6",
                 f"Progress: {progress_bar}",
                 f"Preview dice: ({', '.join(str(int(row)) for row in list(rolling_preview))})",
                 "",
+                continue_line,
                 *trail_rows,
             ]
         else:
@@ -1153,6 +1227,7 @@ def _roll_assign_prompt(creation_service, chosen_class, draft: CreationDraft) ->
 
     if _CONSOLE is not None and Panel is not None and Columns is not None and Live is not None:
         clear_screen()
+        fast_forward_remaining = False
         with Live(_render_assign_view(), console=_CONSOLE, refresh_per_second=24, transient=True) as live:
             for roll_index in range(6):
                 for frame_idx in range(8):
@@ -1179,8 +1254,33 @@ def _roll_assign_prompt(creation_service, chosen_class, draft: CreationDraft) ->
                     f"{total:>2} ({', '.join(str(int(token)) for token in final_dice)})"
                 )
                 rolling_preview = list(final_dice)
+                waiting_for_roll_continue = True
+                waiting_roll_number = int(roll_index + 1)
                 live.update(_render_assign_view(), refresh=True)
-                time.sleep(0.08)
+
+                if not fast_forward_remaining:
+                    while True:
+                        raw_wait_key = read_key()
+                        key = normalize_menu_key(raw_wait_key)
+                        raw_wait = str(raw_wait_key or "")
+                        if key == "ENTER":
+                            waiting_for_roll_continue = False
+                            waiting_roll_number = 0
+                            break
+                        if raw_wait == " ":
+                            fast_forward_remaining = True
+                            waiting_for_roll_continue = False
+                            waiting_roll_number = 0
+                            rolling_trail.append("[bold cyan]⏩ Fast-forward enabled for remaining rolls[/bold cyan]")
+                            break
+                        if key == "ESC":
+                            return None
+                else:
+                    waiting_for_roll_continue = False
+                    waiting_roll_number = 0
+
+                rolling_trail.append(f"[dim]Continuing after roll {waiting_roll_number or (roll_index + 1)}...[/dim]")
+                live.update(_render_assign_view(), refresh=True)
 
             is_rolling = False
             live.update(_render_assign_view(), refresh=True)
@@ -1775,10 +1875,30 @@ def run_character_creation(game_service):
     selected_class_feature_choices: dict[str, object] | None = None
     selected_feat_slug: str | None = None
 
+    def _sync_draft_details() -> None:
+        draft.auto_languages = _race_auto_languages(
+            str(getattr(race, "name", "") or ""),
+            str(getattr(selected_subrace, "name", "") or ""),
+        )
+
+        trait_rows: list[str] = []
+        for source in [race, selected_subrace]:
+            if source is None:
+                continue
+            for row in list(getattr(source, "traits", []) or []):
+                text = str(row).strip()
+                if text and text not in trait_rows:
+                    trait_rows.append(text)
+        draft.racial_traits = list(trait_rows)
+
+        draft.chosen_languages = [str(row) for row in list(selected_languages or []) if str(row).strip()]
+        draft.chosen_tools = [str(row) for row in list(selected_tool_proficiencies or []) if str(row).strip()]
+
     while 0 <= current_step < len(state_keys):
         key = state_keys[current_step]
         draft.progress_steps = list(step_labels)
         draft.progress_index = int(current_step)
+        _sync_draft_details()
 
         if key == "name":
             confirmed_name, raw_name = _choose_name(creation_service, draft)
