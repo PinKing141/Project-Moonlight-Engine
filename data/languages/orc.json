@@ -1,0 +1,20 @@
+{
+  "language_name": "Orc",
+  "phonemes": {
+    "vowels": ["a", "o", "u"],
+    "consonants": ["b", "d", "g", "gr", "k", "kr", "m", "r", "th", "z"],
+    "hard_consonants": ["k", "g", "kr", "gr", "t"]
+  },
+  "components": {
+    "prefixes": ["Gor", "Kra", "Mog", "Rug", "Thok", "Urg", "Vrag", "Zor"],
+    "suffixes_male": ["g", "nak", "ruk", "th", "mok", "gar"],
+    "suffixes_female": ["ga", "sha", "ra", "za", "gra", "dra"],
+    "suffixes_neutral": ["kruk", "vok", "gash", "mok", "zhar", "rag"]
+  },
+  "syllable_patterns": ["H-V-C", "H-V-H", "H-V-C-V"],
+  "naming_convention": {
+    "use_surname": false,
+    "surname_probability": 0.0,
+    "surname_style": "family"
+  }
+}

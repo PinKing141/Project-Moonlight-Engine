@@ -1,0 +1,22 @@
+{
+  "language_name": "Halfling",
+  "phonemes": {
+    "vowels": ["a", "e", "i", "o", "u", "ie"],
+    "consonants": ["b", "c", "d", "f", "h", "l", "m", "n", "p", "r", "t", "w"],
+    "hard_consonants": ["d", "p", "t"]
+  },
+  "components": {
+    "prefixes": ["Al", "Bel", "Cor", "Fin", "Lav", "Mer", "Per", "Ros"],
+    "suffixes_male": ["ton", "rin", "co", "by", "rick", "lo"],
+    "suffixes_female": ["ie", "a", "elle", "ina", "y", "ra"],
+    "suffixes_neutral": ["ley", "en", "ri", "lo", "wyn", "by"],
+    "surname_prefixes": ["Apple", "Brandy", "Good", "Green", "Hill", "Little", "Under", "Willow"],
+    "surname_suffixes": ["bottom", "buck", "glen", "brook", "brush", "burrow", "barrel", "field"]
+  },
+  "syllable_patterns": ["C-V-C", "C-V-C-V", "V-C-V"],
+  "naming_convention": {
+    "use_surname": true,
+    "surname_probability": 0.7,
+    "surname_style": "family"
+  }
+}

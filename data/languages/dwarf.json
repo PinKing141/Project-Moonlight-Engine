@@ -1,0 +1,22 @@
+{
+  "language_name": "Dwarf",
+  "phonemes": {
+    "vowels": ["a", "o", "u", "e", "oi", "au"],
+    "consonants": ["b", "d", "g", "k", "m", "n", "r", "t", "th", "z"],
+    "hard_consonants": ["k", "t", "d", "g"]
+  },
+  "components": {
+    "prefixes": ["Ba", "Dor", "Far", "Har", "Kil", "Mor", "Thor", "Ulf"],
+    "suffixes_male": ["din", "grim", "rak", "gar", "drum", "rik"],
+    "suffixes_female": ["dis", "ra", "hild", "bryn", "ga", "loda"],
+    "suffixes_neutral": ["rin", "drak", "kor", "var", "dun", "grom"],
+    "clan_roots": ["Iron", "Stone", "Hammer", "Anvil", "Deep", "Gold", "Rune", "Oak"],
+    "surname_suffixes": ["forge", "beard", "delver", "shield", "breaker", "vein", "mantle", "hewer"]
+  },
+  "syllable_patterns": ["H-V-C", "C-V-H", "H-V-C-C"],
+  "naming_convention": {
+    "use_surname": true,
+    "surname_probability": 0.98,
+    "surname_style": "clan"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "language_name": "Elf",
+  "phonemes": {
+    "vowels": ["a", "e", "i", "o", "u", "ae", "ia", "io", "ea", "ui"],
+    "consonants": ["l", "s", "f", "th", "v", "m", "n", "r", "y"],
+    "hard_consonants": ["k", "t", "c"]
+  },
+  "components": {
+    "prefixes": ["Ael", "Fae", "Gala", "Lia", "Syla", "Thal", "Vael", "Iri"],
+    "suffixes_male": ["dor", "ion", "las", "dil", "thas", "rian"],
+    "suffixes_female": ["wen", "nna", "ria", "wynn", "thiel", "lune"],
+    "suffixes_neutral": ["iel", "aris", "thir", "lyr", "aen", "anor"],
+    "surname_prefixes": ["Moon", "Star", "Silver", "Dawn", "Sun", "Night", "Wind", "Lune"],
+    "surname_suffixes": ["flower", "whisper", "song", "bough", "glade", "brook", "blade", "gaze"]
+  },
+  "syllable_patterns": ["V-C-V", "C-V-C", "C-V-V-C", "V-C-V-C"],
+  "naming_convention": {
+    "use_surname": true,
+    "surname_probability": 0.9,
+    "surname_style": "family"
+  }
+}

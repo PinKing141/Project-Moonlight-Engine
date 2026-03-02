@@ -1,0 +1,22 @@
+{
+  "language_name": "Tiefling",
+  "phonemes": {
+    "vowels": ["a", "e", "i", "o", "u", "ae", "ia", "ei"],
+    "consonants": ["b", "c", "d", "f", "k", "l", "m", "n", "r", "s", "v", "x", "z"],
+    "hard_consonants": ["k", "x", "z", "d"]
+  },
+  "components": {
+    "prefixes": ["Ak", "Cal", "Dae", "Eme", "Kas", "Luci", "Nox", "Ves"],
+    "suffixes_male": ["mon", "rius", "kas", "thos", "zar", "ion"],
+    "suffixes_female": ["ria", "essa", "is", "ira", "thia", "yne"],
+    "suffixes_neutral": ["rix", "veil", "nox", "aris", "vyr", "ember"],
+    "surname_prefixes": ["Ash", "Black", "Cinder", "Ember", "Night", "Raven", "Sable", "Vel"],
+    "surname_suffixes": ["borne", "veil", "thorn", "wake", "whisper", "scar", "ward", "crest"]
+  },
+  "syllable_patterns": ["C-V-C-V", "H-V-C", "C-V-V-C"],
+  "naming_convention": {
+    "use_surname": true,
+    "surname_probability": 0.65,
+    "surname_style": "family"
+  }
+}

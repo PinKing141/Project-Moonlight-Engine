@@ -1,0 +1,20 @@
+{
+  "language_name": "HalfOrc",
+  "phonemes": {
+    "vowels": ["a", "o", "u", "e"],
+    "consonants": ["b", "d", "g", "h", "k", "m", "r", "sh", "th", "z"],
+    "hard_consonants": ["k", "g", "t", "d"]
+  },
+  "components": {
+    "prefixes": ["Br", "Dr", "Gor", "Kar", "Mor", "Rag", "Thok", "Ur"],
+    "suffixes_male": ["g", "mok", "ruk", "thar", "den", "zor"],
+    "suffixes_female": ["ga", "sha", "ra", "mra", "za", "ka"],
+    "suffixes_neutral": ["rak", "gash", "rum", "dok", "vok", "zhar"]
+  },
+  "syllable_patterns": ["H-V-C", "C-V-H", "H-V-C-V"],
+  "naming_convention": {
+    "use_surname": false,
+    "surname_probability": 0.0,
+    "surname_style": "family"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "language_name": "Human",
+  "phonemes": {
+    "vowels": ["a", "e", "i", "o", "u", "ae", "ia"],
+    "consonants": ["b", "c", "d", "f", "g", "h", "l", "m", "n", "r", "s", "t", "v"],
+    "hard_consonants": ["d", "g", "k", "t"]
+  },
+  "components": {
+    "prefixes": ["Al", "Ben", "Cor", "Dar", "El", "Fen", "Har", "Mar", "Ros", "Val"],
+    "suffixes_male": ["den", "ric", "win", "ard", "os", "en"],
+    "suffixes_female": ["ia", "elle", "a", "ine", "ora", "yn"],
+    "suffixes_neutral": ["en", "ryn", "is", "ar", "el", "in"],
+    "surname_prefixes": ["Ash", "Bright", "Cold", "Dawn", "East", "Fair", "Gray", "Iron", "Storm", "West"],
+    "surname_suffixes": ["wood", "brook", "stone", "field", "well", "ward", "ford", "hill", "mere", "wright"]
+  },
+  "syllable_patterns": ["C-V-C", "C-V-C-V", "C-V-V-C"],
+  "naming_convention": {
+    "use_surname": true,
+    "surname_probability": 0.95,
+    "surname_style": "family"
+  }
+}

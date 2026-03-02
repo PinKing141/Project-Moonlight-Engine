@@ -1,0 +1,22 @@
+{
+  "language_name": "Dragonborn",
+  "phonemes": {
+    "vowels": ["a", "e", "i", "o", "u", "aa", "ar", "or"],
+    "consonants": ["d", "dr", "g", "gr", "k", "kr", "r", "s", "th", "v", "z"],
+    "hard_consonants": ["dr", "gr", "k", "kr", "z", "th"]
+  },
+  "components": {
+    "prefixes": ["Ar", "Bal", "Daar", "Ghesh", "Kriv", "Med", "Rhog", "Vyr"],
+    "suffixes_male": ["jhan", "asar", "drash", "mir", "thor", "zor"],
+    "suffixes_female": ["a", "iri", "ra", "sora", "vara", "yth"],
+    "suffixes_neutral": ["kar", "vyr", "drin", "resh", "keth", "zath"],
+    "clan_roots": ["Cleth", "Daard", "Kepesh", "Myast", "Norix", "Shest", "Turnuroth", "Verthis"],
+    "surname_suffixes": ["esh", "ax", "ir", "or", "uth", "ash", "arn", "eth"]
+  },
+  "syllable_patterns": ["H-V-C", "H-V-C-V", "C-V-H"],
+  "naming_convention": {
+    "use_surname": true,
+    "surname_probability": 0.75,
+    "surname_style": "clan"
+  }
+}

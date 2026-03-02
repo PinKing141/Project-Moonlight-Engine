@@ -316,12 +316,12 @@ def _choose_name(creation_service, draft: CreationDraft):
         return creation_service.suggest_generated_name(
             race_name=str(getattr(draft, "race", "") or "").strip() or None,
             class_index=class_index,
-            gender=current_gender if current_gender in {"male", "female"} else None,
+            gender=current_gender if current_gender in {"male", "female", "nonbinary"} else None,
         )
 
     while True:
         current_gender = str(getattr(draft, "name_gender", "random") or "random").strip().lower()
-        if current_gender not in {"male", "female", "random"}:
+        if current_gender not in {"male", "female", "nonbinary", "random"}:
             current_gender = "random"
 
         options = [
@@ -362,7 +362,7 @@ def _choose_name(creation_service, draft: CreationDraft):
 
 
 def _choose_name_generation_gender(draft: CreationDraft) -> str | None:
-    options = ["Random", "Male", "Female"]
+    options = ["Random", "Male", "Female", "Non-Binary"]
     idx = _creation_menu(
         "Gender",
         options,
@@ -371,7 +371,7 @@ def _choose_name_generation_gender(draft: CreationDraft) -> str | None:
     )
     if idx < 0:
         return None
-    return ["random", "male", "female"][idx]
+    return ["random", "male", "female", "nonbinary"][idx]
 
 
 def _render_character_summary(summary) -> None:

@@ -54,6 +54,31 @@ class NameGenerationProviderTests(unittest.TestCase):
         self.assertNotEqual("Nameless One", first)
         self.assertEqual(first, second)
 
+    def test_supports_nonbinary_name_generation(self) -> None:
+        provider = DnDCorpusNameGenerator()
+
+        generated = provider.suggest_character_name(
+            race_name="Tiefling",
+            gender="nonbinary",
+            context={"class_index": 0, "existing_count": 0},
+        )
+
+        self.assertTrue(bool(generated))
+        self.assertNotEqual("Nameless One", generated)
+
+    def test_subrace_name_maps_to_base_race_profile(self) -> None:
+        provider = DnDCorpusNameGenerator()
+
+        generated = provider.suggest_character_name(
+            race_name="Elf (Wood Elf)",
+            gender="female",
+            context={"class_index": 1, "existing_count": 2},
+        )
+
+        self.assertTrue(bool(generated))
+        self.assertNotEqual("Nameless One", generated)
+        self.assertTrue(generated[0].isupper())
+
 
 if __name__ == "__main__":
     unittest.main()

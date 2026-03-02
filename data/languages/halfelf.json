@@ -1,0 +1,22 @@
+{
+  "language_name": "HalfElf",
+  "phonemes": {
+    "vowels": ["a", "e", "i", "o", "u", "ae", "ia", "ei"],
+    "consonants": ["b", "d", "f", "l", "m", "n", "r", "s", "th", "v"],
+    "hard_consonants": ["d", "g", "t"]
+  },
+  "components": {
+    "prefixes": ["Ari", "Bel", "Cor", "Ela", "Fae", "Lio", "Ren", "Syl"],
+    "suffixes_male": ["ion", "ric", "an", "dor", "eth"],
+    "suffixes_female": ["ia", "elle", "wen", "ara", "ine"],
+    "suffixes_neutral": ["en", "aris", "el", "ryn", "or"],
+    "surname_prefixes": ["Moon", "Gray", "Bright", "Ash", "Dawn", "River", "Star", "Vale"],
+    "surname_suffixes": ["brook", "song", "ward", "wood", "mere", "glen", "thorn", "field"]
+  },
+  "syllable_patterns": ["C-V-C-V", "V-C-V", "C-V-V-C"],
+  "naming_convention": {
+    "use_surname": true,
+    "surname_probability": 0.8,
+    "surname_style": "family"
+  }
+}
