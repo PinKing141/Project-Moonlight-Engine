@@ -9,7 +9,7 @@ Implemented (closeout complete, 2026-03-02).
 - ✅ Added bounded `crafting_v1` normalization in world progression with safe defaults and versioned envelope.
 - ✅ Wired normalization into world progression tick loop for consistent save-state shape.
 - ✅ Added deterministic tests for crafting envelope normalization and identical-run signature stability.
-- ✅ Added deterministic craft outcome resolver for curated downtime recipe family.
+- ✅ Added deterministic craft outcome resolver for broader downtime crafting families (craft/brew/forge).
 - ✅ Surfaced compact crafting and crisis summaries in existing town pressure view.
 - ✅ Added integration tests for deterministic craft outcomes and persisted `crafting_v1` recipe/stockpile updates.
 
@@ -22,7 +22,7 @@ Implemented (closeout complete, 2026-03-02).
 
 ### Acceptance Closeout Checklist
 
-- ✅ Crafting baseline is playable via one deterministic town action path.
+- ✅ Crafting baseline is playable via multiple deterministic town action paths.
   - Covered by `test_submit_downtime_crafting_outcome_is_deterministic_for_same_seed` and `test_submit_downtime_crafting_spends_gold_adds_item_and_advances_world`.
 - ✅ Crisis progression state advances predictably under deterministic rules.
   - Covered by `test_cataclysm_clock_is_deterministic_for_same_state`.
@@ -79,7 +79,7 @@ Establish a deterministic crafting/profession baseline and endgame crisis state 
 
 ## Acceptance Criteria
 
-- Crafting baseline is playable via one deterministic town action path.
+- Crafting baseline is playable via multiple deterministic town action paths.
 - Crisis progression state advances predictably under deterministic rules.
 - Existing presentation contracts remain stable.
 
@@ -91,6 +91,6 @@ Establish a deterministic crafting/profession baseline and endgame crisis state 
 ## First Implementation Slice
 
 1. Add `crafting_v1` normalization helper and default envelope.
-2. Add deterministic craft outcome resolver for one curated recipe family.
+2. Add deterministic craft outcome resolver for bounded craft/brew/forge recipe families.
 3. Surface compact craft/cataclysm summary in existing town view.
 4. Add targeted unit + integration regression tests.

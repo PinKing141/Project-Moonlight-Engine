@@ -4434,6 +4434,7 @@ class GameService:
             combined_lines = [conflict_summary, *list(combined_lines or [])]
         cataclysm = self._world_cataclysm_state(world)
         crafting_summary, crafting_lines = self._crafting_pressure_display(world)
+        campaign_summary, campaign_lines = self._campaign_sync_display(world)
         if crafting_summary:
             combined_summary = f"{combined_summary} | {crafting_summary}"
             combined_lines = [*list(crafting_lines or []), *list(combined_lines or [])]
@@ -4442,6 +4443,9 @@ class GameService:
             if crisis_line.strip() != "Crisis:":
                 combined_summary = f"{combined_summary} | {crisis_line}"
                 combined_lines = [crisis_line, *list(combined_lines or [])]
+        if campaign_summary:
+            combined_summary = f"{combined_summary} | {campaign_summary}" if combined_summary else campaign_summary
+            combined_lines = [*list(campaign_lines or []), *list(combined_lines or [])]
         try:
             raw_progress = cataclysm.get("progress", 0)
             cataclysm_progress = max(0, min(100, int(raw_progress if isinstance(raw_progress, (int, float, str)) else 0)))
@@ -5201,7 +5205,7 @@ class GameService:
 
         crafting_messages: list[str] = []
         activity_family = str(getattr(activity, "activity_family", "") or "").strip().lower()
-        is_crafting_activity = activity_family == "crafting" or str(activity.id).startswith("craft_")
+        is_crafting_activity = activity_family == "crafting"
         if is_crafting_activity:
             world_target = world_after
             if world_target is None and self.world_repo:
@@ -10386,6 +10390,18 @@ class GameService:
                 "base_item": "whetstone",
                 "bonus_item": "antitoxin",
             },
+            "brew_antitoxin": {
+                "recipe_id": "counteragent_mix",
+                "profession": "fieldcraft",
+                "base_item": "antitoxin",
+                "bonus_item": "healing_herbs",
+            },
+            "forge_travel_kit": {
+                "recipe_id": "trail_hardening_kit",
+                "profession": "refining",
+                "base_item": "sturdy_rations",
+                "bonus_item": "rope",
+            },
         }
         normalized_activity_id = str(activity_id or "").strip().lower()
         profile = recipe_map.get(normalized_activity_id)
@@ -10460,6 +10476,37 @@ class GameService:
             f"Craft result: {quality_label} batch ({profession_key} +{profession_gain}).",
             *bonus_messages,
         ]
+
+    @staticmethod
+    def _campaign_sync_display(world) -> tuple[str, list[str]]:
+        if not isinstance(getattr(world, "flags", None), dict):
+            return "", []
+        row = world.flags.get("campaign_sync_v1", {})
+        if not isinstance(row, dict):
+            return "", []
+
+        npc_shift = str(row.get("npc_shift", "") or "").strip()
+        faction_signal = str(row.get("faction_signal", "") or "").strip()
+        story_trigger = str(row.get("story_trigger", "") or "").strip()
+
+        if not any((npc_shift, faction_signal, story_trigger)):
+            return "", []
+
+        summary_parts: list[str] = []
+        lines: list[str] = []
+        if npc_shift:
+            summary_parts.append(f"NPC cycle: {npc_shift.title()}")
+            lines.append(f"NPC cycle shifted to {npc_shift.title()}.")
+        if faction_signal:
+            pair, _, score = faction_signal.partition(":")
+            pair_label = str(pair).replace("|", " vs ")
+            summary_parts.append(f"Faction hotspot: {pair_label} ({score or '0'})")
+            lines.append(f"Faction hotspot: {pair_label} (pressure {score or '0'}).")
+        if story_trigger:
+            trigger_label = story_trigger.replace("_", " ").title()
+            summary_parts.append(f"Story trigger: {trigger_label}")
+            lines.append(f"Story trigger armed: {trigger_label}.")
+        return " | ".join(summary_parts), lines
 
     def _crafting_pressure_display(self, world) -> tuple[str, list[str]]:
         state = self._world_crafting_state(world)

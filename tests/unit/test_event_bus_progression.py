@@ -459,6 +459,61 @@ class WorldProgressionTests(unittest.TestCase):
             repo_b.world.flags.get("crafting_v1", {}),
         )
 
+    def test_faction_conflict_auto_bootstraps_from_diplomacy_state(self) -> None:
+        world_repo = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        progression = WorldProgression(world_repo, entity_repo, EventBus())
+
+        world_repo.world.flags = {
+            "narrative": {
+                "faction_diplomacy": {
+                    "factions": ["wardens", "thieves_guild", "tower_aurelian"],
+                    "relations": {
+                        "wardens|thieves_guild": -40,
+                    },
+                }
+            }
+        }
+
+        progression.tick(world_repo.world, ticks=1)
+
+        conflict = dict((world_repo.world.flags or {}).get("faction_conflict_v1", {}))
+        self.assertTrue(bool(conflict.get("active", False)))
+        relations = dict(conflict.get("relations", {}))
+        self.assertIn("thieves_guild|wardens", relations)
+        self.assertIn("tower_aurelian|wardens", relations)
+        self.assertIn("thieves_guild|tower_aurelian", relations)
+
+    def test_campaign_sync_hooks_populate_state_each_tick(self) -> None:
+        world_repo = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        progression = WorldProgression(world_repo, entity_repo, EventBus())
+
+        world_repo.world.flags = {
+            "cataclysm_state": {
+                "active": True,
+                "phase": "map_shrinks",
+                "kind": "plague",
+                "progress": 70,
+                "started_turn": 0,
+                "last_advance_turn": 0,
+            },
+            "faction_conflict_v1": {
+                "version": 1,
+                "active": True,
+                "relations": {
+                    "wardens|thieves_guild": {"score": -8, "stance": "hostile", "last_updated_turn": 0},
+                },
+            },
+        }
+
+        progression.tick(world_repo.world, ticks=1)
+
+        sync = dict((world_repo.world.flags or {}).get("campaign_sync_v1", {}))
+        self.assertTrue(str(sync.get("npc_shift", "")))
+        self.assertTrue(str(sync.get("faction_signal", "")))
+        self.assertEqual("cataclysm_climax", str(sync.get("story_trigger", "")))
+
 
 if __name__ == "__main__":
     unittest.main()

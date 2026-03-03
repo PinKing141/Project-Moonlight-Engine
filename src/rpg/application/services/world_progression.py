@@ -20,6 +20,7 @@ class WorldProgression:
     _FACTION_CONFLICT_VERSION = 1
     _CRAFTING_VERSION = 1
     _CRAFTING_PROFESSIONS = ("gathering", "refining", "fieldcraft")
+    _STORY_TRIGGER_WINDOW = 8
 
     def __init__(self, world_repo: WorldRepository, entity_repo: EntityRepository, event_bus: EventBus) -> None:
         self.world_repo = world_repo
@@ -32,7 +33,9 @@ class WorldProgression:
             self._ensure_crafting_state(world)
             self._advance_cataclysm_clock(world)
             self._advance_faction_conflict_clock(world)
-            # Future hooks: NPC schedules, faction AI, story triggers
+            self._advance_npc_schedule_clock(world)
+            self._advance_faction_ai_clock(world)
+            self._advance_story_trigger_clock(world)
         if persist:
             self.world_repo.save(world)
         self.event_bus.publish(TickAdvanced(turn_after=world.current_turn))
@@ -91,6 +94,43 @@ class WorldProgression:
                 "last_updated_turn": int(world_turn),
             }
         return seeded
+
+    @classmethod
+    def _seed_missing_faction_conflict_pairs(cls, world: World, existing: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
+        if not isinstance(getattr(world, "flags", None), dict):
+            return existing
+        narrative = world.flags.get("narrative", {})
+        if not isinstance(narrative, dict):
+            return existing
+        diplomacy = narrative.get("faction_diplomacy", {})
+        if not isinstance(diplomacy, dict):
+            return existing
+        factions_raw = diplomacy.get("factions", [])
+        if not isinstance(factions_raw, list):
+            return existing
+
+        faction_ids: list[str] = []
+        for value in factions_raw:
+            faction_id = str(value or "").strip().lower().replace(" ", "_")
+            if faction_id and faction_id not in faction_ids:
+                faction_ids.append(faction_id)
+
+        if len(faction_ids) < 2:
+            return existing
+
+        seeded = dict(existing)
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+        for left_index in range(len(faction_ids)):
+            for right_index in range(left_index + 1, len(faction_ids)):
+                pair = cls._pair_key(faction_ids[left_index], faction_ids[right_index])
+                if not pair or pair in seeded:
+                    continue
+                seeded[pair] = {
+                    "score": 0,
+                    "stance": "neutral",
+                    "last_updated_turn": int(world_turn),
+                }
+        return seeded
     @classmethod
     def _ensure_faction_conflict_state(cls, world: World) -> dict:
         if not isinstance(getattr(world, "flags", None), dict):
@@ -123,10 +163,9 @@ class WorldProgression:
                 "last_updated_turn": int(payload.get("last_updated_turn", 0) or 0),
             }
         normalized_relations = cls._seed_faction_conflict_relations_from_diplomacy(world, normalized_relations)
+        normalized_relations = cls._seed_missing_faction_conflict_pairs(world, normalized_relations)
         row["relations"] = normalized_relations
-        if normalized_relations and "active" not in row:
-            row["active"] = True
-        elif normalized_relations and not bool(row.get("active", False)):
+        if normalized_relations and not bool(row.get("active", False)):
             row["active"] = True
         row["last_tick_turn"] = int(row.get("last_tick_turn", 0) or 0)
         return row
@@ -165,6 +204,84 @@ class WorldProgression:
             payload["last_updated_turn"] = int(world_turn)
 
         state["last_tick_turn"] = int(world_turn)
+
+    @staticmethod
+    def _world_campaign_sync_state(world: World) -> dict:
+        if not isinstance(getattr(world, "flags", None), dict):
+            world.flags = {}
+        row = world.flags.setdefault("campaign_sync_v1", {})
+        if not isinstance(row, dict):
+            row = {}
+            world.flags["campaign_sync_v1"] = row
+        row.setdefault("version", 1)
+        row.setdefault("npc_shift", "")
+        row.setdefault("npc_shift_turn", 0)
+        row.setdefault("faction_signal", "")
+        row.setdefault("faction_signal_turn", 0)
+        row.setdefault("story_trigger", "")
+        row.setdefault("story_trigger_turn", 0)
+        return row
+
+    def _advance_npc_schedule_clock(self, world: World) -> None:
+        state = self._world_campaign_sync_state(world)
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+        phase_slots = ("dawn", "day", "dusk", "night")
+        slot_index = int(world_turn) % len(phase_slots)
+        slot = phase_slots[slot_index]
+        if state.get("npc_shift") != slot:
+            state["npc_shift"] = str(slot)
+            state["npc_shift_turn"] = int(world_turn)
+
+    def _advance_faction_ai_clock(self, world: World) -> None:
+        state = self._world_campaign_sync_state(world)
+        conflict = self._ensure_faction_conflict_state(world)
+        relations = conflict.get("relations", {}) if isinstance(conflict, dict) else {}
+        if not isinstance(relations, dict) or not relations:
+            return
+
+        hot_pair = ""
+        hot_score = -1
+        for pair, payload in relations.items():
+            row = payload if isinstance(payload, dict) else {}
+            score = abs(int(row.get("score", 0) or 0))
+            if score > hot_score:
+                hot_pair = str(pair)
+                hot_score = int(score)
+
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+        if hot_pair:
+            signal = f"{hot_pair}:{hot_score}"
+            if state.get("faction_signal") != signal:
+                state["faction_signal"] = signal
+                state["faction_signal_turn"] = int(world_turn)
+
+    def _advance_story_trigger_clock(self, world: World) -> None:
+        state = self._world_campaign_sync_state(world)
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+
+        cataclysm = self._ensure_cataclysm_state(world)
+        cat_active = bool(cataclysm.get("active", False))
+        cat_phase = str(cataclysm.get("phase", "") or "")
+        conflict = self._ensure_faction_conflict_state(world)
+        relations = conflict.get("relations", {}) if isinstance(conflict, dict) else {}
+        hostile_pairs = 0
+        if isinstance(relations, dict):
+            for payload in relations.values():
+                row = payload if isinstance(payload, dict) else {}
+                if int(row.get("score", 0) or 0) <= -4:
+                    hostile_pairs += 1
+
+        trigger = ""
+        if cat_active and cat_phase in {"map_shrinks", "ruin"}:
+            trigger = "cataclysm_climax"
+        elif hostile_pairs >= 2:
+            trigger = "faction_flashpoint"
+        elif world_turn > 0 and (world_turn % int(self._STORY_TRIGGER_WINDOW)) == 0:
+            trigger = "story_beat"
+
+        if trigger and state.get("story_trigger") != trigger:
+            state["story_trigger"] = trigger
+            state["story_trigger_turn"] = int(world_turn)
 
     @classmethod
     def _ensure_crafting_state(cls, world: World) -> dict:

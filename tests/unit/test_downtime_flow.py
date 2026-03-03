@@ -45,6 +45,8 @@ class DowntimeFlowTests(unittest.TestCase):
         options = service.get_downtime_options_intent(character_id)
         self.assertTrue(options)
         self.assertTrue(any(activity_id == "craft_healing_herbs" for activity_id, _label in options))
+        self.assertTrue(any(activity_id == "brew_antitoxin" for activity_id, _label in options))
+        self.assertTrue(any(activity_id == "forge_travel_kit" for activity_id, _label in options))
 
     def test_submit_downtime_crafting_spends_gold_adds_item_and_advances_world(self) -> None:
         service, character_repo, world_repo, _faction_repo, character_id = self._build_service(money=20)
@@ -125,6 +127,15 @@ class DowntimeFlowTests(unittest.TestCase):
         self.assertIn("field_remedy", known)
         stockpile = dict(crafting.get("stockpile", {}))
         self.assertGreaterEqual(int(stockpile.get("healing_herbs", 0) or 0), 1)
+
+    def test_submit_downtime_brew_activity_routes_through_crafting_pipeline(self) -> None:
+        service, _character_repo, world_repo, _faction_repo, character_id = self._build_service(money=20)
+
+        result = service.submit_downtime_intent(character_id, "brew_antitoxin")
+
+        self.assertTrue(any(str(line).startswith("Craft result:") for line in result.messages))
+        crafting = dict((world_repo.load_default().flags or {}).get("crafting_v1", {}))
+        self.assertIn("counteragent_mix", list(crafting.get("known_recipes", []) or []))
 
 
 if __name__ == "__main__":
