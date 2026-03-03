@@ -22,6 +22,10 @@ from rpg.application.dtos import (
     ExploreView,
     LevelUpPendingView,
     FactionStandingsView,
+    GuildBoardView,
+    GuildContractView,
+    GuildPromotionCheckView,
+    GuildStatusView,
     GameLoopView,
     LocationContextView,
     NpcInteractionView,
@@ -83,6 +87,11 @@ from rpg.application.services.encounter_flavour import random_intro
 from rpg.application.services.progression_service import ProgressionService
 from rpg.application.services.downtime_service import DowntimeService
 from rpg.domain.services.spellcasting import available_slot_levels, consume_slot, normalize_slot_ledger, restore_slots
+from rpg.domain.services.guild_membership import (
+    default_guild_membership_payload,
+    evaluate_tier_promotion,
+    normalize_guild_membership_payload,
+)
 from rpg.infrastructure.world_import.reference_dataset_loader import load_reference_world_dataset
 from rpg.domain.events import FactionReputationChangedEvent, MonsterSlain
 from rpg.domain.models.character import Character
@@ -1100,6 +1109,7 @@ class GameService:
         from rpg.application.services.quest_application_service import QuestApplicationService
         from rpg.application.services.town_economy_application_service import TownEconomyApplicationService
         from rpg.application.services.party_application_service import PartyApplicationService
+        from rpg.application.services.guild_application_service import GuildApplicationService
 
         self.character_repo = character_repo
         self.entity_repo = entity_repo
@@ -1132,6 +1142,7 @@ class GameService:
         self.quest_app_service = QuestApplicationService(self)
         self.town_economy_app_service = TownEconomyApplicationService(self)
         self.party_app_service = PartyApplicationService(self)
+        self.guild_app_service = GuildApplicationService(self)
 
         if class_repo and location_repo:
             client = None
@@ -3327,6 +3338,10 @@ class GameService:
             next_level_xp = xp_required_for_level(level + 1)
             xp_to_next = max(0, int(next_level_xp) - xp)
         pressure_summary, pressure_lines = self._faction_pressure_display(character)
+        guild_summary, guild_lines = self._guild_status_display(character)
+        if guild_summary:
+            pressure_summary = f"{pressure_summary} | {guild_summary}" if pressure_summary else guild_summary
+            pressure_lines = [*guild_lines, *list(pressure_lines or [])]
         return CharacterSheetView(
             character_id=int(character.id or 0),
             name=character.name,
@@ -4409,6 +4424,10 @@ class GameService:
         resource_summary, resource_lines = self._resource_pressure_display(character)
         combined_summary = f"{pressure_summary} | {resource_summary}" if resource_summary else pressure_summary
         combined_lines = [*pressure_lines, *resource_lines]
+        guild_summary, guild_lines = self._guild_status_display(character)
+        if guild_summary:
+            combined_summary = f"{combined_summary} | {guild_summary}" if combined_summary else guild_summary
+            combined_lines = [*guild_lines, *list(combined_lines or [])]
         conflict_summary = self._faction_conflict_summary(world)
         if conflict_summary:
             combined_summary = f"{combined_summary} | {conflict_summary}"
@@ -8864,6 +8883,512 @@ class GameService:
             conflict_summary=self._faction_conflict_summary(world),
         )
 
+    @staticmethod
+    def _guild_conduct_score(character: Character) -> int:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        try:
+            value = int(flags.get("guild_conduct_score", 50) or 50)
+        except Exception:
+            value = 50
+        bounded = max(0, min(100, value))
+        flags["guild_conduct_score"] = int(bounded)
+        return int(bounded)
+
+    @staticmethod
+    def _guild_role_competency_score(character: Character) -> int:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        try:
+            value = int(flags.get("guild_role_competency_score", 0) or 0)
+        except Exception:
+            value = 0
+        bounded = max(0, min(100, value))
+        if bounded <= 0:
+            guild_raw = flags.get("guild", {})
+            role_mode = "solo"
+            if isinstance(guild_raw, dict):
+                role_mode = str(guild_raw.get("role_mode", "solo") or "solo").strip().lower()
+            defaults = {
+                "solo": 25,
+                "party_member": 35,
+                "party_leader": 45,
+            }
+            bounded = int(defaults.get(role_mode, 25))
+        flags["guild_role_competency_score"] = int(bounded)
+        return int(bounded)
+
+    @staticmethod
+    def _guild_completed_contracts(character: Character) -> int:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        try:
+            value = int(flags.get("guild_completed_contracts", 0) or 0)
+        except Exception:
+            value = 0
+        bounded = max(0, value)
+        flags["guild_completed_contracts"] = int(bounded)
+        return int(bounded)
+
+    @staticmethod
+    def _guild_recent_contract_results(character: Character) -> list[bool]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        raw = flags.get("guild_recent_contract_results", [])
+        normalized: list[bool] = []
+        if isinstance(raw, list):
+            for value in raw:
+                if isinstance(value, bool):
+                    normalized.append(value)
+                    continue
+                text = str(value or "").strip().lower()
+                if text in {"1", "true", "success", "pass", "completed"}:
+                    normalized.append(True)
+                elif text in {"0", "false", "fail", "failed", "abandoned"}:
+                    normalized.append(False)
+        if len(normalized) > 50:
+            normalized = normalized[-50:]
+        flags["guild_recent_contract_results"] = list(normalized)
+        return normalized
+
+    @staticmethod
+    def _guild_rank_history(character: Character) -> list[str]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        raw = flags.get("guild_rank_history", [])
+        history: list[str] = []
+        if isinstance(raw, list):
+            history = [str(item) for item in raw if str(item).strip()]
+        flags["guild_rank_history"] = list(history)
+        return history
+
+    def _guild_rank_history_repo(self, character_id: int) -> list[str]:
+        list_history = getattr(self.character_repo, "list_guild_history", None)
+        if not callable(list_history):
+            return []
+        try:
+            rows = list_history(int(character_id))
+        except Exception:
+            return []
+        if not isinstance(rows, list):
+            return []
+        rank_entries: list[str] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("event_kind", "") or "") != "rank_change":
+                continue
+            old_value = str(row.get("old_value", "") or "").strip().lower()
+            new_value = str(row.get("new_value", "") or "").strip().lower()
+            if not old_value or not new_value:
+                continue
+            rank_entries.append(f"{old_value}->{new_value}")
+        return rank_entries
+
+    @staticmethod
+    def _current_world_turn(world_repo: WorldRepository | None) -> int:
+        if world_repo is None:
+            return 0
+        try:
+            world = world_repo.load_default()
+        except Exception:
+            world = None
+        try:
+            return int(getattr(world, "current_turn", 0) or 0)
+        except Exception:
+            return 0
+
+    def _record_guild_history_event(
+        self,
+        *,
+        character_id: int,
+        event_kind: str,
+        old_value: str,
+        new_value: str,
+        reason: str,
+        metadata_json: str = "{}",
+    ) -> None:
+        recorder = getattr(self.character_repo, "record_guild_history", None)
+        if not callable(recorder):
+            return
+        try:
+            recorder(
+                character_id=int(character_id),
+                event_kind=str(event_kind),
+                old_value=str(old_value),
+                new_value=str(new_value),
+                changed_turn=self._current_world_turn(self.world_repo),
+                reason=str(reason),
+                metadata_json=str(metadata_json or "{}"),
+            )
+        except Exception:
+            return
+
+    def _guild_status_display(self, character: Character) -> tuple[str, list[str]]:
+        guild_payload, _warnings = self._resolve_character_guild_runtime(character)
+        membership = str(guild_payload.get("membership_status", "none") or "none").replace("_", " ").title()
+        rank = str(guild_payload.get("rank_tier", "bronze") or "bronze").title()
+        merits = int(guild_payload.get("merits", 0) or 0)
+        reputation = int(guild_payload.get("reputation_global", 0) or 0)
+        conduct = self._guild_conduct_score(character)
+        active_contracts = len(self._guild_active_contracts(character))
+        summary = f"Guild: {membership} • Tier {rank} • Merits {merits}"
+        lines = [
+            f"Guild membership: {membership}",
+            f"Guild rank tier: {rank}",
+            f"Guild reputation: {reputation} (global)",
+            f"Guild conduct: {conduct}/100 • Active contracts: {active_contracts}",
+        ]
+        return summary, lines
+
+    @staticmethod
+    def _guild_active_contracts(character: Character) -> list[dict[str, object]]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        raw = flags.get("guild_active_contracts", [])
+        rows: list[dict[str, object]] = []
+        if isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                contract_id = str(item.get("contract_id", "") or "").strip().lower()
+                if not contract_id:
+                    continue
+                rows.append(
+                    {
+                        "contract_id": contract_id,
+                        "title": str(item.get("title", "Guild Contract") or "Guild Contract"),
+                        "tier": str(item.get("tier", "bronze") or "bronze").strip().lower(),
+                        "region": str(item.get("region", "frontier") or "frontier").strip().lower(),
+                        "reward_merits": max(0, int(item.get("reward_merits", 0) or 0)),
+                        "reward_reputation": int(item.get("reward_reputation", 0) or 0),
+                    }
+                )
+        flags["guild_active_contracts"] = list(rows)
+        return rows
+
+    def _resolve_character_guild_runtime(self, character: Character) -> tuple[dict[str, object], list[str]]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+
+        default_payload = default_guild_membership_payload()
+        raw_payload = flags.get("guild", default_payload)
+        payload = raw_payload if isinstance(raw_payload, dict) else default_payload
+
+        state, warnings_tuple = normalize_guild_membership_payload(payload)
+        warnings = [str(item) for item in warnings_tuple if str(item).strip()]
+
+        normalized_payload: dict[str, object] = {
+            "version": str(state.version),
+            "membership_status": str(state.membership_status),
+            "rank_tier": str(state.rank_tier),
+            "role_mode": str(state.role_mode),
+            "reputation_global": int(state.reputation_global),
+            "reputation_by_region": dict(state.reputation_by_region),
+            "merits": int(state.merits),
+        }
+        flags["guild"] = dict(normalized_payload)
+        return normalized_payload, warnings
+
+    def _guild_board_contract_templates(self) -> tuple[dict[str, object], ...]:
+        return (
+            {
+                "contract_id": "guild_livelihood_patrol",
+                "title": "Livelihood Patrol",
+                "tier": "bronze",
+                "reward_merits": 2,
+                "reward_reputation": 4,
+                "livelihood": True,
+            },
+            {
+                "contract_id": "guild_livelihood_escort",
+                "title": "Livelihood Escort",
+                "tier": "bronze",
+                "reward_merits": 3,
+                "reward_reputation": 5,
+                "livelihood": True,
+            },
+            {
+                "contract_id": "guild_regional_sweep",
+                "title": "Regional Sweep",
+                "tier": "silver",
+                "reward_merits": 5,
+                "reward_reputation": 8,
+                "livelihood": False,
+            },
+            {
+                "contract_id": "guild_elite_hunt",
+                "title": "Elite Hunt",
+                "tier": "gold",
+                "reward_merits": 9,
+                "reward_reputation": 12,
+                "livelihood": False,
+            },
+            {
+                "contract_id": "guild_command_operation",
+                "title": "Command Operation",
+                "tier": "diamond",
+                "reward_merits": 14,
+                "reward_reputation": 18,
+                "livelihood": False,
+            },
+            {
+                "contract_id": "guild_grand_charter",
+                "title": "Grand Charter",
+                "tier": "platinum",
+                "reward_merits": 20,
+                "reward_reputation": 24,
+                "livelihood": False,
+            },
+        )
+
+    @staticmethod
+    def _guild_tier_index(tier: str) -> int:
+        order = ("bronze", "silver", "gold", "diamond", "platinum")
+        normalized = str(tier or "bronze").strip().lower()
+        try:
+            return order.index(normalized)
+        except Exception:
+            return 0
+
+    def get_guild_status_intent(self, character_id: int) -> GuildStatusView:
+        character = self._require_character(character_id)
+        guild_payload, warnings = self._resolve_character_guild_runtime(character)
+        conduct_score = self._guild_conduct_score(character)
+        completed_contracts = self._guild_completed_contracts(character)
+        rank_history = self._guild_rank_history(character)
+        rank_history.extend(self._guild_rank_history_repo(character_id))
+        rank_history = list(dict.fromkeys(rank_history))
+        active_contracts = self._guild_active_contracts(character)
+        self.character_repo.save(character)
+        return GuildStatusView(
+            membership_status=str(guild_payload.get("membership_status", "none") or "none"),
+            rank_tier=str(guild_payload.get("rank_tier", "bronze") or "bronze"),
+            role_mode=str(guild_payload.get("role_mode", "solo") or "solo"),
+            reputation_global=int(guild_payload.get("reputation_global", 0) or 0),
+            reputation_by_region=dict(guild_payload.get("reputation_by_region", {}) or {}),
+            merits=int(guild_payload.get("merits", 0) or 0),
+            conduct_score=int(conduct_score),
+            completed_contracts=int(completed_contracts),
+            active_contracts=len(active_contracts),
+            rank_history=list(rank_history),
+            warnings=list(warnings),
+        )
+
+    def get_guild_board_intent(self, character_id: int, region: str | None = None) -> GuildBoardView:
+        character = self._require_character(character_id)
+        guild_payload, warnings = self._resolve_character_guild_runtime(character)
+        membership_status = str(guild_payload.get("membership_status", "none") or "none")
+        rank_tier = str(guild_payload.get("rank_tier", "bronze") or "bronze")
+        tier_index = self._guild_tier_index(rank_tier)
+        region_label = str(region or "frontier").strip().lower() or "frontier"
+
+        if membership_status in {"none", "expelled"}:
+            self.character_repo.save(character)
+            return GuildBoardView(
+                contracts=[],
+                empty_state_hint="Guild membership is required before contract access.",
+            )
+
+        hostile_faction_pressure = any(int(score) <= -10 for score in self.faction_standings_intent(character_id).values())
+        rows: list[GuildContractView] = []
+        for template in self._guild_board_contract_templates():
+            required_index = self._guild_tier_index(str(template.get("tier", "bronze") or "bronze"))
+            available = required_index <= tier_index
+            note = ""
+            is_livelihood = bool(template.get("livelihood", False))
+            if membership_status == "suspended" and not is_livelihood:
+                available = False
+                note = "Suspended status limits access to livelihood contracts only."
+            if hostile_faction_pressure and not is_livelihood:
+                available = False
+                note = "Faction conflicts reduced contract availability for this board tier."
+
+            rows.append(
+                GuildContractView(
+                    contract_id=str(template.get("contract_id", "") or "").strip().lower(),
+                    title=str(template.get("title", "Guild Contract") or "Guild Contract"),
+                    tier=str(template.get("tier", "bronze") or "bronze").strip().lower(),
+                    region=region_label,
+                    reward_merits=int(template.get("reward_merits", 0) or 0),
+                    reward_reputation=int(template.get("reward_reputation", 0) or 0),
+                    available=bool(available),
+                    availability_note=note,
+                )
+            )
+
+        rows.sort(key=lambda row: (self._guild_tier_index(row.tier), row.title.lower()))
+        hint = "" if rows else "No guild contracts available."
+        if warnings:
+            hint = " ".join([hint, *warnings]).strip()
+        self.character_repo.save(character)
+        return GuildBoardView(contracts=rows, empty_state_hint=hint)
+
+    def accept_guild_contract_intent(self, character_id: int, contract_id: str, region: str | None = None) -> ActionResult:
+        character = self._require_character(character_id)
+        board = self.get_guild_board_intent(character_id, region=region)
+        contract_key = str(contract_id or "").strip().lower()
+        match = next((row for row in board.contracts if row.contract_id == contract_key), None)
+        if match is None:
+            return ActionResult(messages=["Guild contract not found."], game_over=False)
+        if not bool(match.available):
+            reason = str(match.availability_note or "Contract is currently unavailable.")
+            return ActionResult(messages=[reason], game_over=False)
+
+        active = self._guild_active_contracts(character)
+        if any(str(row.get("contract_id", "")) == contract_key for row in active):
+            return ActionResult(messages=["That guild contract is already active."], game_over=False)
+        if len(active) >= 3:
+            return ActionResult(messages=["Guild contract cap reached (3). Turn in an active contract first."], game_over=False)
+
+        active.append(
+            {
+                "contract_id": contract_key,
+                "title": str(match.title),
+                "tier": str(match.tier),
+                "region": str(match.region),
+                "reward_merits": int(match.reward_merits),
+                "reward_reputation": int(match.reward_reputation),
+            }
+        )
+        if isinstance(character.flags, dict):
+            character.flags["guild_active_contracts"] = list(active)
+        self.character_repo.save(character)
+        return ActionResult(messages=[f"Accepted guild contract: {match.title}."], game_over=False)
+
+    def turn_in_guild_contract_intent(self, character_id: int, contract_id: str, success: bool = True) -> ActionResult:
+        character = self._require_character(character_id)
+        guild_payload, warnings = self._resolve_character_guild_runtime(character)
+        active = self._guild_active_contracts(character)
+        contract_key = str(contract_id or "").strip().lower()
+        index = next((i for i, row in enumerate(active) if str(row.get("contract_id", "")) == contract_key), -1)
+        if index < 0:
+            return ActionResult(messages=["No active guild contract found with that id."], game_over=False)
+
+        contract = dict(active[index])
+        del active[index]
+        if isinstance(character.flags, dict):
+            character.flags["guild_active_contracts"] = list(active)
+
+        reward_merits = max(0, int(contract.get("reward_merits", 0) or 0))
+        reward_reputation = int(contract.get("reward_reputation", 0) or 0)
+        region = str(contract.get("region", "frontier") or "frontier").strip().lower() or "frontier"
+        reputation_by_region = dict(guild_payload.get("reputation_by_region", {}) or {})
+        conduct = self._guild_conduct_score(character)
+        previous_conduct = int(conduct)
+        completed = self._guild_completed_contracts(character)
+        recent = self._guild_recent_contract_results(character)
+        previous_status = str(guild_payload.get("membership_status", "none") or "none")
+
+        if success:
+            guild_payload["membership_status"] = "active"
+            guild_payload["merits"] = int(guild_payload.get("merits", 0) or 0) + int(reward_merits)
+            guild_payload["reputation_global"] = int(guild_payload.get("reputation_global", 0) or 0) + int(reward_reputation)
+            reputation_by_region[region] = int(reputation_by_region.get(region, 0) or 0) + int(reward_reputation)
+            recent.append(True)
+            completed += 1
+            conduct = min(100, conduct + 1)
+            message = f"Guild contract turned in: {str(contract.get('title', 'Contract'))}."
+        else:
+            guild_payload["reputation_global"] = int(guild_payload.get("reputation_global", 0) or 0) - max(1, reward_reputation // 2)
+            reputation_by_region[region] = int(reputation_by_region.get(region, 0) or 0) - max(1, reward_reputation // 3)
+            recent.append(False)
+            conduct = max(0, conduct - 8)
+            message = f"Guild contract failed: {str(contract.get('title', 'Contract'))}."
+
+        if conduct < 20:
+            guild_payload["membership_status"] = "suspended"
+
+        guild_payload["reputation_by_region"] = dict(reputation_by_region)
+        if isinstance(character.flags, dict):
+            character.flags["guild"] = dict(guild_payload)
+            character.flags["guild_conduct_score"] = int(conduct)
+            character.flags["guild_completed_contracts"] = int(completed)
+            character.flags["guild_recent_contract_results"] = list(recent[-50:])
+
+        if int(previous_conduct) != int(conduct):
+            self._record_guild_history_event(
+                character_id=int(character_id),
+                event_kind="conduct_change",
+                old_value=str(previous_conduct),
+                new_value=str(conduct),
+                reason="contract_success" if bool(success) else "contract_failure",
+                metadata_json=json.dumps({"contract_id": contract_key, "region": region}),
+            )
+        current_status = str(guild_payload.get("membership_status", "none") or "none")
+        if current_status != previous_status:
+            self._record_guild_history_event(
+                character_id=int(character_id),
+                event_kind="membership_status_change",
+                old_value=previous_status,
+                new_value=current_status,
+                reason="conduct_threshold",
+                metadata_json=json.dumps({"contract_id": contract_key}),
+            )
+
+        self.character_repo.save(character)
+        notice = [message]
+        if warnings:
+            notice.extend(list(warnings))
+        return ActionResult(messages=notice, game_over=False)
+
+    def check_guild_promotion_intent(self, character_id: int, apply_if_eligible: bool = False) -> GuildPromotionCheckView:
+        character = self._require_character(character_id)
+        guild_payload, _warnings = self._resolve_character_guild_runtime(character)
+        result = evaluate_tier_promotion(
+            current_tier=str(guild_payload.get("rank_tier", "bronze") or "bronze"),
+            completed_contracts=self._guild_completed_contracts(character),
+            recent_contract_results=self._guild_recent_contract_results(character),
+            reputation_global=int(guild_payload.get("reputation_global", 0) or 0),
+            reputation_by_region=dict(guild_payload.get("reputation_by_region", {}) or {}),
+            conduct_score=self._guild_conduct_score(character),
+            role_competency_score=self._guild_role_competency_score(character),
+        )
+        target_tier = str(result.get("target_tier", "") or "")
+        eligible = bool(result.get("eligible", False))
+
+        if apply_if_eligible and eligible and target_tier:
+            previous_tier = str(guild_payload.get("rank_tier", "bronze") or "bronze")
+            guild_payload["rank_tier"] = target_tier
+            if isinstance(character.flags, dict):
+                character.flags["guild"] = dict(guild_payload)
+                history = self._guild_rank_history(character)
+                history.append(f"{previous_tier}->{target_tier}")
+                character.flags["guild_rank_history"] = list(history)
+            self._record_guild_history_event(
+                character_id=int(character_id),
+                event_kind="rank_change",
+                old_value=previous_tier,
+                new_value=target_tier,
+                reason="promotion",
+                metadata_json=json.dumps({"eligible": True}),
+            )
+            self.character_repo.save(character)
+
+        return GuildPromotionCheckView(
+            current_tier=str(result.get("current_tier", guild_payload.get("rank_tier", "bronze")) or "bronze"),
+            target_tier=target_tier,
+            eligible=eligible,
+            unmet_criteria=[str(item) for item in tuple(result.get("unmet_criteria", ()))],
+            recent_window_size=int(result.get("recent_window_size", 0) or 0),
+            recent_sample_size=int(result.get("recent_sample_size", 0) or 0),
+            recent_success_ratio=float(result.get("recent_success_ratio", 0.0) or 0.0),
+        )
+
     def make_choice(self, player_id: int, choice: str) -> ActionResult:
         choice = choice.strip().lower()
         if choice not in {"explore", "rest", "quit"}:
@@ -11898,6 +12423,11 @@ class GameService:
     _legacy_get_party_management_intent = get_party_management_intent
     _legacy_set_party_companion_active_intent = set_party_companion_active_intent
     _legacy_set_party_companion_lane_intent = set_party_companion_lane_intent
+    _legacy_get_guild_status_intent = get_guild_status_intent
+    _legacy_get_guild_board_intent = get_guild_board_intent
+    _legacy_accept_guild_contract_intent = accept_guild_contract_intent
+    _legacy_turn_in_guild_contract_intent = turn_in_guild_contract_intent
+    _legacy_check_guild_promotion_intent = check_guild_promotion_intent
 
     def explore_intent(self, character_id: int) -> tuple[ExploreView, Character, list[Entity]]:
         return self.exploration_app_service.explore_intent(character_id)
@@ -12108,3 +12638,33 @@ class GameService:
 
     def _set_party_companion_lane_intent_impl(self, character_id: int, companion_id: str, lane: str) -> ActionResult:
         return self._legacy_set_party_companion_lane_intent(character_id, companion_id, lane)
+
+    def get_guild_status_intent(self, character_id: int) -> GuildStatusView:
+        return self.guild_app_service.get_guild_status_intent(character_id)
+
+    def _get_guild_status_intent_impl(self, character_id: int) -> GuildStatusView:
+        return self._legacy_get_guild_status_intent(character_id)
+
+    def get_guild_board_intent(self, character_id: int, region: str | None = None) -> GuildBoardView:
+        return self.guild_app_service.get_guild_board_intent(character_id, region=region)
+
+    def _get_guild_board_intent_impl(self, character_id: int, region: str | None = None) -> GuildBoardView:
+        return self._legacy_get_guild_board_intent(character_id, region=region)
+
+    def accept_guild_contract_intent(self, character_id: int, contract_id: str, region: str | None = None) -> ActionResult:
+        return self.guild_app_service.accept_guild_contract_intent(character_id, contract_id, region=region)
+
+    def _accept_guild_contract_intent_impl(self, character_id: int, contract_id: str, region: str | None = None) -> ActionResult:
+        return self._legacy_accept_guild_contract_intent(character_id, contract_id, region=region)
+
+    def turn_in_guild_contract_intent(self, character_id: int, contract_id: str, success: bool = True) -> ActionResult:
+        return self.guild_app_service.turn_in_guild_contract_intent(character_id, contract_id, success=success)
+
+    def _turn_in_guild_contract_intent_impl(self, character_id: int, contract_id: str, success: bool = True) -> ActionResult:
+        return self._legacy_turn_in_guild_contract_intent(character_id, contract_id, success=success)
+
+    def check_guild_promotion_intent(self, character_id: int, apply_if_eligible: bool = False) -> GuildPromotionCheckView:
+        return self.guild_app_service.check_guild_promotion_intent(character_id, apply_if_eligible=apply_if_eligible)
+
+    def _check_guild_promotion_intent_impl(self, character_id: int, apply_if_eligible: bool = False) -> GuildPromotionCheckView:
+        return self._legacy_check_guild_promotion_intent(character_id, apply_if_eligible=apply_if_eligible)

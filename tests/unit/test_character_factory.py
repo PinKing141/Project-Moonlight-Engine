@@ -81,6 +81,11 @@ class CharacterFactoryTests(unittest.TestCase):
         self.assertFalse(bool(toggles.get("deadlier_death_saves")))
         self.assertFalse(bool(toggles.get("rest_lock_on_failed_saves")))
 
+        guild_payload = flags.get("guild", {}) if isinstance(flags.get("guild", {}), dict) else {}
+        self.assertEqual("guild_v1", guild_payload.get("version"))
+        self.assertEqual("none", guild_payload.get("membership_status"))
+        self.assertEqual("bronze", guild_payload.get("rank_tier"))
+
 
 if __name__ == "__main__":
     unittest.main()

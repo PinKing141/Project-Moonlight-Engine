@@ -21,6 +21,7 @@ from rpg.infrastructure.db.inmemory.repos import (
     InMemoryLocationRepository,
     InMemoryWorldRepository,
 )
+from rpg.infrastructure.inmemory.inmemory_faction_repo import InMemoryFactionRepository
 
 
 class GameServiceTests(unittest.TestCase):
@@ -28,7 +29,7 @@ class GameServiceTests(unittest.TestCase):
         self.event_bus = EventBus()
 
     def _build_service(
-        self, character_repo, entity_repo, location_repo, world_repo
+        self, character_repo, entity_repo, location_repo, world_repo, faction_repo=None
     ) -> GameService:
         progression = WorldProgression(world_repo, entity_repo, self.event_bus)
         return GameService(
@@ -37,6 +38,7 @@ class GameServiceTests(unittest.TestCase):
             location_repo=location_repo,
             world_repo=world_repo,
             progression=progression,
+            faction_repo=faction_repo,
         )
 
     def test_pick_monster_respects_level_ranges_and_weights(self) -> None:
@@ -332,6 +334,162 @@ class GameServiceTests(unittest.TestCase):
         self.assertIn("Antitoxin", reward.loot_items)
         saved = character_repo.get(character.id)
         self.assertIn("Antitoxin", saved.inventory)
+
+    def test_guild_status_intent_normalizes_unknown_payload_values(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=3)
+        character = Character(
+            id=301,
+            name="Arin",
+            location_id=1,
+            flags={
+                "guild": {
+                    "version": "guild_v99",
+                    "membership_status": "captain",
+                    "rank_tier": "obsidian",
+                    "role_mode": "raid_leader",
+                    "reputation_global": "7",
+                    "reputation_by_region": {"north": "5", "east": "bad"},
+                    "merits": "-4",
+                }
+            },
+        )
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+        service = self._build_service(character_repo, entity_repo, location_repo, world_repo)
+
+        status = service.get_guild_status_intent(character.id)
+
+        self.assertEqual("none", status.membership_status)
+        self.assertEqual("bronze", status.rank_tier)
+        self.assertEqual("solo", status.role_mode)
+        self.assertEqual(7, status.reputation_global)
+        self.assertEqual({"north": 5}, status.reputation_by_region)
+        self.assertEqual(0, status.merits)
+        self.assertTrue(status.warnings)
+
+    def test_guild_board_keeps_livelihood_contracts_under_hostile_factions(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=3)
+        character = Character(
+            id=302,
+            name="Rook",
+            location_id=1,
+            flags={"guild": {"version": "guild_v1", "membership_status": "active", "rank_tier": "bronze", "role_mode": "solo"}},
+        )
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+        faction_repo = InMemoryFactionRepository()
+        for faction in faction_repo.list_all():
+            faction.reputation[f"character:{character.id}"] = -20
+            faction_repo.save(faction)
+        service = self._build_service(character_repo, entity_repo, location_repo, world_repo, faction_repo=faction_repo)
+
+        board = service.get_guild_board_intent(character.id)
+        livelihood_rows = [row for row in board.contracts if row.contract_id.startswith("guild_livelihood")]
+        higher_rows = [row for row in board.contracts if not row.contract_id.startswith("guild_livelihood")]
+
+        self.assertTrue(livelihood_rows)
+        self.assertTrue(all(row.available for row in livelihood_rows))
+        self.assertTrue(any(not row.available for row in higher_rows))
+
+    def test_guild_contract_turn_in_and_promotion_flow(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=3)
+        character = Character(
+            id=303,
+            name="Mira",
+            location_id=1,
+            flags={
+                "guild": {
+                    "version": "guild_v1",
+                    "membership_status": "active",
+                    "rank_tier": "bronze",
+                    "role_mode": "solo",
+                    "reputation_global": 0,
+                    "reputation_by_region": {},
+                    "merits": 0,
+                }
+            },
+        )
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+        service = self._build_service(character_repo, entity_repo, location_repo, world_repo)
+
+        for _ in range(6):
+            accepted = service.accept_guild_contract_intent(character.id, "guild_livelihood_patrol")
+            self.assertTrue(any("Accepted guild contract" in msg for msg in accepted.messages))
+            turned_in = service.turn_in_guild_contract_intent(character.id, "guild_livelihood_patrol", success=True)
+            self.assertTrue(any("turned in" in msg.lower() for msg in turned_in.messages))
+
+        check = service.check_guild_promotion_intent(character.id, apply_if_eligible=True)
+        self.assertTrue(check.eligible)
+        status = service.get_guild_status_intent(character.id)
+        self.assertEqual("silver", status.rank_tier)
+        self.assertTrue(any("bronze->silver" == entry for entry in status.rank_history))
+
+    def test_character_sheet_exposes_guild_status_summary(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=3)
+        character = Character(
+            id=304,
+            name="Lyra",
+            location_id=1,
+            flags={
+                "guild": {
+                    "version": "guild_v1",
+                    "membership_status": "active",
+                    "rank_tier": "silver",
+                    "role_mode": "party_member",
+                    "reputation_global": 21,
+                    "reputation_by_region": {"frontier": 14},
+                    "merits": 8,
+                },
+                "guild_conduct_score": 63,
+            },
+        )
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        view = service.get_character_sheet_intent(character.id)
+
+        self.assertIn("Guild:", view.pressure_summary)
+        self.assertTrue(any("Guild rank tier" in line for line in view.pressure_lines))
+
+    def test_town_view_exposes_guild_status_summary(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=3)
+        character = Character(
+            id=305,
+            name="Nox",
+            location_id=1,
+            flags={
+                "guild": {
+                    "version": "guild_v1",
+                    "membership_status": "provisional",
+                    "rank_tier": "bronze",
+                    "role_mode": "solo",
+                    "reputation_global": 6,
+                    "reputation_by_region": {"frontier": 6},
+                    "merits": 2,
+                }
+            },
+        )
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({1: Location(id=1, name="Town")}),
+            world_repo=world_repo,
+        )
+
+        view = service.get_town_view_intent(character.id)
+
+        self.assertIn("Guild:", view.pressure_summary)
+        self.assertTrue(any("Guild membership" in line for line in view.pressure_lines))
 
     def test_shop_view_includes_new_utility_items(self) -> None:
         world_repo = InMemoryWorldRepository(seed=3)

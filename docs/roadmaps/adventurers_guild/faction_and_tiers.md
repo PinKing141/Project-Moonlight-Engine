@@ -29,10 +29,10 @@ The Adventurers Guild is an **occupation layer**, not a sovereign allegiance. A 
 4. Criminal behavior can cause rank suspension independently of faction relations.
 
 ### Coexistence Test Checklist
-- [ ] Low-tier livelihood contract remains available under hostile faction conditions.
-- [ ] Reputation carry-over applies deterministically by configured percentage.
-- [ ] Suspension can trigger independently of faction standing.
-- [ ] Existing faction view outputs remain backward-compatible.
+- [x] Low-tier livelihood contract remains available under hostile faction conditions.
+- [x] Reputation carry-over applies deterministically by configured percentage.
+- [x] Suspension can trigger independently of faction standing.
+- [x] Existing faction view outputs remain backward-compatible.
 
 ## 4) Tier System (Bronze → Silver → Gold → Diamond → Platinum)
 
@@ -53,10 +53,10 @@ Promotion checks use all of:
 - Role competency (solo/personal and party leadership milestones)
 
 ### Promotion Gate Checklist
-- [ ] Promotion policy evaluates all five requirement categories.
-- [ ] Failure response returns explicit unmet criteria (no opaque deny).
-- [ ] Recent-N window is deterministic and persisted.
-- [ ] Promotion/demotion transitions are recorded in rank history.
+- [x] Promotion policy evaluates all five requirement categories.
+- [x] Failure response returns explicit unmet criteria (no opaque deny).
+- [x] Recent-N window is deterministic and persisted.
+- [x] Promotion/demotion transitions are recorded in rank history.
 
 ## 6) Party + Solo Identity
 - A player can register as a **solo adventurer** and still temporarily attach to a party contract.
@@ -81,16 +81,16 @@ Promotion checks use all of:
 4. Minimal presentation surfacing in existing town/quest views.
 
 ## Definition of Ready (slice)
-- [ ] Scope statement and player-facing behavior are explicit.
-- [ ] Data impact and rollback/fallback are documented.
-- [ ] Determinism and contract compatibility risks are identified.
-- [ ] Unit + integration test list is defined before coding.
+- [x] Scope statement and player-facing behavior are explicit.
+- [x] Data impact and rollback/fallback are documented.
+- [x] Determinism and contract compatibility risks are identified.
+- [x] Unit + integration test list is defined before coding.
 
 ## Definition of Done (slice)
-- [ ] Acceptance checks pass for membership, promotion, and suspension paths.
-- [ ] In-memory and SQL behavior are parity-tested for Guild fields.
-- [ ] Contract docs and references are updated.
-- [ ] No unrelated service refactors included.
+- [x] Acceptance checks pass for membership, promotion, and suspension paths.
+- [x] In-memory and SQL behavior are parity-tested for Guild fields.
+- [x] Contract docs and references are updated.
+- [x] No unrelated service refactors included.
 
 ## 8) Non-Goals (prevent overbuild)
 - No real-time multiplayer assumptions.

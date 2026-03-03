@@ -62,6 +62,28 @@ class InMemoryCharacterRepositoryTests(unittest.TestCase):
         self.assertEqual(5, created.location_id)
         self.assertIn(created.id, repo._characters)
 
+    def test_guild_history_persists_and_lists_entries(self) -> None:
+        character = Character(id=40, name="Guildmate", location_id=2)
+        repo = InMemoryCharacterRepository({40: character})
+
+        repo.record_guild_history(
+            character_id=40,
+            event_kind="rank_change",
+            old_value="bronze",
+            new_value="silver",
+            changed_turn=12,
+            reason="promotion",
+            metadata_json='{"eligible": true}',
+        )
+
+        entries = repo.list_guild_history(40)
+        self.assertEqual(1, len(entries))
+        self.assertEqual("rank_change", entries[0]["event_kind"])
+        self.assertEqual("bronze", entries[0]["old_value"])
+        self.assertEqual("silver", entries[0]["new_value"])
+        self.assertEqual(12, entries[0]["changed_turn"])
+        self.assertIn("guild_history", character.flags)
+
 
 class InMemoryWorldRepositoryTests(unittest.TestCase):
     def test_save_and_load_persists_world_state(self) -> None:

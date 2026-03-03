@@ -423,6 +423,50 @@ class FactionStandingsView:
 
 
 @dataclass
+class GuildContractView:
+    contract_id: str
+    title: str
+    tier: str
+    region: str
+    reward_merits: int
+    reward_reputation: int
+    available: bool
+    availability_note: str = ""
+
+
+@dataclass
+class GuildBoardView:
+    contracts: List[GuildContractView] = field(default_factory=list)
+    empty_state_hint: str = ""
+
+
+@dataclass
+class GuildPromotionCheckView:
+    current_tier: str
+    target_tier: str
+    eligible: bool
+    unmet_criteria: List[str] = field(default_factory=list)
+    recent_window_size: int = 0
+    recent_sample_size: int = 0
+    recent_success_ratio: float = 0.0
+
+
+@dataclass
+class GuildStatusView:
+    membership_status: str
+    rank_tier: str
+    role_mode: str
+    reputation_global: int
+    reputation_by_region: Dict[str, int] = field(default_factory=dict)
+    merits: int = 0
+    conduct_score: int = 50
+    completed_contracts: int = 0
+    active_contracts: int = 0
+    rank_history: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
 class LocationContextView:
     location_type: str
     title: str

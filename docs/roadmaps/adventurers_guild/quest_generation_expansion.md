@@ -76,34 +76,41 @@ Each template should define:
 ## 8) Bounded Slice Plan (Checklist)
 
 ### QG-1: Repository + Schema Envelope
-- [ ] Add `QuestTemplateRepository` interface and in-memory implementation.
-- [ ] Define `template_version` and normalization/fallback behavior.
-- [ ] Add loader validation tests for malformed templates.
-- [ ] Out of scope: reward rebalance, UI changes.
+- [x] Add `QuestTemplateRepository` interface and in-memory implementation.
+- [x] Define `template_version` and normalization/fallback behavior.
+- [x] Add loader validation tests for malformed templates.
+- [x] Out of scope (now requested): reward rebalance, UI-facing generation note surfacing.
 
 ### QG-2: SQL Parity + Migrations
-- [ ] Add SQL persistence + migration-safe reads/writes.
-- [ ] Add parity tests (in-memory vs SQL) for template retrieval and filtering.
-- [ ] Keep read path backward-compatible with existing quest generation defaults.
-- [ ] Out of scope: replacing current quest state schema.
+- [x] Add SQL persistence + migration-safe reads/writes.
+- [x] Add parity tests (in-memory vs SQL) for template retrieval and filtering.
+- [x] Keep read path backward-compatible with existing quest generation defaults.
+- [x] Out of scope (now requested): additive `quests_v2` schema envelope with legacy bridge.
 
 ### QG-3: Novelty Scorer Integration
-- [ ] Add novelty scoring against recent quest signatures.
-- [ ] Add bounded rejection sampling with deterministic retry seed derivation.
-- [ ] Add deterministic replay tests for identical seed/context outputs.
-- [ ] Out of scope: dynamic narrative writing subsystem.
+- [x] Add novelty scoring against recent quest signatures.
+- [x] Add bounded rejection sampling with deterministic retry seed derivation.
+- [x] Add deterministic replay tests for identical seed/context outputs.
+- [x] Out of scope (now requested): deterministic dynamic narrative payload synthesis.
 
 ### QG-4: Rank/Difficulty Conditioning
-- [ ] Apply guild rank and difficulty policy as data-driven constraints.
-- [ ] Validate Bronze/Silver accessibility floors are preserved.
-- [ ] Add tests for failure-path diversity and reward scaling bounds.
-- [ ] Out of scope: encounter AI redesign.
+- [x] Apply guild rank and difficulty policy as data-driven constraints.
+- [x] Validate Bronze/Silver accessibility floors are preserved.
+- [x] Add tests for failure-path diversity and reward scaling bounds.
+- [x] Out of scope (now requested): encounter strategy/profile hints for redesigned behavior hooks.
 
 ### QG-5: Telemetry + Tuning Hooks
-- [ ] Emit template-family/biome/antagonist repetition counters.
-- [ ] Add threshold alerts for repetition regressions.
-- [ ] Document tuning knobs and safe default values.
-- [ ] Out of scope: analytics platform overhaul.
+- [x] Emit template-family/biome/antagonist repetition counters.
+- [x] Add threshold alerts for repetition regressions.
+- [x] Document tuning knobs and safe default values.
+- [x] Out of scope (now requested): lightweight analytics snapshot/export envelope in world flags.
+
+### Telemetry Tuning Knobs (safe defaults)
+- `telemetry_recent_window`: `20` recent generated quests retained for repetition checks.
+- `telemetry_repeat_alert_threshold`: `4` occurrences in recent window triggers a repetition alert.
+- `novelty_recent_window`: `12` signatures used for novelty scoring.
+- `novelty_min_score`: `0.50` minimum accepted novelty score before bounded fallback.
+- `novelty_max_retries`: `3` deterministic retries before taking best candidate.
 
 ## 9) Success Metrics
 - Unique template usage over 100 generated quests >= target threshold.

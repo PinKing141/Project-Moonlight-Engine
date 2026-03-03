@@ -34,6 +34,22 @@ class CharacterRepository(ABC):
     def create(self, character: Character, location_id: int) -> Character:
         raise NotImplementedError
 
+    def list_guild_history(self, character_id: int) -> list[dict[str, object]]:
+        return []
+
+    def record_guild_history(
+        self,
+        *,
+        character_id: int,
+        event_kind: str,
+        old_value: str,
+        new_value: str,
+        changed_turn: int,
+        reason: str,
+        metadata_json: str = "{}",
+    ) -> None:
+        raise NotImplementedError
+
 
 class WorldRepository(ABC):
     @abstractmethod
@@ -188,6 +204,22 @@ class QuestStateRepository(ABC):
         action_turn: int,
         payload_json: str,
     ) -> None:
+        raise NotImplementedError
+
+
+class QuestTemplateRepository(ABC):
+    @abstractmethod
+    def get_template(self, template_slug: str) -> QuestTemplate | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_templates(
+        self,
+        *,
+        include_cataclysm: bool | None = None,
+        required_tags: list[str] | None = None,
+        forbidden_tags: list[str] | None = None,
+    ) -> List[QuestTemplate]:
         raise NotImplementedError
 
 

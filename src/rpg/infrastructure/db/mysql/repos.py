@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
 from sqlalchemy import bindparam, text
 
@@ -23,11 +23,17 @@ from rpg.domain.repositories import (
     FeatureRepository,
     FactionRepository,
     LocationRepository,
+    QuestTemplateRepository,
     QuestStateRepository,
     WorldRepository,
     SpellRepository,
 )
 from rpg.domain.services.class_progression_catalog import ClassProgressionRow, progression_rows_for_class
+from rpg.domain.services.quest_template_catalog import (
+    QUEST_TEMPLATE_SCHEMA_VERSION,
+    build_template_from_payload,
+    payload_from_template,
+)
 from rpg.infrastructure.db.mysql.open5e_monster_importer import UpsertResult
 from .connection import SessionLocal
 
@@ -262,6 +268,8 @@ class MysqlClassRepository(ClassRepository):
 
 
 class MysqlCharacterRepository(CharacterRepository):
+    _GUILD_HISTORY_FLAG_MAX = 300
+
     @staticmethod
     def _character_json_column_flags(session) -> tuple[bool, bool]:
         columns = _table_columns(session, "character")
@@ -726,6 +734,199 @@ class MysqlCharacterRepository(CharacterRepository):
                     "unlock_key": str(unlock_key),
                     "unlocked_level": int(unlocked_level),
                     "created_turn": int(created_turn),
+                },
+            )
+
+        return _operation
+
+    def list_guild_history(self, character_id: int) -> list[dict[str, object]]:
+        with SessionLocal() as session:
+            history_columns = _table_columns(session, "character_guild_history")
+            required_columns = {
+                "character_id",
+                "event_kind",
+                "old_value",
+                "new_value",
+                "changed_turn",
+                "reason",
+                "metadata_json",
+            }
+            if required_columns.issubset(history_columns):
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT event_kind, old_value, new_value, changed_turn, reason, metadata_json
+                        FROM character_guild_history
+                        WHERE character_id = :character_id
+                        ORDER BY character_guild_history_id ASC
+                        """
+                    ),
+                    {"character_id": int(character_id)},
+                ).all()
+                return [
+                    {
+                        "character_id": int(character_id),
+                        "event_kind": str(getattr(row, "event_kind", "") or ""),
+                        "old_value": str(getattr(row, "old_value", "") or ""),
+                        "new_value": str(getattr(row, "new_value", "") or ""),
+                        "changed_turn": int(getattr(row, "changed_turn", 0) or 0),
+                        "reason": str(getattr(row, "reason", "") or ""),
+                        "metadata_json": str(getattr(row, "metadata_json", "{}") or "{}"),
+                    }
+                    for row in rows
+                ]
+
+            row = session.execute(
+                text(
+                    """
+                    SELECT flags_json
+                    FROM `character`
+                    WHERE character_id = :character_id
+                    LIMIT 1
+                    """
+                ),
+                {"character_id": int(character_id)},
+            ).first()
+            flags = _parse_json_dict(getattr(row, "flags_json", None) if row is not None else None)
+            history = flags.get("guild_history", [])
+            if not isinstance(history, list):
+                return []
+            normalized: list[dict[str, object]] = []
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                normalized.append(
+                    {
+                        "character_id": int(character_id),
+                        "event_kind": str(item.get("event_kind", "") or ""),
+                        "old_value": str(item.get("old_value", "") or ""),
+                        "new_value": str(item.get("new_value", "") or ""),
+                        "changed_turn": int(item.get("changed_turn", 0) or 0),
+                        "reason": str(item.get("reason", "") or ""),
+                        "metadata_json": str(item.get("metadata_json", "{}") or "{}"),
+                    }
+                )
+            return normalized
+
+    def record_guild_history(
+        self,
+        *,
+        character_id: int,
+        event_kind: str,
+        old_value: str,
+        new_value: str,
+        changed_turn: int,
+        reason: str,
+        metadata_json: str = "{}",
+    ) -> None:
+        with SessionLocal.begin() as session:
+            self.build_guild_history_operation(
+                character_id=character_id,
+                event_kind=event_kind,
+                old_value=old_value,
+                new_value=new_value,
+                changed_turn=changed_turn,
+                reason=reason,
+                metadata_json=metadata_json,
+            )(session)
+
+    def build_guild_history_operation(
+        self,
+        *,
+        character_id: int,
+        event_kind: str,
+        old_value: str,
+        new_value: str,
+        changed_turn: int,
+        reason: str,
+        metadata_json: str = "{}",
+    ):
+        def _operation(session) -> None:
+            if session is None:
+                with SessionLocal.begin() as internal_session:
+                    self.build_guild_history_operation(
+                        character_id=character_id,
+                        event_kind=event_kind,
+                        old_value=old_value,
+                        new_value=new_value,
+                        changed_turn=changed_turn,
+                        reason=reason,
+                        metadata_json=metadata_json,
+                    )(internal_session)
+                return
+
+            history_columns = _table_columns(session, "character_guild_history")
+            required_columns = {
+                "character_id",
+                "event_kind",
+                "old_value",
+                "new_value",
+                "changed_turn",
+                "reason",
+                "metadata_json",
+            }
+            if required_columns.issubset(history_columns):
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO character_guild_history
+                            (character_id, event_kind, old_value, new_value, changed_turn, reason, metadata_json)
+                        VALUES
+                            (:character_id, :event_kind, :old_value, :new_value, :changed_turn, :reason, :metadata_json)
+                        """
+                    ),
+                    {
+                        "character_id": int(character_id),
+                        "event_kind": str(event_kind),
+                        "old_value": str(old_value),
+                        "new_value": str(new_value),
+                        "changed_turn": int(changed_turn),
+                        "reason": str(reason),
+                        "metadata_json": str(metadata_json or "{}"),
+                    },
+                )
+                return
+
+            row = session.execute(
+                text(
+                    """
+                    SELECT flags_json
+                    FROM `character`
+                    WHERE character_id = :character_id
+                    LIMIT 1
+                    """
+                ),
+                {"character_id": int(character_id)},
+            ).first()
+            current_flags = _parse_json_dict(getattr(row, "flags_json", None) if row is not None else None)
+            history = current_flags.get("guild_history", [])
+            if not isinstance(history, list):
+                history = []
+            history.append(
+                {
+                    "character_id": int(character_id),
+                    "event_kind": str(event_kind),
+                    "old_value": str(old_value),
+                    "new_value": str(new_value),
+                    "changed_turn": int(changed_turn),
+                    "reason": str(reason),
+                    "metadata_json": str(metadata_json or "{}"),
+                }
+            )
+            if len(history) > self._GUILD_HISTORY_FLAG_MAX:
+                history = history[-self._GUILD_HISTORY_FLAG_MAX :]
+            current_flags["guild_history"] = list(history)
+            session.execute(
+                text(
+                    """
+                    UPDATE `character`
+                    SET flags_json = :flags_json
+                    WHERE character_id = :character_id
+                    """
+                ),
+                {
+                    "character_id": int(character_id),
+                    "flags_json": json.dumps(current_flags),
                 },
             )
 
@@ -2533,6 +2734,220 @@ class MysqlLocationRepository(LocationRepository):
                     environmental_flags=env_flags,
                 ),
             )
+
+
+class MysqlQuestTemplateRepository(QuestTemplateRepository):
+    def __init__(self, payload_rows: list[Mapping[str, object]] | None = None) -> None:
+        self._seed_payload_rows = list(payload_rows or [])
+        self.last_warnings: list[str] = []
+
+    @staticmethod
+    def _create_table_statement(dialect: str) -> str:
+        if dialect == "sqlite":
+            return """
+            CREATE TABLE IF NOT EXISTS quest_template_catalog (
+                quest_template_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_slug TEXT NOT NULL UNIQUE,
+                template_version TEXT NOT NULL,
+                is_cataclysm_pushback INTEGER NOT NULL DEFAULT 0,
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                payload_json TEXT NOT NULL
+            )
+            """
+        return """
+        CREATE TABLE IF NOT EXISTS quest_template_catalog (
+            quest_template_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+            template_slug VARCHAR(128) NOT NULL,
+            template_version VARCHAR(64) NOT NULL,
+            is_cataclysm_pushback TINYINT(1) NOT NULL DEFAULT 0,
+            tags_json TEXT NOT NULL,
+            payload_json LONGTEXT NOT NULL,
+            UNIQUE KEY uq_template_slug (template_slug)
+        )
+        """
+
+    def _ensure_table_and_seed_defaults(self, session) -> None:
+        dialect = session.bind.dialect.name if session.bind is not None else "mysql"
+        session.execute(text(self._create_table_statement(dialect)))
+
+        count_value = session.execute(text("SELECT COUNT(*) FROM quest_template_catalog")).scalar() or 0
+        if int(count_value) > 0:
+            return
+
+        if self._seed_payload_rows:
+            seed_rows = self._seed_payload_rows
+        else:
+            from rpg.domain.models.quest import cataclysm_quest_templates, standard_quest_templates
+
+            seed_rows = [
+                payload_from_template(template)
+                for template in tuple(standard_quest_templates()) + tuple(cataclysm_quest_templates())
+            ]
+
+        self._upsert_payload_rows(session, seed_rows)
+
+    def _upsert_payload_rows(self, session, payload_rows: list[Mapping[str, object]]) -> None:
+        dialect = session.bind.dialect.name if session.bind is not None else "mysql"
+        if dialect == "mysql":
+            statement = text(
+                """
+                INSERT INTO quest_template_catalog (
+                    template_slug,
+                    template_version,
+                    is_cataclysm_pushback,
+                    tags_json,
+                    payload_json
+                )
+                VALUES (
+                    :template_slug,
+                    :template_version,
+                    :is_cataclysm_pushback,
+                    :tags_json,
+                    :payload_json
+                )
+                ON DUPLICATE KEY UPDATE
+                    template_version = VALUES(template_version),
+                    is_cataclysm_pushback = VALUES(is_cataclysm_pushback),
+                    tags_json = VALUES(tags_json),
+                    payload_json = VALUES(payload_json)
+                """
+            )
+        else:
+            statement = text(
+                """
+                INSERT INTO quest_template_catalog (
+                    template_slug,
+                    template_version,
+                    is_cataclysm_pushback,
+                    tags_json,
+                    payload_json
+                )
+                VALUES (
+                    :template_slug,
+                    :template_version,
+                    :is_cataclysm_pushback,
+                    :tags_json,
+                    :payload_json
+                )
+                ON CONFLICT(template_slug) DO UPDATE SET
+                    template_version = excluded.template_version,
+                    is_cataclysm_pushback = excluded.is_cataclysm_pushback,
+                    tags_json = excluded.tags_json,
+                    payload_json = excluded.payload_json
+                """
+            )
+
+        for payload in payload_rows:
+            template, warnings = build_template_from_payload(payload)
+            for warning in warnings:
+                self.last_warnings.append(f"seed {warning}")
+            if template is None:
+                continue
+
+            normalized_payload = payload_from_template(template)
+            session.execute(
+                statement,
+                {
+                    "template_slug": str(template.slug),
+                    "template_version": str(
+                        normalized_payload.get("template_version", QUEST_TEMPLATE_SCHEMA_VERSION)
+                        or QUEST_TEMPLATE_SCHEMA_VERSION
+                    ),
+                    "is_cataclysm_pushback": 1 if bool(template.cataclysm_pushback) else 0,
+                    "tags_json": json.dumps([str(tag) for tag in tuple(template.tags or ())]),
+                    "payload_json": json.dumps(normalized_payload),
+                },
+            )
+
+    def _row_to_template(self, row) -> QuestTemplate | None:
+        payload: Mapping[str, object] = {}
+        payload_raw = getattr(row, "payload_json", None)
+        if isinstance(payload_raw, str) and payload_raw.strip():
+            try:
+                decoded = json.loads(payload_raw)
+            except Exception:
+                decoded = {}
+            if isinstance(decoded, dict):
+                payload = {str(key): value for key, value in decoded.items()}
+
+        payload_mutable = dict(payload)
+        payload_mutable.setdefault("template_version", str(getattr(row, "template_version", "") or ""))
+        payload_mutable.setdefault("slug", str(getattr(row, "template_slug", "") or ""))
+        payload_mutable.setdefault(
+            "cataclysm_pushback",
+            bool(int(getattr(row, "is_cataclysm_pushback", 0) or 0)),
+        )
+        payload_mutable.setdefault("tags", _parse_json_list(getattr(row, "tags_json", "[]")))
+
+        template, warnings = build_template_from_payload(payload_mutable)
+        for warning in warnings:
+            self.last_warnings.append(f"row:{str(getattr(row, 'template_slug', 'unknown'))} {warning}")
+        return template
+
+    def get_template(self, template_slug: str) -> QuestTemplate | None:
+        key = str(template_slug or "").strip().lower()
+        if not key:
+            return None
+
+        with SessionLocal.begin() as session:
+            self._ensure_table_and_seed_defaults(session)
+            row = session.execute(
+                text(
+                    """
+                    SELECT template_slug, template_version, is_cataclysm_pushback, tags_json, payload_json
+                    FROM quest_template_catalog
+                    WHERE LOWER(template_slug) = :template_slug
+                    LIMIT 1
+                    """
+                ),
+                {"template_slug": key},
+            ).first()
+            if not row:
+                return None
+            return self._row_to_template(row)
+
+    def list_templates(
+        self,
+        *,
+        include_cataclysm: bool | None = None,
+        required_tags: list[str] | None = None,
+        forbidden_tags: list[str] | None = None,
+    ) -> List[QuestTemplate]:
+        required = {str(tag or "").strip().lower() for tag in (required_tags or []) if str(tag or "").strip()}
+        forbidden = {str(tag or "").strip().lower() for tag in (forbidden_tags or []) if str(tag or "").strip()}
+
+        with SessionLocal.begin() as session:
+            self._ensure_table_and_seed_defaults(session)
+            where_clause = ""
+            params: dict[str, object] = {}
+            if include_cataclysm is not None:
+                where_clause = "WHERE is_cataclysm_pushback = :is_cataclysm_pushback"
+                params["is_cataclysm_pushback"] = 1 if bool(include_cataclysm) else 0
+
+            rows = session.execute(
+                text(
+                    f"""
+                    SELECT template_slug, template_version, is_cataclysm_pushback, tags_json, payload_json
+                    FROM quest_template_catalog
+                    {where_clause}
+                    ORDER BY template_slug
+                    """
+                ),
+                params,
+            ).all()
+
+        templates: list[QuestTemplate] = []
+        for row in rows:
+            template = self._row_to_template(row)
+            if template is None:
+                continue
+            template_tags = {str(tag).strip().lower() for tag in tuple(template.tags or ()) if str(tag).strip()}
+            if required and not required.issubset(template_tags):
+                continue
+            if forbidden and template_tags.intersection(forbidden):
+                continue
+            templates.append(template)
+        return templates
 
 
 class MysqlSpellRepository(SpellRepository):

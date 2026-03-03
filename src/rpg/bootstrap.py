@@ -19,6 +19,7 @@ from rpg.infrastructure.inmemory.inmemory_encounter_definition_repo import (
 from rpg.infrastructure.inmemory.inmemory_faction_repo import InMemoryFactionRepository
 from rpg.infrastructure.inmemory.inmemory_feature_repo import InMemoryFeatureRepository
 from rpg.infrastructure.inmemory.inmemory_location_repo import InMemoryLocationRepository
+from rpg.infrastructure.inmemory.inmemory_quest_template_repo import InMemoryQuestTemplateRepository
 from rpg.infrastructure.inmemory.inmemory_world_repo import InMemoryWorldRepository
 from rpg.infrastructure.inmemory.atomic_persistence import create_inmemory_atomic_persistor
 from rpg.infrastructure.content_provider_factory import create_content_client_factory
@@ -142,13 +143,19 @@ def _build_inmemory_game_service() -> GameService:
     )
     definition_repo = InMemoryEncounterDefinitionRepository()
     world_repo = InMemoryWorldRepository()
+    quest_template_repo = InMemoryQuestTemplateRepository()
     atomic_persistor = create_inmemory_atomic_persistor(char_repo, world_repo)
     event_bus = EventBus()
     progression = WorldProgression(world_repo, entity_repo, event_bus)
     encounter_intro_builder = _build_encounter_intro_builder()
     mechanical_flavour_builder = _build_mechanical_flavour_builder()
     register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo, character_repo=char_repo)
-    register_quest_handlers(event_bus, world_repo=world_repo, character_repo=char_repo)
+    register_quest_handlers(
+        event_bus,
+        world_repo=world_repo,
+        character_repo=char_repo,
+        quest_template_repo=quest_template_repo,
+    )
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo)
 
     return GameService(
@@ -179,6 +186,7 @@ def _build_mysql_game_service():
         MysqlFactionRepository,
         MysqlFeatureRepository,
         MysqlLocationRepository,
+        MysqlQuestTemplateRepository,
         MysqlNarrativeStateRepository,
         MysqlWorldRepository,
         MysqlSpellRepository,
@@ -192,6 +200,7 @@ def _build_mysql_game_service():
     definition_repo = MysqlEncounterDefinitionRepository()
     faction_repo = MysqlFactionRepository()
     narrative_state_repo = MysqlNarrativeStateRepository()
+    quest_template_repo = MysqlQuestTemplateRepository()
     feature_repo = MysqlFeatureRepository()
     world_repo = MysqlWorldRepository()
     name_generator = DnDCorpusNameGenerator()
@@ -204,7 +213,12 @@ def _build_mysql_game_service():
     event_bus = EventBus()
     progression = WorldProgression(world_repo, entity_repo, event_bus)
     register_faction_influence_handlers(event_bus, faction_repo=faction_repo, entity_repo=entity_repo, character_repo=char_repo)
-    register_quest_handlers(event_bus, world_repo=world_repo, character_repo=char_repo)
+    register_quest_handlers(
+        event_bus,
+        world_repo=world_repo,
+        character_repo=char_repo,
+        quest_template_repo=quest_template_repo,
+    )
     register_story_director_handlers(event_bus=event_bus, world_repo=world_repo)
 
     # Force an early connectivity check so fallback happens before entering menus.

@@ -4,6 +4,7 @@ from rpg.domain.models.character import Character, CharacterAlignment, DEFAULT_A
 from rpg.domain.models.character_class import CharacterClass
 from rpg.domain.models.character_options import Background, DifficultyPreset, Race
 from rpg.domain.services.class_profiles import CLASS_COMBAT_PROFILE, DEFAULT_COMBAT_PROFILE
+from rpg.domain.services.guild_membership import default_guild_membership_payload
 
 
 HIT_DIE_BASE_HP = {
@@ -153,6 +154,7 @@ def create_new_character(
                 toggles_payload[key] = bool(hardcore_toggles.get(key))
     flags["hardcore_toggles_version"] = "hardcore_toggles_v1"
     flags["hardcore_toggles"] = dict(toggles_payload)
+    flags["guild"] = default_guild_membership_payload()
     if background and background.faction:
         flags["faction_affinity"] = background.faction
 

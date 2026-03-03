@@ -90,10 +90,12 @@ class InMemoryWorldRepository(WorldRepository):
 
 class InMemoryCharacterRepository(CharacterRepository):
     _PROGRESSION_UNLOCKS_MAX = 500
+    _GUILD_HISTORY_MAX = 300
 
     def __init__(self, initial: Dict[int, Character]) -> None:
         self._characters = dict(initial)
         self._progression_unlocks: list[dict[str, object]] = []
+        self._guild_history: list[dict[str, object]] = []
 
     def get(self, character_id: int) -> Character | None:
         return self._characters.get(character_id)
@@ -177,6 +179,52 @@ class InMemoryCharacterRepository(CharacterRepository):
             )
 
         return _operation
+
+    def list_guild_history(self, character_id: int) -> list[dict[str, object]]:
+        return [
+            dict(row)
+            for row in self._guild_history
+            if int(row.get("character_id", 0)) == int(character_id)
+        ]
+
+    def record_guild_history(
+        self,
+        *,
+        character_id: int,
+        event_kind: str,
+        old_value: str,
+        new_value: str,
+        changed_turn: int,
+        reason: str,
+        metadata_json: str = "{}",
+    ) -> None:
+        row = {
+            "character_id": int(character_id),
+            "event_kind": str(event_kind),
+            "old_value": str(old_value),
+            "new_value": str(new_value),
+            "changed_turn": int(changed_turn),
+            "reason": str(reason),
+            "metadata_json": str(metadata_json or "{}"),
+        }
+        self._guild_history.append(row)
+        if len(self._guild_history) > self._GUILD_HISTORY_MAX:
+            del self._guild_history[:-self._GUILD_HISTORY_MAX]
+
+        character = self._characters.get(int(character_id))
+        if character is None:
+            return
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+        history = flags.get("guild_history", [])
+        if not isinstance(history, list):
+            history = []
+        history.append(dict(row))
+        if len(history) > self._GUILD_HISTORY_MAX:
+            history = history[-self._GUILD_HISTORY_MAX :]
+        flags["guild_history"] = list(history)
 
 
 class InMemoryEntityRepository(EntityRepository):
