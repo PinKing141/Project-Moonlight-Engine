@@ -3,6 +3,7 @@ from collections.abc import Callable
 from typing import Dict, List, Mapping, Optional, Sequence
 
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import ProgrammingError
 
 from rpg.domain.models.character import Character
 from rpg.domain.models.character_class import CharacterClass
@@ -2600,22 +2601,45 @@ class MysqlWorldRepository(WorldRepository):
 
 
 class MysqlLocationRepository(LocationRepository):
+    @staticmethod
+    def _is_missing_column_error(exc: ProgrammingError) -> bool:
+        details = str(getattr(exc, "orig", exc) or "").lower()
+        return "unknown column" in details
+
     def get(self, location_id: int) -> Optional[Location]:
         with SessionLocal() as session:
-            row = session.execute(
-                text(
-                    """
-                    SELECT l.location_id, l.x, l.y, p.name AS place_name,
-                           COALESCE(l.biome_key, 'wilderness') AS biome_key,
-                           COALESCE(l.hazard_profile_key, 'standard') AS hazard_profile_key,
-                           l.environmental_flags
-                    FROM location l
-                    INNER JOIN place p ON p.place_id = l.place_id
-                    WHERE l.location_id = :loc
-                    """
-                ),
-                {"loc": location_id},
-            ).first()
+            try:
+                row = session.execute(
+                    text(
+                        """
+                        SELECT l.location_id, l.x, l.y, p.name AS place_name,
+                               COALESCE(l.biome_key, 'wilderness') AS biome_key,
+                               COALESCE(l.hazard_profile_key, 'standard') AS hazard_profile_key,
+                               l.environmental_flags
+                        FROM location l
+                        INNER JOIN place p ON p.place_id = l.place_id
+                        WHERE l.location_id = :loc
+                        """
+                    ),
+                    {"loc": location_id},
+                ).first()
+            except ProgrammingError as exc:
+                if not self._is_missing_column_error(exc):
+                    raise
+                row = session.execute(
+                    text(
+                        """
+                        SELECT l.location_id, l.x, l.y, p.name AS place_name,
+                               'wilderness' AS biome_key,
+                               'standard' AS hazard_profile_key,
+                               NULL AS environmental_flags
+                        FROM location l
+                        INNER JOIN place p ON p.place_id = l.place_id
+                        WHERE l.location_id = :loc
+                        """
+                    ),
+                    {"loc": location_id},
+                ).first()
             if not row:
                 return None
             flags_raw = row.environmental_flags
@@ -2642,19 +2666,36 @@ class MysqlLocationRepository(LocationRepository):
 
     def list_all(self) -> List[Location]:
         with SessionLocal() as session:
-            rows = session.execute(
-                text(
-                    """
-                    SELECT l.location_id, l.x, l.y, p.name AS place_name,
-                           COALESCE(l.biome_key, 'wilderness') AS biome_key,
-                           COALESCE(l.hazard_profile_key, 'standard') AS hazard_profile_key,
-                           l.environmental_flags
-                    FROM location l
-                    INNER JOIN place p ON p.place_id = l.place_id
-                    ORDER BY l.location_id
-                    """
-                )
-            ).all()
+            try:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT l.location_id, l.x, l.y, p.name AS place_name,
+                               COALESCE(l.biome_key, 'wilderness') AS biome_key,
+                               COALESCE(l.hazard_profile_key, 'standard') AS hazard_profile_key,
+                               l.environmental_flags
+                        FROM location l
+                        INNER JOIN place p ON p.place_id = l.place_id
+                        ORDER BY l.location_id
+                        """
+                    )
+                ).all()
+            except ProgrammingError as exc:
+                if not self._is_missing_column_error(exc):
+                    raise
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT l.location_id, l.x, l.y, p.name AS place_name,
+                               'wilderness' AS biome_key,
+                               'standard' AS hazard_profile_key,
+                               NULL AS environmental_flags
+                        FROM location l
+                        INNER JOIN place p ON p.place_id = l.place_id
+                        ORDER BY l.location_id
+                        """
+                    )
+                ).all()
             locations: list[Location] = []
             for row in rows:
                 flags_raw = row.environmental_flags
@@ -2684,33 +2725,61 @@ class MysqlLocationRepository(LocationRepository):
 
     def get_starting_location(self) -> Optional[Location]:
         with SessionLocal() as session:
-            row = session.execute(
-                text(
-                    """
-                    SELECT l.location_id, l.x, l.y, p.name AS place_name,
-                           COALESCE(l.biome_key, 'wilderness') AS biome_key,
-                           COALESCE(l.hazard_profile_key, 'standard') AS hazard_profile_key,
-                           l.environmental_flags
-                    FROM location l
-                    INNER JOIN place p ON p.place_id = l.place_id
-                    ORDER BY
-                        CASE
-                            WHEN LOWER(COALESCE(p.name, '')) LIKE '%town%'
-                              OR LOWER(COALESCE(p.name, '')) LIKE '%village%'
-                              OR LOWER(COALESCE(p.name, '')) LIKE '%city%'
-                              OR LOWER(COALESCE(p.name, '')) LIKE '%square%'
-                              OR LOWER(COALESCE(p.name, '')) LIKE '%settlement%'
-                              OR LOWER(COALESCE(l.biome_key, '')) LIKE '%town%'
-                              OR LOWER(COALESCE(l.biome_key, '')) LIKE '%village%'
-                              OR LOWER(COALESCE(l.biome_key, '')) LIKE '%city%'
-                            THEN 0
-                            ELSE 1
-                        END,
-                        l.location_id
-                    LIMIT 1
-                    """
-                )
-            ).first()
+            try:
+                row = session.execute(
+                    text(
+                        """
+                        SELECT l.location_id, l.x, l.y, p.name AS place_name,
+                               COALESCE(l.biome_key, 'wilderness') AS biome_key,
+                               COALESCE(l.hazard_profile_key, 'standard') AS hazard_profile_key,
+                               l.environmental_flags
+                        FROM location l
+                        INNER JOIN place p ON p.place_id = l.place_id
+                        ORDER BY
+                            CASE
+                                WHEN LOWER(COALESCE(p.name, '')) LIKE '%town%'
+                                  OR LOWER(COALESCE(p.name, '')) LIKE '%village%'
+                                  OR LOWER(COALESCE(p.name, '')) LIKE '%city%'
+                                  OR LOWER(COALESCE(p.name, '')) LIKE '%square%'
+                                  OR LOWER(COALESCE(p.name, '')) LIKE '%settlement%'
+                                  OR LOWER(COALESCE(l.biome_key, '')) LIKE '%town%'
+                                  OR LOWER(COALESCE(l.biome_key, '')) LIKE '%village%'
+                                  OR LOWER(COALESCE(l.biome_key, '')) LIKE '%city%'
+                                THEN 0
+                                ELSE 1
+                            END,
+                            l.location_id
+                        LIMIT 1
+                        """
+                    )
+                ).first()
+            except ProgrammingError as exc:
+                if not self._is_missing_column_error(exc):
+                    raise
+                row = session.execute(
+                    text(
+                        """
+                        SELECT l.location_id, l.x, l.y, p.name AS place_name,
+                               'wilderness' AS biome_key,
+                               'standard' AS hazard_profile_key,
+                               NULL AS environmental_flags
+                        FROM location l
+                        INNER JOIN place p ON p.place_id = l.place_id
+                        ORDER BY
+                            CASE
+                                WHEN LOWER(COALESCE(p.name, '')) LIKE '%town%'
+                                  OR LOWER(COALESCE(p.name, '')) LIKE '%village%'
+                                  OR LOWER(COALESCE(p.name, '')) LIKE '%city%'
+                                  OR LOWER(COALESCE(p.name, '')) LIKE '%square%'
+                                  OR LOWER(COALESCE(p.name, '')) LIKE '%settlement%'
+                                THEN 0
+                                ELSE 1
+                            END,
+                            l.location_id
+                        LIMIT 1
+                        """
+                    )
+                ).first()
             if not row:
                 return None
             flags_raw = row.environmental_flags
