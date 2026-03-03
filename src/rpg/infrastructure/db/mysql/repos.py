@@ -27,6 +27,7 @@ from rpg.domain.repositories import (
     WorldRepository,
     SpellRepository,
 )
+from rpg.domain.services.class_progression_catalog import ClassProgressionRow, progression_rows_for_class
 from rpg.infrastructure.db.mysql.open5e_monster_importer import UpsertResult
 from .connection import SessionLocal
 
@@ -207,6 +208,57 @@ class MysqlClassRepository(ClassRepository):
                 primary_ability=row.primary_ability,
                 base_attributes=DEFAULT_CLASS_BASE_ATTRIBUTES.get(slug_key, {}),
             )
+
+    def list_progression_rows(self, class_slug_or_name: str | None) -> tuple[ClassProgressionRow, ...]:
+        fallback = progression_rows_for_class(class_slug_or_name)
+        class_key = str(class_slug_or_name or "").strip().lower()
+        if not class_key:
+            return fallback
+
+        with SessionLocal() as session:
+            progression_columns = _table_columns(session, "class_progression_row")
+            class_columns = _table_columns(session, "class")
+
+            required_progression = {"class_id", "level", "gains"}
+            required_class = {"class_id", "name", "open5e_slug"}
+            if not required_progression.issubset(progression_columns) or not required_class.issubset(class_columns):
+                return fallback
+
+            try:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT cpr.level AS level_no, cpr.gains AS gains_text
+                        FROM class_progression_row cpr
+                        INNER JOIN class c ON c.class_id = cpr.class_id
+                        WHERE LOWER(COALESCE(c.open5e_slug, c.name)) = :class_key
+                           OR LOWER(c.name) = :class_key
+                        ORDER BY cpr.level
+                        """
+                    ),
+                    {"class_key": class_key},
+                ).all()
+            except Exception:
+                return fallback
+
+        if not rows:
+            return fallback
+
+        normalized_rows: list[ClassProgressionRow] = []
+        for row in rows:
+            try:
+                level = int(getattr(row, "level_no", 0) or 0)
+            except Exception:
+                level = 0
+            gains_text = str(getattr(row, "gains_text", "") or "")
+            gains = tuple(part.strip() for part in gains_text.split(",") if part.strip())
+            if level <= 0 or not gains:
+                continue
+            normalized_rows.append(ClassProgressionRow(level=level, gains=gains))
+
+        if not normalized_rows:
+            return fallback
+        return tuple(normalized_rows)
 
 
 class MysqlCharacterRepository(CharacterRepository):

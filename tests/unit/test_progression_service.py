@@ -66,6 +66,25 @@ class ProgressionServiceTests(unittest.TestCase):
         unlocks = flags.get("progression_unlocks", {})
         self.assertTrue(unlocks.get("level_2_feat"))
 
+    def test_apply_level_progression_adds_catalog_class_feature_unlocks(self) -> None:
+        service = ProgressionService()
+        character = Character(id=5, name="Tarin", class_name="fighter", level=1, xp=25)
+
+        messages = service.apply_level_progression(character, growth_choice="vitality")
+
+        self.assertTrue(any("Class feature unlocked:" in line for line in messages))
+        flags = character.flags if isinstance(character.flags, dict) else {}
+        unlocks = flags.get("progression_unlocks", {}) if isinstance(flags.get("progression_unlocks", {}), dict) else {}
+        self.assertTrue(bool(unlocks.get("class_fighter_level_2_action_surge")))
+        history = flags.get("progression_history", []) if isinstance(flags.get("progression_history", []), list) else []
+        self.assertTrue(history)
+        unlock_rows = history[-1].get("unlocks", []) if isinstance(history[-1], dict) else []
+        class_feature_rows = [
+            row for row in unlock_rows
+            if isinstance(row, dict) and str(row.get("kind", "")) == "class_feature"
+        ]
+        self.assertTrue(class_feature_rows)
+
     def test_apply_level_progression_advances_selected_multiclass(self) -> None:
         service = ProgressionService()
         character = Character(
@@ -87,6 +106,34 @@ class ProgressionServiceTests(unittest.TestCase):
         self.assertEqual(4, int(character.level))
         self.assertEqual(2, int(character.class_levels.get("wizard", 0)))
         self.assertEqual(2, int(character.class_levels.get("fighter", 0)))
+
+    def test_multiclass_progression_unlocks_features_for_selected_class_only(self) -> None:
+        service = ProgressionService()
+        character = Character(
+            id=19,
+            name="Oren",
+            class_name="fighter",
+            class_levels={"fighter": 2, "wizard": 1},
+            level=3,
+            xp=75,
+        )
+
+        service.apply_level_progression(character, growth_choice="vitality", class_choice="wizard")
+
+        flags = character.flags if isinstance(character.flags, dict) else {}
+        unlocks = flags.get("progression_unlocks", {}) if isinstance(flags.get("progression_unlocks", {}), dict) else {}
+        self.assertTrue(bool(unlocks.get("class_wizard_level_2_arcane_tradition")))
+        self.assertFalse(bool(unlocks.get("class_fighter_level_3_martial_archetype")))
+
+    def test_spellcasting_pool_refresh_still_applies_with_catalog_unlocks(self) -> None:
+        service = ProgressionService()
+        character = Character(id=20, name="Lio", class_name="wizard", level=2, xp=50)
+
+        messages = service.apply_level_progression(character, growth_choice="spell")
+
+        self.assertTrue(any("Spellcasting pool updated" in line for line in messages))
+        self.assertGreater(int(getattr(character, "spell_slots_max", 0) or 0), 0)
+        self.assertEqual(int(character.spell_slots_max), int(character.spell_slots_current))
 
     def test_level_up_awards_skill_points_from_proficiency_bonus(self) -> None:
         service = ProgressionService()

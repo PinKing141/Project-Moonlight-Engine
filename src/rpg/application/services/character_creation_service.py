@@ -7,7 +7,7 @@ from typing import Dict, List
 
 from rpg.application.dtos import CharacterClassDetailView
 from rpg.application.mappers.character_creation_mapper import to_character_class_detail_view
-from rpg.application.services.balance_tables import DIFFICULTY_PRESET_PROFILES
+from rpg.application.services.balance_tables import DIFFICULTY_PRESET_PROFILES, normalize_hardcore_toggles
 from rpg.domain.models.character import CharacterAlignment
 from rpg.domain.models.character_class import CharacterClass
 from rpg.domain.models.class_subclass import ClassSubclass
@@ -456,10 +456,15 @@ class CharacterCreationService:
         return labels
 
     def difficulty_option_labels(self) -> List[str]:
-        return [
-            f"{mode.name:<12} | {mode.description}"
-            for mode in self.list_difficulties()
-        ]
+        rows: List[str] = []
+        for mode in self.list_difficulties():
+            risk = str(getattr(mode, "risk_label", "") or "")
+            pressure = str(getattr(mode, "casualty_pressure", "") or "")
+            core = f"{mode.name:<12} | {mode.description}"
+            if risk or pressure:
+                core = f"{core} | {risk} / {pressure}".rstrip(" /")
+            rows.append(core)
+        return rows
 
     @staticmethod
     def _normalize_race_spell_key(race_name: str | None, subrace_name: str | None = None) -> list[str]:
@@ -785,6 +790,7 @@ class CharacterCreationService:
         class_feature_choices: dict[str, object] | None = None,
         selected_feat_slug: str | None = None,
         generated_name_gender: str | None = None,
+        hardcore_toggles: dict[str, object] | None = None,
     ) -> "Character":
         provided_name = (name or "").strip()
         if not provided_name:
@@ -817,6 +823,7 @@ class CharacterCreationService:
             race=effective_race,
             background=background,
             difficulty=difficulty,
+            hardcore_toggles=normalize_hardcore_toggles(hardcore_toggles),
             starting_equipment=starting_equipment,
             alignment=CharacterAlignment.normalize(alignment),
         )
@@ -1747,7 +1754,7 @@ class CharacterCreationService:
 
     @staticmethod
     def _default_difficulties() -> List[DifficultyPreset]:
-        ordered = ["story", "normal", "hardcore"]
+        ordered = ["easy", "normal", "hard", "deadly", "nightmare"]
         return [
             DifficultyPreset(
                 slug=slug,
@@ -1756,6 +1763,10 @@ class CharacterCreationService:
                 hp_multiplier=DIFFICULTY_PRESET_PROFILES[slug]["hp_multiplier"],
                 incoming_damage_multiplier=DIFFICULTY_PRESET_PROFILES[slug]["incoming_damage_multiplier"],
                 outgoing_damage_multiplier=DIFFICULTY_PRESET_PROFILES[slug]["outgoing_damage_multiplier"],
+                risk_label=str(DIFFICULTY_PRESET_PROFILES[slug].get("risk_label", "") or ""),
+                casualty_pressure=str(DIFFICULTY_PRESET_PROFILES[slug].get("casualty_pressure", "") or ""),
+                guardrail_warning=str(DIFFICULTY_PRESET_PROFILES[slug].get("guardrail_warning", "") or ""),
+                legacy_labels=[str(value) for value in list(DIFFICULTY_PRESET_PROFILES[slug].get("legacy_labels", ()) or ()) if str(value).strip()],
             )
             for slug in ordered
         ]

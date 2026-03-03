@@ -60,6 +60,56 @@ class TownSocialFlowTests(unittest.TestCase):
         self.assertIn("Pressure:", view.pressure_summary)
         self.assertTrue(any("Wardens" in line for line in view.pressure_lines))
 
+    def test_town_view_surfaces_compact_faction_conflict_summary_when_active(self):
+        service, character_id = self._build_service()
+        world = service.world_repo.load_default()
+        world.flags["faction_conflict_v1"] = {
+            "version": 1,
+            "active": True,
+            "relations": {
+                "wardens|thieves_guild": {
+                    "score": -6,
+                    "stance": "hostile",
+                    "last_updated_turn": 0,
+                }
+            },
+            "last_tick_turn": 0,
+        }
+        service.world_repo.save(world)
+
+        town = service.get_town_view_intent(character_id)
+
+        self.assertIn("Faction Conflict:", str(town.pressure_summary))
+        self.assertTrue(any("Faction Conflict:" in str(line) for line in list(town.pressure_lines or [])))
+
+    def test_town_view_surfaces_compact_crafting_and_crisis_summary(self):
+        service, character_id = self._build_service()
+        world = service.world_repo.load_default()
+        world.flags["crafting_v1"] = {
+            "version": 1,
+            "active": True,
+            "professions": {"gathering": 3, "refining": 0, "fieldcraft": 5},
+            "known_recipes": ["field_remedy"],
+            "stockpile": {"healing_herbs": 2},
+            "last_tick_turn": int(getattr(world, "current_turn", 0) or 0),
+            "last_craft_turn": int(getattr(world, "current_turn", 0) or 0),
+        }
+        world.flags["cataclysm_state"] = {
+            "active": True,
+            "kind": "plague",
+            "phase": "grip_tightens",
+            "progress": 52,
+            "seed": 404,
+            "started_turn": 1,
+            "last_advance_turn": int(getattr(world, "current_turn", 0) or 0),
+        }
+        service.world_repo.save(world)
+
+        town = service.get_town_view_intent(character_id)
+
+        self.assertIn("Crafting:", str(town.pressure_summary))
+        self.assertIn("Crisis:", str(town.pressure_summary))
+
     def test_social_interaction_is_seed_deterministic_for_same_context(self):
         service_a, character_id_a = self._build_service()
         service_b, character_id_b = self._build_service()
@@ -341,6 +391,27 @@ class TownSocialFlowTests(unittest.TestCase):
         self.assertIn("recent unrest", str(shop.price_modifier_label).lower())
         item_ids = {str(item.item_id) for item in shop.items}
         self.assertNotIn("focus_potion", item_ids)
+
+    def test_faction_standings_view_surfaces_compact_conflict_summary(self):
+        service, character_id = self._build_service(with_factions=True)
+        world = service.world_repo.load_default()
+        world.flags["faction_conflict_v1"] = {
+            "version": 1,
+            "active": True,
+            "relations": {
+                "the_crown|free_council": {
+                    "score": 5,
+                    "stance": "allied",
+                    "last_updated_turn": 0,
+                }
+            },
+            "last_tick_turn": 0,
+        }
+        service.world_repo.save(world)
+
+        view = service.get_faction_standings_view_intent(character_id)
+
+        self.assertIn("Faction Conflict:", str(view.conflict_summary))
 
     def test_social_outcome_persists_dialogue_state_v1(self):
         service, character_id = self._build_service()

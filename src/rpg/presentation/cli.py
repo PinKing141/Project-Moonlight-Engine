@@ -1,4 +1,5 @@
 from rpg.bootstrap import _build_inmemory_game_service, create_game_service
+from rpg.domain.services.class_progression_catalog import gains_text_for_row, progression_rows_for_class
 from rpg.presentation.main_menu import main_menu as _main_menu
 
 
@@ -32,6 +33,14 @@ def run_character_creator(creation_service) -> int:
     selected_idx = int(choice) - 1 if choice.isdigit() else 0
     selected_idx = max(0, min(selected_idx, len(available) - 1))
     chosen = available[selected_idx]
+
+    progression_rows = progression_rows_for_class(getattr(chosen, "slug", "") or getattr(chosen, "name", ""))
+    if progression_rows:
+        print("\nClass Progression (1–20)")
+        print("Level | Gains")
+        print("------|------------------------------------------------")
+        for row in progression_rows:
+            print(f"{int(row.level):>5} | {gains_text_for_row(row)}")
 
     character = creation_service.create_character(name, selected_idx)
 

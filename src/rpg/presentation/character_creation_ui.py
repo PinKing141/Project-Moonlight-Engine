@@ -580,6 +580,16 @@ def _show_class_detail(creation_service, chosen_class, draft: CreationDraft) -> 
             ]
             if detail.recommended_line:
                 lines.append(f"Recommended     : {detail.recommended_line}")
+            progression_rows = list(getattr(detail, "progression_rows", []) or [])
+            if progression_rows:
+                lines.append("")
+                lines.append(f"[{_THEME['attributes']}]Class Progression (1–20)[/{_THEME['attributes']}]")
+                lines.append("Level | Gains")
+                lines.append("------|------------------------------------------------")
+                for row in progression_rows:
+                    gains = str(getattr(row, "gains", "") or "").strip() or "—"
+                    level = int(getattr(row, "level", 0) or 0)
+                    lines.append(f"{level:>5} | {gains}")
             lines.append("")
             for idx, opt in enumerate(options):
                 if idx == selected:
@@ -616,6 +626,16 @@ def _show_class_detail(creation_service, chosen_class, draft: CreationDraft) -> 
             print(f"Combat Profile  : {detail.combat_profile_line}")
             if detail.recommended_line:
                 print(f"Recommended     : {detail.recommended_line}")
+            progression_rows = list(getattr(detail, "progression_rows", []) or [])
+            if progression_rows:
+                print("")
+                print("Class Progression (1–20)")
+                print("Level | Gains")
+                print("------|------------------------------------------------")
+                for row in progression_rows:
+                    gains = str(getattr(row, "gains", "") or "").strip() or "—"
+                    level = int(getattr(row, "level", 0) or 0)
+                    print(f"{level:>5} | {gains}")
             print("")
             for idx, opt in enumerate(options):
                 prefix = "> " if idx == selected else "  "
@@ -802,13 +822,23 @@ def _choose_difficulty(creation_service, draft: CreationDraft):
         if index >= len(difficulties):
             return "Creation Library", ["Open the reference library for difficulty guidance."]
         row = difficulties[index]
+        risk_label = str(getattr(row, "risk_label", "") or "")
+        casualty_pressure = str(getattr(row, "casualty_pressure", "") or "")
+        guardrail_warning = str(getattr(row, "guardrail_warning", "") or "")
+        legacy_labels = [str(value) for value in list(getattr(row, "legacy_labels", []) or []) if str(value).strip()]
+        lines = [
+            str(getattr(row, "description", "") or ""),
+            f"Risk: {risk_label or 'Unspecified'} | Casualty Pressure: {casualty_pressure or 'Unspecified'}",
+            f"HP Multiplier: {float(getattr(row, 'hp_multiplier', 1.0) or 1.0):.2f}",
+            f"Incoming Damage: x{float(getattr(row, 'incoming_damage_multiplier', 1.0) or 1.0):.2f}",
+        ]
+        if legacy_labels:
+            lines.append(f"Legacy labels kept visible: {', '.join(legacy_labels)}")
+        if guardrail_warning:
+            lines.append(guardrail_warning)
         return (
             str(getattr(row, "name", "Difficulty") or "Difficulty"),
-            [
-                str(getattr(row, "description", "") or ""),
-                f"HP Multiplier: {float(getattr(row, 'hp_multiplier', 1.0) or 1.0):.2f}",
-                f"Incoming Damage: x{float(getattr(row, 'incoming_damage_multiplier', 1.0) or 1.0):.2f}",
-            ],
+            lines,
         )
 
     while True:

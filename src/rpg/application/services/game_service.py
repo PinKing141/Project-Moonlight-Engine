@@ -69,9 +69,12 @@ from rpg.application.services.settlement_layering import generate_town_layer_tag
 from rpg.application.services.balance_tables import (
     LEVEL_CAP,
     FIRST_HUNT_QUEST_ID,
+    difficulty_profile_for_slug,
     monster_kill_gold,
     monster_kill_xp,
+    normalize_hardcore_toggles,
     rest_heal_amount,
+    resolve_difficulty_tier,
     xp_required_for_level,
 )
 from rpg.application.services.dialogue_service import DialogueService
@@ -128,6 +131,26 @@ class GameService:
     _FACTION_HEAT_TRAVEL_DECAY_AMOUNT = 1
     _FACTION_HEAT_TRAVEL_DECAY_INTERVAL = 3
     _FACTION_HEAT_REST_DECAY_AMOUNT = 2
+    _RESOURCE_WEIGHT_POINTS = {
+        "sturdy rations": 1,
+        "torch": 1,
+        "lantern": 2,
+        "oil flask": 1,
+        "arrows": 1,
+        "bolts": 1,
+        "arrows x20": 1,
+        "bolts x20": 1,
+        "rope": 1,
+        "climbing kit": 2,
+        "chain mail": 4,
+        "shield": 2,
+        "longbow": 2,
+        "warhammer": 2,
+    }
+    _REST_INTERRUPTION_BASE = {
+        "short_rest": 14,
+        "long_rest": 20,
+    }
     _FACTION_HEAT_RELIEF_COST = 6
     _FACTION_HEAT_RELIEF_AMOUNT = 3
     _DIPLOMACY_RELATION_MIN = -100
@@ -1072,6 +1095,11 @@ class GameService:
         from rpg.application.services.character_creation_service import CharacterCreationService
         from rpg.application.services.encounter_service import EncounterService
         from rpg.application.services.combat_service import CombatService
+        from rpg.application.services.exploration_application_service import ExplorationApplicationService
+        from rpg.application.services.social_dialogue_application_service import SocialDialogueApplicationService
+        from rpg.application.services.quest_application_service import QuestApplicationService
+        from rpg.application.services.town_economy_application_service import TownEconomyApplicationService
+        from rpg.application.services.party_application_service import PartyApplicationService
 
         self.character_repo = character_repo
         self.entity_repo = entity_repo
@@ -1099,6 +1127,11 @@ class GameService:
             event_publisher = self.progression.event_bus.publish
         self.progression_service = ProgressionService(event_publisher=event_publisher)
         self.downtime_service = downtime_service or DowntimeService()
+        self.exploration_app_service = ExplorationApplicationService(self)
+        self.social_dialogue_app_service = SocialDialogueApplicationService(self)
+        self.quest_app_service = QuestApplicationService(self)
+        self.town_economy_app_service = TownEconomyApplicationService(self)
+        self.party_app_service = PartyApplicationService(self)
 
         if class_repo and location_repo:
             client = None
@@ -1255,7 +1288,435 @@ class GameService:
             state["travel_exhaustion_level"] = max(0, min(6, int(state.get("travel_exhaustion_level", 0) or 0)))
         except Exception:
             state["travel_exhaustion_level"] = 0
+        state["encumbrance_band"] = str(state.get("encumbrance_band", "Light") or "Light")
+        state["rations_units"] = max(0, int(state.get("rations_units", 0) or 0))
+        state["ammo_units"] = max(0, int(state.get("ammo_units", 0) or 0))
+        state["light_units"] = max(0, int(state.get("light_units", 0) or 0))
         return state
+
+    @classmethod
+    def _inventory_weight_points(cls, item_name: str) -> int:
+        label = str(item_name or "").strip().lower()
+        if not label:
+            return 0
+        mapped = cls._RESOURCE_WEIGHT_POINTS.get(label)
+        if mapped is not None:
+            return int(mapped)
+        if "armor" in label or "armour" in label:
+            return 2
+        if any(token in label for token in ("sword", "axe", "hammer", "bow", "staff", "shield")):
+            return 2
+        if any(token in label for token in ("ration", "torch", "oil", "arrows", "bolts")):
+            return 1
+        return 1
+
+    @classmethod
+    def _encumbrance_snapshot(cls, character: Character) -> tuple[str, int]:
+        inventory = list(getattr(character, "inventory", []) or [])
+        total_points = sum(cls._inventory_weight_points(str(item)) for item in inventory)
+        if total_points >= 16:
+            return "Overburdened", int(total_points)
+        if total_points >= 9:
+            return "Loaded", int(total_points)
+        return "Light", int(total_points)
+
+    @staticmethod
+    def _inventory_named_count(character: Character, item_name: str) -> int:
+        target = str(item_name or "").strip().lower()
+        if not target:
+            return 0
+        inventory = list(getattr(character, "inventory", []) or [])
+        return sum(1 for row in inventory if str(row or "").strip().lower() == target)
+
+    @staticmethod
+    def _ammo_units_from_item_label(item_name: str) -> int:
+        label = str(item_name or "").strip().lower()
+        if not label:
+            return 0
+        if label.startswith("arrows x") or label.startswith("bolts x"):
+            _, _, tail = label.partition("x")
+            try:
+                return max(0, int(tail.strip()))
+            except Exception:
+                return 0
+        if label in {"arrow", "bolt"}:
+            return 1
+        if label in {"arrows", "bolts", "arrows x20", "bolts x20"}:
+            return 20
+        return 0
+
+    @classmethod
+    def _inventory_ammo_units(cls, character: Character) -> int:
+        inventory = list(getattr(character, "inventory", []) or [])
+        return sum(cls._ammo_units_from_item_label(str(item)) for item in inventory)
+
+    @classmethod
+    def _consume_ammo_units(cls, character: Character, *, units: int = 1) -> bool:
+        required = max(1, int(units or 1))
+        inventory = list(getattr(character, "inventory", []) or [])
+        for index, value in enumerate(inventory):
+            label = str(value or "")
+            ammo = cls._ammo_units_from_item_label(label)
+            if ammo <= 0:
+                continue
+            if ammo > required:
+                lowered = label.strip().lower()
+                if lowered.startswith("arrows x"):
+                    inventory[index] = f"Arrows x{ammo - required}"
+                elif lowered.startswith("bolts x"):
+                    inventory[index] = f"Bolts x{ammo - required}"
+                elif lowered in {"arrows", "arrows x20"}:
+                    inventory[index] = f"Arrows x{ammo - required}"
+                elif lowered in {"bolts", "bolts x20"}:
+                    inventory[index] = f"Bolts x{ammo - required}"
+                else:
+                    inventory[index] = f"Arrows x{ammo - required}"
+                character.inventory = inventory
+                return True
+            del inventory[index]
+            character.inventory = inventory
+            return True
+        return False
+
+    def _resource_snapshot(self, character: Character) -> dict[str, int | str]:
+        state = self._survival_state(character)
+        encumbrance_band, weight_points = self._encumbrance_snapshot(character)
+        rations = self._inventory_named_count(character, "Sturdy Rations")
+        ammo = self._inventory_ammo_units(character)
+        light_units = (
+            self._inventory_named_count(character, "Torch")
+            + self._inventory_named_count(character, "Lantern")
+            + self._inventory_named_count(character, "Oil Flask")
+        )
+        fatigue = int(state.get("travel_exhaustion_level", 0) or 0)
+        state["encumbrance_band"] = encumbrance_band
+        state["rations_units"] = int(rations)
+        state["ammo_units"] = int(ammo)
+        state["light_units"] = int(light_units)
+        return {
+            "encumbrance_band": encumbrance_band,
+            "weight_points": int(weight_points),
+            "rations_units": int(rations),
+            "ammo_units": int(ammo),
+            "light_units": int(light_units),
+            "fatigue_level": int(fatigue),
+        }
+
+    def _resource_pressure_display(self, character: Character) -> tuple[str, list[str]]:
+        snapshot = self._resource_snapshot(character)
+        band = str(snapshot.get("encumbrance_band", "Light") or "Light")
+        fatigue = int(snapshot.get("fatigue_level", 0) or 0)
+        rations = int(snapshot.get("rations_units", 0) or 0)
+        ammo = int(snapshot.get("ammo_units", 0) or 0)
+        light_units = int(snapshot.get("light_units", 0) or 0)
+        summary = (
+            f"Resources: {band} load • Fatigue {fatigue}/6 • "
+            f"Rations {rations} • Ammo {ammo} • Light {light_units}"
+        )
+        lines = [
+            f"Encumbrance: {band} ({int(snapshot.get('weight_points', 0) or 0)} load points)",
+            f"Fatigue: {fatigue}/6",
+            f"Supplies: Rations {rations}, Ammo {ammo}, Light {light_units}",
+        ]
+        if band == "Overburdened":
+            lines.append("Overburdened travel increases fatigue gain and interruption risk.")
+        if rations <= 0:
+            lines.append("No rations remaining: recovery and travel pacing are penalized.")
+        if light_units <= 0:
+            lines.append("No light sources packed: night travel will be harsher.")
+        return summary, lines
+
+    def _travel_resource_warning(self, character: Character, *, estimated_days: int) -> str:
+        snapshot = self._resource_snapshot(character)
+        warnings: list[str] = []
+        rations = int(snapshot.get("rations_units", 0) or 0)
+        fatigue = int(snapshot.get("fatigue_level", 0) or 0)
+        if rations < max(1, int(estimated_days)):
+            warnings.append("low rations")
+        if int(snapshot.get("light_units", 0) or 0) <= 0:
+            warnings.append("no light sources")
+        if str(snapshot.get("encumbrance_band", "Light")) == "Overburdened":
+            warnings.append("overburdened load")
+        if fatigue >= 4:
+            warnings.append("high fatigue")
+        if not warnings:
+            return ""
+        return f"Resource pressure: {', '.join(warnings)}."
+
+    def _rest_interruption_chance(
+        self,
+        *,
+        character: Character,
+        world: World | None,
+        rest_kind: str,
+        location_type: str,
+        consume_utility: bool = False,
+    ) -> int:
+        if str(location_type or "").strip().lower() != "wilderness":
+            return 0
+        weather_label = str(self._world_immersion_state(world).get("weather", "Unknown") or "Unknown")
+        fatigue = int(self._survival_state(character).get("travel_exhaustion_level", 0) or 0)
+        threat = int(getattr(world, "threat_level", 0) or 0) if world is not None else 0
+        resource = self._resource_snapshot(character)
+
+        base = int(self._REST_INTERRUPTION_BASE.get(str(rest_kind), 14))
+        weather_shift = {
+            "Clear": 0,
+            "Fog": 3,
+            "Rain": 5,
+            "Storm": 10,
+            "Blizzard": 12,
+        }.get(weather_label, 1)
+        fatigue_shift = 0
+        if fatigue >= 5:
+            fatigue_shift = 12
+        elif fatigue >= 3:
+            fatigue_shift = 7
+        elif fatigue >= 1:
+            fatigue_shift = 3
+
+        load_band = str(resource.get("encumbrance_band", "Light") or "Light")
+        load_shift = 0
+        if load_band == "Overburdened":
+            load_shift = 7
+        elif load_band == "Loaded":
+            load_shift = 3
+
+        supply_shift = 0
+        if int(resource.get("rations_units", 0) or 0) <= 0:
+            supply_shift += 6
+        if int(resource.get("light_units", 0) or 0) <= 0:
+            supply_shift += 4
+
+        utility_shift = 0
+        rest_shift_loader = getattr(self, "_v21_rest_interruption_shift", None)
+        if callable(rest_shift_loader):
+            utility_shift, _ = rest_shift_loader(character, consume=bool(consume_utility))
+        chance = base + weather_shift + fatigue_shift + load_shift + supply_shift + min(16, threat * 2) + int(utility_shift)
+        return int(max(4, min(85, chance)))
+
+    def get_resource_risk_warnings_intent(
+        self,
+        character_id: int,
+        *,
+        action: str,
+        destination_id: int | None = None,
+        travel_mode: str = "road",
+        travel_pace: str = "steady",
+        rest_kind: str = "short_rest",
+    ) -> list[str]:
+        character = self._require_character(character_id)
+        kind = str(action or "").strip().lower()
+        warnings: list[str] = []
+        if kind == "travel":
+            estimated_days = 1
+            if destination_id is not None:
+                options = list(self.get_travel_destinations_intent(character_id) or [])
+                selected = next((row for row in options if int(getattr(row, "location_id", 0) or 0) == int(destination_id)), None)
+                if selected is not None:
+                    estimated_days = max(1, int(getattr(selected, "estimated_days", 1) or 1))
+            else:
+                mode = self._normalize_travel_mode(travel_mode)
+                pace = self._normalize_travel_pace(travel_pace)
+                current_location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+                target_location = None
+                if self.location_repo:
+                    locations = self.location_repo.list_all()
+                    location = self.location_repo.get(character.location_id) if character.location_id is not None else None
+                    current = self._current_location_type(character, location)
+                    target = "wilderness" if current == "town" else "town"
+                    if target == "town":
+                        target_location = next((item for item in locations if self._is_town_location(item)), None)
+                    else:
+                        target_location = next((item for item in locations if not self._is_town_location(item)), None)
+                estimated_days = self._estimate_travel_days(
+                    character=character,
+                    source=current_location,
+                    destination=target_location,
+                    travel_mode=mode,
+                    travel_pace=pace,
+                    prep_profile=self._active_travel_prep_profile(character),
+                )
+            resource_warning = self._travel_resource_warning(character, estimated_days=max(1, int(estimated_days)))
+            if resource_warning:
+                warnings.append(resource_warning)
+            snapshot = self._resource_snapshot(character)
+            if int(snapshot.get("fatigue_level", 0) or 0) >= 4:
+                warnings.append("Fatigue is high; consider resting before departure.")
+            if str(snapshot.get("encumbrance_band", "Light") or "Light") == "Overburdened":
+                warnings.append("Overburdened load will increase travel strain and HP wear.")
+            return warnings
+
+        if kind == "rest":
+            world = self.world_repo.load_default() if self.world_repo else None
+            location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
+            location_type = self._current_location_type(character, location)
+            chance = self._rest_interruption_chance(
+                character=character,
+                world=world,
+                rest_kind=str(rest_kind),
+                location_type=location_type,
+            )
+            impact = self._rest_interruption_severity(
+                character=character,
+                world=world,
+                rest_kind=str(rest_kind),
+                location_type=location_type,
+                chance=chance,
+            )
+            if chance <= 0:
+                warnings.append("Rest risk: sheltered location; interruption risk is minimal.")
+                return warnings
+            if chance >= 60:
+                tier = "High"
+            elif chance >= 35:
+                tier = "Moderate"
+            else:
+                tier = "Low"
+            warnings.append(f"Rest risk ({str(rest_kind).replace('_', ' ')}): {tier} ({chance}% interruption chance).")
+            if impact in {"minor", "moderate", "major"}:
+                warnings.append(f"Likely interruption impact: {impact.title()} (HP/fatigue recovery reduced).")
+            if location_type == "wilderness":
+                warnings.append("Wild conditions may reduce recovery and delay fatigue relief.")
+            return warnings
+
+        return warnings
+
+    def _rest_interruption_roll(
+        self,
+        *,
+        character: Character,
+        world: World | None,
+        rest_kind: str,
+        location_type: str,
+    ) -> tuple[bool, str, str]:
+        if str(location_type or "").strip().lower() != "wilderness":
+            return False, "", "none"
+        world_turn = int(getattr(world, "current_turn", 0) or 0) if world is not None else 0
+        weather_label = str(self._world_immersion_state(world).get("weather", "Unknown") or "Unknown")
+        fatigue = int(self._survival_state(character).get("travel_exhaustion_level", 0) or 0)
+        threat = int(getattr(world, "threat_level", 0) or 0) if world is not None else 0
+        chance = self._rest_interruption_chance(
+            character=character,
+            world=world,
+            rest_kind=rest_kind,
+            location_type=location_type,
+            consume_utility=True,
+        )
+        seed = derive_seed(
+            namespace="rest.interruption",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "world_turn": int(world_turn),
+                "location_id": int(getattr(character, "location_id", 0) or 0),
+                "rest_kind": str(rest_kind),
+                "weather": weather_label,
+                "fatigue": int(fatigue),
+            },
+        )
+        roll = random.Random(seed).randint(1, 100)
+        if int(roll) > int(chance):
+            return False, "", "none"
+        severity = self._rest_interruption_severity(
+            character=character,
+            world=world,
+            rest_kind=rest_kind,
+            location_type=location_type,
+            chance=chance,
+        )
+        if weather_label in {"Storm", "Blizzard"}:
+            return True, "violent weather", severity
+        resource = self._resource_snapshot(character)
+        if int(resource.get("rations_units", 0) or 0) <= 0:
+            return True, "supply shortages", severity
+        if str(resource.get("encumbrance_band", "Light") or "Light") == "Overburdened":
+            return True, "encumbrance strain", severity
+        if threat >= 4:
+            return True, "hostile movement nearby", severity
+        if fatigue >= 4:
+            return True, "fatigue-induced broken sleep", severity
+        return True, "uneasy wilderness disturbances", severity
+
+    def _rest_interruption_severity(
+        self,
+        *,
+        character: Character,
+        world: World | None,
+        rest_kind: str,
+        location_type: str,
+        chance: int | None = None,
+    ) -> str:
+        if str(location_type or "").strip().lower() != "wilderness":
+            return "none"
+        weather_label = str(self._world_immersion_state(world).get("weather", "Unknown") or "Unknown")
+        threat = int(getattr(world, "threat_level", 0) or 0) if world is not None else 0
+        snapshot = self._resource_snapshot(character)
+        fatigue = int(snapshot.get("fatigue_level", 0) or 0)
+        assessed_chance = int(
+            chance
+            if chance is not None
+            else self._rest_interruption_chance(
+                character=character,
+                world=world,
+                rest_kind=rest_kind,
+                location_type=location_type,
+            )
+        )
+        pressure = assessed_chance
+        if weather_label in {"Storm", "Blizzard"}:
+            pressure += 8
+        if threat >= 5:
+            pressure += 6
+        if int(snapshot.get("rations_units", 0) or 0) <= 0:
+            pressure += 5
+        if str(snapshot.get("encumbrance_band", "Light") or "Light") == "Overburdened":
+            pressure += 5
+        if fatigue >= 4:
+            pressure += 4
+        if pressure >= 72:
+            return "major"
+        if pressure >= 48:
+            return "moderate"
+        return "minor"
+
+    @staticmethod
+    def _rest_interruption_cause_effects(*, reason: str, severity: str) -> dict[str, object]:
+        normalized_reason = str(reason or "").strip().lower()
+        normalized_severity = str(severity or "").strip().lower()
+
+        hp_factor = 1.0
+        slot_adjust = 0
+        exhaustion_shift = 0
+        flavor = ""
+
+        if normalized_reason == "violent weather":
+            hp_factor *= 0.9
+            if normalized_severity in {"moderate", "major"}:
+                exhaustion_shift += 1
+            flavor = "Bitter weather keeps the camp uneasy and sleep shallow."
+        elif normalized_reason == "supply shortages":
+            hp_factor *= 0.85
+            exhaustion_shift += 1
+            flavor = "Without enough supplies, recovery quality drops sharply."
+        elif normalized_reason == "encumbrance strain":
+            hp_factor *= 0.9
+            exhaustion_shift += 1
+            flavor = "Heavy packs strain your rest posture and slow recovery."
+        elif normalized_reason == "hostile movement nearby":
+            hp_factor *= 0.9
+            slot_adjust -= 1
+            flavor = "Keeping watch against nearby threats leaves little time for focus."
+        elif normalized_reason == "fatigue-induced broken sleep":
+            hp_factor *= 0.8
+            exhaustion_shift += 1
+            flavor = "Overexertion fragments sleep, limiting deep recovery."
+
+        return {
+            "hp_factor": float(max(0.2, hp_factor)),
+            "slot_adjust": int(slot_adjust),
+            "exhaustion_shift": int(exhaustion_shift),
+            "flavor": str(flavor),
+        }
 
     def _adjust_travel_exhaustion(self, character: Character, *, delta: int, reason: str) -> int:
         state = self._survival_state(character)
@@ -1386,7 +1847,7 @@ class GameService:
     def rest(self, character_id: int) -> tuple[Character, Optional[World]]:
         character = self._require_character(character_id)
         world_before = self.world_repo.load_default() if self.world_repo else None
-        heal_amount = rest_heal_amount(character.hp_max)
+        heal_amount = self._difficulty_scaled_rest_heal_cap(character)
         character.hp_current = min(character.hp_current + heal_amount, character.hp_max)
         character.alive = True
         if hasattr(character, "spell_slots_max"):
@@ -1430,13 +1891,56 @@ class GameService:
         if location_type == "wilderness" and self._consume_inventory_item(character, "Sturdy Rations"):
             used_rations = True
         world_before = self.world_repo.load_default() if self.world_repo else None
-        heal_cap = int(rest_heal_amount(int(getattr(character, "hp_max", 1) or 1)))
+        interrupted, interruption_reason, interruption_severity = self._rest_interruption_roll(
+            character=character,
+            world=world_before,
+            rest_kind="short_rest",
+            location_type=location_type,
+        )
+        heal_cap = int(self._difficulty_scaled_rest_heal_cap(character))
         heal_amount = max(1, int(round(float(heal_cap) * float(self._SHORT_REST_HEAL_RATIO))))
         if location_type == "wilderness" and not used_rations:
             heal_amount = max(1, int(round(heal_amount * 0.7)))
+        if interrupted:
+            interruption_multiplier = {
+                "minor": 0.75,
+                "moderate": 0.55,
+                "major": 0.35,
+            }.get(str(interruption_severity), 0.55)
+            heal_amount = max(1, int(round(heal_amount * interruption_multiplier)))
+        cause_effects = self._rest_interruption_cause_effects(
+            reason=interruption_reason,
+            severity=interruption_severity,
+        ) if interrupted else {"hp_factor": 1.0, "slot_adjust": 0, "exhaustion_shift": 0, "flavor": ""}
+        heal_amount = max(1, int(round(float(heal_amount) * float(cause_effects.get("hp_factor", 1.0) or 1.0))))
         character.hp_current = min(int(getattr(character, "hp_max", 1) or 1), int(getattr(character, "hp_current", 1) or 1) + heal_amount)
         if hasattr(character, "spell_slots_max"):
-            restore_slots(character, amount=int(self._SHORT_REST_MAX_SPELL_RECOVERY))
+            flags = getattr(character, "flags", None)
+            if isinstance(flags, dict) and isinstance(flags.get("spell_slot_ledger"), dict):
+                try:
+                    scalar_max = max(0, int(getattr(character, "spell_slots_max", 0) or 0))
+                    scalar_current = max(0, int(getattr(character, "spell_slots_current", scalar_max) or scalar_max))
+                    ledger_current = 0
+                    ledger = flags.get("spell_slot_ledger", {})
+                    if isinstance(ledger, dict):
+                        current_map = ledger.get("current", {})
+                        if isinstance(current_map, dict):
+                            ledger_current = sum(max(0, int(value or 0)) for value in current_map.values())
+                    if scalar_current <= scalar_max and scalar_current != ledger_current:
+                        flags.pop("spell_slot_ledger", None)
+                except Exception:
+                    pass
+            slot_recovery = int(self._SHORT_REST_MAX_SPELL_RECOVERY)
+            if interrupted and str(interruption_severity) == "moderate":
+                slot_recovery = max(1, slot_recovery - 1)
+            if interrupted and str(interruption_severity) == "major":
+                slot_recovery = 0
+            if interrupted and str(interruption_reason or "").strip().lower() == "hostile movement nearby":
+                if str(interruption_severity) in {"moderate", "major"}:
+                    slot_recovery = 0
+            slot_recovery = max(0, int(slot_recovery) + int(cause_effects.get("slot_adjust", 0) or 0))
+            if slot_recovery > 0:
+                restore_slots(character, amount=int(slot_recovery))
         self._recover_party_runtime_state(character, context="travel")
         corruption_loss = self._apply_cataclysm_rest_corruption(character, world_before=world_before, context="short_rest")
 
@@ -1459,41 +1963,109 @@ class GameService:
             f"Short rest: +{heal_amount} HP recovered.",
             "You catch your breath and regain limited focus.",
         ]
+        if interrupted:
+            messages.append(
+                f"Rest interrupted by {interruption_reason} ({str(interruption_severity).title()} severity); recovery is partial."
+            )
+            flavor = str(cause_effects.get("flavor", "") or "").strip()
+            if flavor:
+                messages.append(flavor)
         if location_type == "wilderness":
             if used_rations:
                 messages.append("You consume Sturdy Rations to steady your recovery.")
             else:
                 messages.append("Without Sturdy Rations, recovery is rough and incomplete.")
-        exhaustion_recovery = 1 if used_rations or location_type == "town" else 0
-        if exhaustion_recovery > 0:
+        exhaustion_delta = 0
+        if interrupted:
+            if str(interruption_severity) == "minor" and (used_rations or location_type == "town"):
+                exhaustion_delta = -1
+            elif str(interruption_severity) == "major":
+                exhaustion_delta = +1
+            exhaustion_delta += int(cause_effects.get("exhaustion_shift", 0) or 0)
+        else:
+            exhaustion_delta = -1 if (used_rations or location_type == "town") else 0
+        if exhaustion_delta != 0:
             before = int(self._survival_state(character).get("travel_exhaustion_level", 0) or 0)
-            after = self._adjust_travel_exhaustion(character, delta=-exhaustion_recovery, reason="short_rest")
+            after = self._adjust_travel_exhaustion(character, delta=exhaustion_delta, reason="short_rest")
             if after < before:
                 messages.append(f"Travel exhaustion eases ({before} -> {after}).")
+            if after > before:
+                messages.append(f"Travel exhaustion worsens ({before} -> {after}) after broken rest.")
             self.character_repo.save(character)
         if corruption_loss > 0:
             messages.append(f"Cataclysm corruption seeps into camp: -{corruption_loss} HP.")
         return ActionResult(messages=messages, game_over=False)
 
     def long_rest_intent(self, character_id: int) -> ActionResult:
-        self.rest(character_id)
         character = self._require_character(character_id)
         location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
         location_type = self._current_location_type(character, location)
         used_rations = False
         if location_type == "wilderness" and self._consume_inventory_item(character, "Sturdy Rations"):
             used_rations = True
+        world_before = self.world_repo.load_default() if self.world_repo else None
+        interrupted, interruption_reason, interruption_severity = self._rest_interruption_roll(
+            character=character,
+            world=world_before,
+            rest_kind="long_rest",
+            location_type=location_type,
+        )
+        hp_before = int(getattr(character, "hp_current", 1) or 1)
+        hp_max = int(getattr(character, "hp_max", 1) or 1)
+        base_heal = int(self._difficulty_scaled_rest_heal_cap(character))
+
+        self.rest(character_id)
+        character = self._require_character(character_id)
+        recovery_ratio = 1.0
+        if location_type == "wilderness" and not used_rations:
+            recovery_ratio = 0.8
+        if interrupted:
+            interruption_cap = {
+                "minor": 0.75,
+                "moderate": 0.5,
+                "major": 0.3,
+            }.get(str(interruption_severity), 0.5)
+            recovery_ratio = min(recovery_ratio, interruption_cap)
+        cause_effects = self._rest_interruption_cause_effects(
+            reason=interruption_reason,
+            severity=interruption_severity,
+        ) if interrupted else {"hp_factor": 1.0, "slot_adjust": 0, "exhaustion_shift": 0, "flavor": ""}
+        recovery_ratio = max(0.2, float(recovery_ratio) * float(cause_effects.get("hp_factor", 1.0) or 1.0))
+        adjusted_heal = max(1, int(round(float(base_heal) * float(recovery_ratio))))
+        target_hp = min(hp_max, hp_before + adjusted_heal)
+        if int(getattr(character, "hp_current", hp_max) or hp_max) > int(target_hp):
+            character.hp_current = int(target_hp)
+
         messages = ["Long rest complete. You rest and feel restored."]
+        if interrupted:
+            messages.append(
+                f"Rest interrupted by {interruption_reason} ({str(interruption_severity).title()} severity); only partial recovery is secured."
+            )
+            flavor = str(cause_effects.get("flavor", "") or "").strip()
+            if flavor:
+                messages.append(flavor)
         if location_type == "wilderness":
             if used_rations:
                 messages.append("You consume Sturdy Rations and sleep deeply despite the wilds.")
             else:
                 messages.append("You lacked Sturdy Rations; the rest is less restorative than an inn stay.")
         exhaustion_recovery = 2 if (location_type == "town" or used_rations) else 1
+        if interrupted:
+            if str(interruption_severity) == "minor":
+                exhaustion_recovery = min(1, exhaustion_recovery)
+            elif str(interruption_severity) == "moderate":
+                exhaustion_recovery = 0
+            else:
+                exhaustion_recovery = -1
+        exhaustion_delta = -int(exhaustion_recovery)
+        if interrupted:
+            exhaustion_delta += int(cause_effects.get("exhaustion_shift", 0) or 0)
         before = int(self._survival_state(character).get("travel_exhaustion_level", 0) or 0)
-        after = self._adjust_travel_exhaustion(character, delta=-exhaustion_recovery, reason="long_rest")
+        after = self._adjust_travel_exhaustion(character, delta=exhaustion_delta, reason="long_rest")
         if after < before:
             messages.append(f"Travel exhaustion eases ({before} -> {after}).")
+        if after > before:
+            messages.append(f"Travel exhaustion worsens ({before} -> {after}) after disrupted sleep.")
         self.character_repo.save(character)
         corruption_note = self._last_rest_corruption_message(self._require_character(character_id))
         if corruption_note:
@@ -1545,7 +2117,7 @@ class GameService:
         immersion = self._world_immersion_state(world_before, biome_name=str(getattr(location, "biome", "") or ""))
         weather_label = str(immersion.get("weather", "Unknown"))
 
-        heal_cap = int(rest_heal_amount(int(getattr(character, "hp_max", 1) or 1)))
+        heal_cap = int(self._difficulty_scaled_rest_heal_cap(character))
         heal_ratio = float(activity.get("heal_ratio", 1.0) or 1.0)
         heal_amount = max(1, int(round(heal_cap * heal_ratio)))
         before_hp = int(getattr(character, "hp_current", 0) or 0)
@@ -2274,11 +2846,14 @@ class GameService:
         state = self._exploration_state(character)
         detection = DetectionState(str(state.get("detection_state", DetectionState.UNAWARE.value) or DetectionState.UNAWARE.value))
         cause = str(state.get("cause", "") or "").strip()
+        resource_summary, resource_lines = self._resource_pressure_display(character)
         return {
             "location_name": location_name,
             "light_level": self._light_label(light),
             "detection_state": self._detection_label(detection),
             "detection_note": cause,
+            "resource_pressure": resource_summary,
+            "resource_note": " | ".join(resource_lines[:2]),
         }
 
     def wilderness_action_intent(self, character_id: int, action_id: str) -> ActionResult:
@@ -3046,7 +3621,8 @@ class GameService:
             preview = f"{level_label:<6} • {days_label:<3} • {risk_label:<{risk_width}}"
             diplomacy_route_note = self._diplomacy_route_note(diplomacy_state=diplomacy_state, location=location)
             cataclysm_note = self._cataclysm_route_note(road_days=road_days, cataclysm=cataclysm)
-            route_note = " ".join(part for part in [cataclysm_note, diplomacy_route_note] if part).strip()
+            resource_note = self._travel_resource_warning(character, estimated_days=road_days)
+            route_note = " ".join(part for part in [cataclysm_note, diplomacy_route_note, resource_note] if part).strip()
             destinations.append(
                 TravelDestinationView(
                     location_id=int(location.id),
@@ -3501,6 +4077,7 @@ class GameService:
         exhaustion_level = int(self._survival_state(character).get("travel_exhaustion_level", 0) or 0)
         if exhaustion_level > 0:
             message = f"{message} Exhaustion: {exhaustion_level}/6."
+        message = f"{message} {self._resource_pressure_display(character)[0]}"
         prep_summary = self._travel_prep_summary(prep_profile)
         if prep_summary:
             message = f"{message} Prep applied: {prep_summary}."
@@ -3829,7 +4406,23 @@ class GameService:
         if int(getattr(world, "threat_level", 0) or 0) >= 4:
             recent_consequences = ["Tension response: shopkeepers board windows and whisper about flashpoints."] + list(recent_consequences)
         pressure_summary, pressure_lines = self._faction_pressure_display(character)
+        resource_summary, resource_lines = self._resource_pressure_display(character)
+        combined_summary = f"{pressure_summary} | {resource_summary}" if resource_summary else pressure_summary
+        combined_lines = [*pressure_lines, *resource_lines]
+        conflict_summary = self._faction_conflict_summary(world)
+        if conflict_summary:
+            combined_summary = f"{combined_summary} | {conflict_summary}"
+            combined_lines = [conflict_summary, *list(combined_lines or [])]
         cataclysm = self._world_cataclysm_state(world)
+        crafting_summary, crafting_lines = self._crafting_pressure_display(world)
+        if crafting_summary:
+            combined_summary = f"{combined_summary} | {crafting_summary}"
+            combined_lines = [*list(crafting_lines or []), *list(combined_lines or [])]
+        if bool(cataclysm.get("active", False)):
+            crisis_line = f"Crisis: {str(cataclysm.get('summary', '') or '').strip()}"
+            if crisis_line.strip() != "Crisis:":
+                combined_summary = f"{combined_summary} | {crisis_line}"
+                combined_lines = [crisis_line, *list(combined_lines or [])]
         try:
             raw_progress = cataclysm.get("progress", 0)
             cataclysm_progress = max(0, min(100, int(raw_progress if isinstance(raw_progress, (int, float, str)) else 0)))
@@ -3844,8 +4437,8 @@ class GameService:
             district_tag=district_tag,
             landmark_tag=landmark_tag,
             active_prep_summary=prep_summary,
-            pressure_summary=pressure_summary,
-            pressure_lines=pressure_lines,
+            pressure_summary=combined_summary,
+            pressure_lines=combined_lines,
             time_label=str(immersion.get("time_label", "")),
             weather_label=str(immersion.get("weather", "Unknown")),
             cataclysm_active=bool(cataclysm.get("active", False)),
@@ -3901,6 +4494,24 @@ class GameService:
         if world_turn <= 0 and self.world_repo:
             world_turn = int(getattr(self._require_world(), "current_turn", 0) or 0)
 
+        relation_shift_count = 0
+        if world_after is not None:
+            relation_shift_count = self._apply_pressure_relief_conflict_shift(
+                world_after,
+                faction_id=normalized_faction,
+                world_turn=int(world_turn),
+            )
+            self._append_consequence(
+                world_after,
+                kind="faction_pressure_relief",
+                message=(
+                    f"You cool tensions with {self._faction_display_name_from_repo(self.faction_repo, normalized_faction)} "
+                    f"contacts ({current_heat}→{next_heat} heat{', de-escalated conflict ties' if relation_shift_count > 0 else ''})."
+                ),
+                severity="minor",
+                turn=int(world_turn),
+            )
+
         self._record_faction_heat_event(
             character,
             world_turn=world_turn,
@@ -3918,6 +4529,8 @@ class GameService:
             self.atomic_state_persistor(character, world_after)
         else:
             self.character_repo.save(character)
+            if self.world_repo and world_after is not None:
+                self.world_repo.save(world_after)
 
         faction_label = self._faction_display_name_from_repo(self.faction_repo, normalized_faction)
         return ActionResult(
@@ -3928,6 +4541,57 @@ class GameService:
             ] + ([arc_message] if arc_message else []),
             game_over=False,
         )
+
+    @staticmethod
+    def _faction_conflict_stance_for_score(score: int) -> str:
+        value = int(score)
+        if value >= 4:
+            return "allied"
+        if value <= -4:
+            return "hostile"
+        return "neutral"
+
+    def _apply_pressure_relief_conflict_shift(self, world: World, *, faction_id: str, world_turn: int) -> int:
+        flags = getattr(world, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            world.flags = flags
+
+        state = flags.get("faction_conflict_v1", {})
+        if not isinstance(state, dict) or not bool(state.get("active", False)):
+            return 0
+        relations = state.get("relations", {})
+        if not isinstance(relations, dict) or not relations:
+            return 0
+
+        normalized_faction = str(faction_id or "").strip().lower()
+        if not normalized_faction:
+            return 0
+
+        shifted = 0
+        for pair, payload in relations.items():
+            normalized_pair = str(pair or "").strip().lower()
+            if "|" not in normalized_pair or not isinstance(payload, dict):
+                continue
+            left, right = normalized_pair.split("|", 1)
+            if normalized_faction not in {left, right}:
+                continue
+            score_before = max(-10, min(10, int(payload.get("score", 0) or 0)))
+            score_after = score_before
+            if score_before > 0:
+                score_after = score_before - 1
+            elif score_before < 0:
+                score_after = score_before + 1
+            if score_after == score_before:
+                continue
+            payload["score"] = int(score_after)
+            payload["stance"] = str(self._faction_conflict_stance_for_score(score_after))
+            payload["last_updated_turn"] = int(world_turn)
+            shifted += 1
+
+        if shifted > 0:
+            state["last_tick_turn"] = int(world_turn)
+        return int(shifted)
 
     def get_npc_interaction_intent(self, character_id: int, npc_id: str) -> NpcInteractionView:
         character = self._require_character(character_id)
@@ -4516,6 +5180,18 @@ class GameService:
         if world_turn <= 0 and self.world_repo:
             world_turn = int(getattr(self._require_world(), "current_turn", 0) or 0)
 
+        crafting_messages: list[str] = []
+        if str(activity.id).startswith("craft_"):
+            world_target = world_after
+            if world_target is None and self.world_repo:
+                world_target = self._require_world()
+            crafting_messages = self._resolve_deterministic_crafting_outcome(
+                character=character,
+                world=world_target,
+                activity_id=str(activity.id),
+                world_turn=int(world_turn),
+            )
+
         reputation_messages: list[str] = []
         if self.faction_repo and outcome.reputation_deltas:
             target = f"character:{character_id}"
@@ -4546,8 +5222,10 @@ class GameService:
             self.atomic_state_persistor(character, world_after)
         else:
             self.character_repo.save(character)
+            if self.world_repo and world_after is not None:
+                self.world_repo.save(world_after)
 
-        messages = list(outcome.messages) + reputation_messages
+        messages = list(outcome.messages) + crafting_messages + reputation_messages
         messages.append(f"Gold now: {int(getattr(character, 'money', 0) or 0)}.")
         return ActionResult(messages=messages, game_over=False)
 
@@ -4771,6 +5449,8 @@ class GameService:
         )
         world_turn = int(getattr(world, "current_turn", 0))
         changed = self._sync_cataclysm_quest_pressure(world, world_turn=world_turn)
+        if self._sync_quest_arc_metadata_v2(world, world_turn=world_turn):
+            changed = True
         if (changed or diplomacy_changed) and self.world_repo:
             self.world_repo.save(world)
         quests = self._world_quests(world)
@@ -4811,6 +5491,11 @@ class GameService:
                     + (
                         f" — {str(payload.get('objective_note', '')).strip()}"
                         if str(payload.get("objective_note", "")).strip()
+                        else ""
+                    )
+                    + (
+                        f" — {self._quest_arc_summary_suffix(payload)}"
+                        if self._quest_arc_summary_suffix(payload)
                         else ""
                     ),
                     urgency_label=urgency_label,
@@ -5705,7 +6390,13 @@ class GameService:
         location = str(recovery.get("location") or "safe ground")
         hp_restored = int(recovery.get("hp_restored") or getattr(character, "hp_current", 1))
         gold_lost = int(recovery.get("gold_lost") or 0)
-        return f"Recovery: regrouped at {location}; HP restored to {hp_restored}; gold lost {gold_lost}."
+        snapshot = self._resource_snapshot(character)
+        fatigue = int(snapshot.get("fatigue_level", 0) or 0)
+        load_band = str(snapshot.get("encumbrance_band", "Light") or "Light")
+        return (
+            f"Recovery: regrouped at {location}; HP restored to {hp_restored}; gold lost {gold_lost}; "
+            f"travel fatigue {fatigue}; load {load_band}."
+        )
 
     def build_explore_view(self, plan: EncounterPlan) -> ExploreView:
         enemies = [
@@ -7658,8 +8349,9 @@ class GameService:
         )
 
     def apply_encounter_reward_intent(self, character: Character, monster: Entity) -> RewardOutcomeView:
-        xp_gain = monster_kill_xp(monster.level)
-        money_gain = monster_kill_gold(monster.level)
+        difficulty_tier, _profile, _toggles = self._resolve_character_difficulty_runtime(character)
+        xp_gain = monster_kill_xp(monster.level, difficulty_slug=difficulty_tier)
+        money_gain = monster_kill_gold(monster.level, difficulty_slug=difficulty_tier)
         loot_items: list[str] = []
 
         if monster.loot_tags:
@@ -7831,6 +8523,51 @@ class GameService:
             return (int(score) - 10) // 2
         except Exception:
             return 0
+
+    def _resolve_character_difficulty_runtime(self, character: Character) -> tuple[str, dict[str, object], dict[str, bool]]:
+        flags = getattr(character, "flags", None)
+        if not isinstance(flags, dict):
+            flags = {}
+            character.flags = flags
+
+        raw_slug = str(getattr(character, "difficulty", "") or flags.get("difficulty", "") or "normal").strip().lower()
+        difficulty_tier = resolve_difficulty_tier(raw_slug)
+        profile = difficulty_profile_for_slug(raw_slug)
+
+        try:
+            character.incoming_damage_multiplier = float(profile.get("incoming_damage_multiplier", 1.0) or 1.0)
+        except Exception:
+            character.incoming_damage_multiplier = 1.0
+        try:
+            character.outgoing_damage_multiplier = float(profile.get("outgoing_damage_multiplier", 1.0) or 1.0)
+        except Exception:
+            character.outgoing_damage_multiplier = 1.0
+
+        flags["difficulty"] = raw_slug or "normal"
+        flags["difficulty_resolved_tier"] = str(difficulty_tier)
+        if raw_slug and raw_slug != difficulty_tier:
+            flags["difficulty_legacy_label"] = raw_slug
+        else:
+            flags.pop("difficulty_legacy_label", None)
+
+        toggles_raw = flags.get("hardcore_toggles", {})
+        toggles = normalize_hardcore_toggles(toggles_raw if isinstance(toggles_raw, dict) else None)
+        flags["hardcore_toggles_version"] = "hardcore_toggles_v1"
+        flags["hardcore_toggles"] = dict(toggles)
+        return str(difficulty_tier), profile, toggles
+
+    def _difficulty_scaled_rest_heal_cap(self, character: Character) -> int:
+        difficulty_tier, _profile, _toggles = self._resolve_character_difficulty_runtime(character)
+        base_heal = int(rest_heal_amount(int(getattr(character, "hp_max", 1) or 1)))
+        tier_scalars = {
+            "easy": 1.10,
+            "normal": 1.00,
+            "hard": 0.90,
+            "deadly": 0.80,
+            "nightmare": 0.70,
+        }
+        scalar = float(tier_scalars.get(str(difficulty_tier), 1.0))
+        return max(1, int(round(float(base_heal) * scalar)))
 
     def _dominant_faction_standing(self, character_id: int) -> tuple[str | None, int]:
         standings = self.faction_standings_intent(character_id)
@@ -8023,6 +8760,52 @@ class GameService:
         ]
         return summary, lines
 
+    @staticmethod
+    def _format_faction_conflict_name(raw: str) -> str:
+        label = str(raw or "").strip().replace("_", " ").replace("-", " ")
+        return " ".join(part for part in label.split() if part).title()
+
+    def _faction_conflict_summary(self, world: World | None) -> str:
+        if world is None:
+            return ""
+        flags = getattr(world, "flags", None)
+        if not isinstance(flags, dict):
+            return ""
+        state = flags.get("faction_conflict_v1", {})
+        if not isinstance(state, dict) or not bool(state.get("active", False)):
+            return ""
+        relations = state.get("relations", {})
+        if not isinstance(relations, dict) or not relations:
+            return ""
+
+        top_pair = ""
+        top_payload: dict[str, object] | None = None
+        top_score = -1
+        for raw_pair, raw_payload in relations.items():
+            if not isinstance(raw_payload, dict):
+                continue
+            try:
+                score = abs(int(raw_payload.get("score", 0) or 0))
+            except Exception:
+                score = 0
+            pair = str(raw_pair or "").strip().lower()
+            if score > top_score:
+                top_score = score
+                top_pair = pair
+                top_payload = raw_payload
+
+        if not top_pair or not isinstance(top_payload, dict):
+            return ""
+
+        left_raw, sep, right_raw = top_pair.partition("|")
+        if not sep:
+            return ""
+        left = self._format_faction_conflict_name(left_raw)
+        right = self._format_faction_conflict_name(right_raw)
+        stance = str(top_payload.get("stance", "neutral") or "neutral").replace("_", " ").title()
+        signed_score = int(top_payload.get("score", 0) or 0)
+        return f"Faction Conflict: {left} vs {right} ({stance}, {signed_score:+d})"
+
     @classmethod
     def _dominant_faction_heat(cls, character: Character) -> tuple[str | None, int]:
         state = cls._faction_heat_state(character)
@@ -8046,6 +8829,7 @@ class GameService:
 
     def get_faction_standings_view_intent(self, character_id: int) -> FactionStandingsView:
         character = self._require_character(character_id)
+        world = self.world_repo.load_default() if self.world_repo else None
         current_location = self.location_repo.get(character.location_id) if self.location_repo and character.location_id is not None else None
         discovered_factions = self._discovered_factions(character, current_location=current_location)
 
@@ -8077,6 +8861,7 @@ class GameService:
             faction_names=faction_names,
             descriptions=descriptions,
             empty_state_hint=empty_state_hint,
+            conflict_summary=self._faction_conflict_summary(world),
         )
 
     def make_choice(self, player_id: int, choice: str) -> ActionResult:
@@ -8298,6 +9083,134 @@ class GameService:
         if remaining == 1:
             return "Due in 1 day"
         return f"Due in {remaining} days"
+
+    @staticmethod
+    def _faction_conflict_top_relation(world) -> tuple[str, str, int] | None:
+        if not isinstance(getattr(world, "flags", None), dict):
+            return None
+        state = world.flags.get("faction_conflict_v1", {})
+        if not isinstance(state, dict) or not bool(state.get("active", False)):
+            return None
+        relations = state.get("relations", {})
+        if not isinstance(relations, dict) or not relations:
+            return None
+
+        top_pair = ""
+        top_stance = "neutral"
+        top_score = 0
+        top_abs_score = -1
+        for raw_pair, raw_payload in relations.items():
+            pair = str(raw_pair or "").strip().lower()
+            payload = raw_payload if isinstance(raw_payload, dict) else {}
+            score = int(payload.get("score", 0) or 0)
+            abs_score = abs(score)
+            if abs_score > top_abs_score:
+                top_pair = pair
+                top_stance = str(payload.get("stance", "neutral") or "neutral").strip().lower()
+                top_score = int(score)
+                top_abs_score = abs_score
+        if not top_pair:
+            return None
+        return top_pair, top_stance, int(top_score)
+
+    def _quest_arc_branch_profile(self, world, *, quest_id: str, payload: dict[str, object]) -> tuple[str, str, dict[str, object]]:
+        cataclysm = self._world_cataclysm_state(world)
+        objective_kind = str(payload.get("objective_kind", "kill_any") or "kill_any").strip().lower()
+        top_relation = self._faction_conflict_top_relation(world)
+
+        faction_pair = ""
+        faction_stance = "neutral"
+        faction_score = 0
+        if top_relation is not None:
+            faction_pair, faction_stance, faction_score = top_relation
+
+        if bool(cataclysm.get("active", False)):
+            kind = str(cataclysm.get("kind", "") or "unknown").strip().lower() or "unknown"
+            phase = str(cataclysm.get("phase", "") or "").strip().lower() or "pressure"
+            branch_key = f"cataclysm_{kind}_{phase}"
+            branch_label = f"Arc Branch: Cataclysm {kind.replace('_', ' ').title()} ({phase.replace('_', ' ')})"
+        elif faction_stance == "hostile" and faction_pair:
+            if objective_kind in {"travel_count", "travel_to"}:
+                branch_key = "contested_routes"
+                branch_label = "Arc Branch: Contested Routes"
+            else:
+                branch_key = "border_skirmish"
+                branch_label = "Arc Branch: Border Skirmish"
+        elif faction_stance == "allied" and faction_pair:
+            branch_key = "diplomatic_window"
+            branch_label = "Arc Branch: Diplomatic Window"
+        else:
+            branch_key = "frontier_routine"
+            branch_label = "Arc Branch: Frontier Routine"
+
+        context = {
+            "quest_id": str(quest_id),
+            "seed_key": str(payload.get("seed_key", "") or ""),
+            "objective_kind": str(objective_kind),
+            "status": str(payload.get("status", "") or ""),
+            "cataclysm_active": bool(cataclysm.get("active", False)),
+            "cataclysm_kind": str(cataclysm.get("kind", "") or ""),
+            "cataclysm_phase": str(cataclysm.get("phase", "") or ""),
+            "faction_pair": str(faction_pair),
+            "faction_stance": str(faction_stance),
+            "faction_score": int(faction_score),
+            "branch_key": str(branch_key),
+        }
+        signature = int(
+            derive_seed(
+                namespace="quest.arc.v2",
+                context=context,
+            )
+        )
+        return (
+            str(branch_key),
+            str(branch_label),
+            {
+                "v": 2,
+                "branch_key": str(branch_key),
+                "branch_label": str(branch_label),
+                "context": context,
+                "signature": int(signature),
+            },
+        )
+
+    def _sync_quest_arc_metadata_v2(self, world, *, world_turn: int) -> bool:
+        quests = self._world_quests(world)
+        changed = False
+        for quest_id, payload in quests.items():
+            if not isinstance(payload, dict):
+                continue
+            branch_key, branch_label, profile = self._quest_arc_branch_profile(
+                world,
+                quest_id=str(quest_id),
+                payload=payload,
+            )
+            current_meta = payload.get("arc_metadata_v2", {})
+            if not isinstance(current_meta, dict):
+                current_meta = {}
+            current_signature = int(current_meta.get("signature", -1) or -1)
+            next_signature = int(profile.get("signature", 0) or 0)
+            if next_signature == current_signature and str(current_meta.get("branch_key", "") or "") == branch_key:
+                continue
+            payload["arc_metadata_v2"] = {
+                "v": int(profile.get("v", 2) or 2),
+                "branch_key": str(branch_key),
+                "branch_label": str(branch_label),
+                "context": dict(profile.get("context", {}) if isinstance(profile.get("context", {}), dict) else {}),
+                "signature": int(next_signature),
+                "last_synced_turn": int(world_turn),
+            }
+            changed = True
+        return changed
+
+    @staticmethod
+    def _quest_arc_summary_suffix(payload: dict[str, object]) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        meta = payload.get("arc_metadata_v2", {})
+        if not isinstance(meta, dict):
+            return ""
+        return str(meta.get("branch_label", "") or "").strip()
 
     @staticmethod
     def _world_consequences(world) -> list[dict]:
@@ -8888,6 +9801,152 @@ class GameService:
         )
         if len(rows) > 20:
             del rows[:-20]
+
+    def _world_crafting_state(self, world) -> dict:
+        if world is None:
+            return {
+                "version": 1,
+                "active": False,
+                "professions": {"gathering": 0, "refining": 0, "fieldcraft": 0},
+                "known_recipes": [],
+                "stockpile": {},
+                "last_tick_turn": 0,
+                "last_craft_turn": 0,
+            }
+        helper = getattr(self.progression, "_ensure_crafting_state", None)
+        if callable(helper):
+            row = helper(world)
+            if isinstance(row, dict):
+                return row
+
+        if not isinstance(getattr(world, "flags", None), dict):
+            world.flags = {}
+        row = world.flags.setdefault("crafting_v1", {})
+        if not isinstance(row, dict):
+            row = {}
+            world.flags["crafting_v1"] = row
+        row.setdefault("version", 1)
+        row.setdefault("active", False)
+        row.setdefault("professions", {"gathering": 0, "refining": 0, "fieldcraft": 0})
+        row.setdefault("known_recipes", [])
+        row.setdefault("stockpile", {})
+        row.setdefault("last_tick_turn", 0)
+        row.setdefault("last_craft_turn", 0)
+        return row
+
+    @staticmethod
+    def _normalize_crafting_item_id(raw: str) -> str:
+        return str(raw or "").strip().lower().replace(" ", "_")
+
+    def _resolve_deterministic_crafting_outcome(
+        self,
+        *,
+        character: Character,
+        world,
+        activity_id: str,
+        world_turn: int,
+    ) -> list[str]:
+        recipe_map = {
+            "craft_healing_herbs": {
+                "recipe_id": "field_remedy",
+                "profession": "fieldcraft",
+                "base_item": "healing_herbs",
+                "bonus_item": "sturdy_rations",
+            },
+            "craft_whetstone": {
+                "recipe_id": "edge_kit",
+                "profession": "refining",
+                "base_item": "whetstone",
+                "bonus_item": "antitoxin",
+            },
+        }
+        profile = recipe_map.get(str(activity_id or "").strip().lower())
+        if not isinstance(profile, dict):
+            return []
+
+        crafting = self._world_crafting_state(world)
+        crafting["active"] = True
+        known_recipes = list(crafting.get("known_recipes", []) or [])
+        recipe_id = str(profile.get("recipe_id", "") or "")
+        if recipe_id and recipe_id not in known_recipes:
+            known_recipes.append(recipe_id)
+        crafting["known_recipes"] = known_recipes
+
+        professions = dict(crafting.get("professions", {}) or {})
+        profession_key = str(profile.get("profession", "fieldcraft") or "fieldcraft")
+
+        seed = derive_seed(
+            namespace="crafting.v1.resolve",
+            context={
+                "character_id": int(getattr(character, "id", 0) or 0),
+                "world_turn": int(world_turn),
+                "world_seed": int(getattr(world, "rng_seed", 0) or 0) if world is not None else 0,
+                "activity_id": str(activity_id or ""),
+                "recipe_id": str(recipe_id),
+            },
+        )
+        roll = int(seed) % 100
+        quality_label = "Rough"
+        profession_gain = 1
+        if roll < 20:
+            quality_label = "Masterwork"
+            profession_gain = 2
+        elif roll < 65:
+            quality_label = "Stable"
+
+        current_prof = int(professions.get(profession_key, 0) or 0)
+        professions[profession_key] = max(0, min(100, int(current_prof + profession_gain)))
+        crafting["professions"] = professions
+
+        stockpile = dict(crafting.get("stockpile", {}) or {})
+        base_item = self._normalize_crafting_item_id(str(profile.get("base_item", "") or ""))
+        if base_item:
+            stockpile[base_item] = int(stockpile.get(base_item, 0) or 0) + 1
+
+        bonus_messages: list[str] = []
+        if roll < 35:
+            bonus_item_label = str(profile.get("bonus_item", "") or "").replace("_", " ").title()
+            if bonus_item_label:
+                if character.inventory is None:
+                    character.inventory = []
+                character.inventory.append(bonus_item_label)
+                bonus_item = self._normalize_crafting_item_id(str(profile.get("bonus_item", "") or ""))
+                if bonus_item:
+                    stockpile[bonus_item] = int(stockpile.get(bonus_item, 0) or 0) + 1
+                bonus_messages.append(f"Bonus yield: {bonus_item_label}.")
+        crafting["stockpile"] = stockpile
+        crafting["last_craft_turn"] = int(world_turn)
+
+        return [
+            f"Craft result: {quality_label} batch ({profession_key} +{profession_gain}).",
+            *bonus_messages,
+        ]
+
+    def _crafting_pressure_display(self, world) -> tuple[str, list[str]]:
+        state = self._world_crafting_state(world)
+        known_recipes = list(state.get("known_recipes", []) or [])
+        stockpile = dict(state.get("stockpile", {}) or {})
+        professions = dict(state.get("professions", {}) or {})
+        total_stock = sum(max(0, int(value or 0)) for value in stockpile.values())
+        active = bool(state.get("active", False))
+
+        status = "Active" if active else "Dormant"
+        summary = f"Crafting: {status} ({len(known_recipes)} recipes, {int(total_stock)} stockpile)"
+
+        top_profession = ""
+        top_score = -1
+        for name, raw_value in professions.items():
+            score = int(raw_value or 0)
+            if score > top_score:
+                top_profession = str(name)
+                top_score = score
+
+        lines: list[str] = []
+        if top_profession:
+            lines.append(f"Crafting focus: {top_profession.title()} {int(top_score)}")
+        if known_recipes:
+            lines.append(f"Known recipes: {', '.join(str(row).replace('_', ' ').title() for row in known_recipes[:3])}")
+        return summary, lines
 
     @staticmethod
     def _world_combat_consequence_state(world) -> dict:
@@ -10613,6 +11672,7 @@ class GameService:
         world,
         location: Optional[Location],
     ) -> str:
+        self._resolve_character_difficulty_runtime(character)
         combat_service = self.combat_service
         if combat_service:
             world_turn = int(getattr(world, "current_turn", 0) or 0)
@@ -10810,3 +11870,241 @@ class GameService:
             if value is not None:
                 parts.append(f"{abbr} {value}")
         return " / ".join(parts) if parts else "Balanced stats"
+
+    _legacy_explore_intent = explore_intent
+    _legacy_get_location_context_intent = get_location_context_intent
+    _legacy_get_travel_destinations_intent = get_travel_destinations_intent
+    _legacy_travel_intent = travel_intent
+    _legacy_get_exploration_environment_intent = get_exploration_environment_intent
+    _legacy_wilderness_action_intent = wilderness_action_intent
+    _legacy_consume_next_explore_surprise_intent = consume_next_explore_surprise_intent
+    _legacy_get_npc_interaction_intent = get_npc_interaction_intent
+    _legacy_get_dialogue_session_intent = get_dialogue_session_intent
+    _legacy_submit_social_approach_intent = submit_social_approach_intent
+    _legacy_submit_dialogue_choice_intent = submit_dialogue_choice_intent
+    _legacy_get_quest_board_intent = get_quest_board_intent
+    _legacy_get_quest_journal_intent = get_quest_journal_intent
+    _legacy_accept_quest_intent = accept_quest_intent
+    _legacy_turn_in_quest_intent = turn_in_quest_intent
+    _legacy_get_town_view_intent = get_town_view_intent
+    _legacy_get_shop_view_intent = get_shop_view_intent
+    _legacy_buy_shop_item_intent = buy_shop_item_intent
+    _legacy_get_sell_inventory_view_intent = get_sell_inventory_view_intent
+    _legacy_sell_inventory_item_intent = sell_inventory_item_intent
+    _legacy_get_training_view_intent = get_training_view_intent
+    _legacy_purchase_training_intent = purchase_training_intent
+    _legacy_get_party_status_intent = get_party_status_intent
+    _legacy_get_party_capacity_intent = get_party_capacity_intent
+    _legacy_get_party_management_intent = get_party_management_intent
+    _legacy_set_party_companion_active_intent = set_party_companion_active_intent
+    _legacy_set_party_companion_lane_intent = set_party_companion_lane_intent
+
+    def explore_intent(self, character_id: int) -> tuple[ExploreView, Character, list[Entity]]:
+        return self.exploration_app_service.explore_intent(character_id)
+
+    def _explore_intent_impl(self, character_id: int) -> tuple[ExploreView, Character, list[Entity]]:
+        return self._legacy_explore_intent(character_id)
+
+    def get_location_context_intent(self, character_id: int) -> LocationContextView:
+        return self.exploration_app_service.get_location_context_intent(character_id)
+
+    def _get_location_context_intent_impl(self, character_id: int) -> LocationContextView:
+        return self._legacy_get_location_context_intent(character_id)
+
+    def get_travel_destinations_intent(self, character_id: int) -> list[TravelDestinationView]:
+        return self.exploration_app_service.get_travel_destinations_intent(character_id)
+
+    def _get_travel_destinations_intent_impl(self, character_id: int) -> list[TravelDestinationView]:
+        return self._legacy_get_travel_destinations_intent(character_id)
+
+    def travel_intent(
+        self,
+        character_id: int,
+        destination_id: int | None = None,
+        travel_mode: str = "road",
+        travel_pace: str = "steady",
+    ) -> ActionResult:
+        return self.exploration_app_service.travel_intent(
+            character_id,
+            destination_id=destination_id,
+            travel_mode=travel_mode,
+            travel_pace=travel_pace,
+        )
+
+    def _travel_intent_impl(
+        self,
+        character_id: int,
+        destination_id: int | None = None,
+        travel_mode: str = "road",
+        travel_pace: str = "steady",
+    ) -> ActionResult:
+        return self._legacy_travel_intent(
+            character_id,
+            destination_id=destination_id,
+            travel_mode=travel_mode,
+            travel_pace=travel_pace,
+        )
+
+    def get_exploration_environment_intent(self, character_id: int) -> dict[str, str]:
+        return self.exploration_app_service.get_exploration_environment_intent(character_id)
+
+    def _get_exploration_environment_intent_impl(self, character_id: int) -> dict[str, str]:
+        return self._legacy_get_exploration_environment_intent(character_id)
+
+    def wilderness_action_intent(self, character_id: int, action_id: str) -> ActionResult:
+        return self.exploration_app_service.wilderness_action_intent(character_id, action_id)
+
+    def _wilderness_action_intent_impl(self, character_id: int, action_id: str) -> ActionResult:
+        return self._legacy_wilderness_action_intent(character_id, action_id)
+
+    def consume_next_explore_surprise_intent(self, character_id: int) -> str | None:
+        return self.exploration_app_service.consume_next_explore_surprise_intent(character_id)
+
+    def _consume_next_explore_surprise_intent_impl(self, character_id: int) -> str | None:
+        return self._legacy_consume_next_explore_surprise_intent(character_id)
+
+    def get_npc_interaction_intent(self, character_id: int, npc_id: str) -> NpcInteractionView:
+        return self.social_dialogue_app_service.get_npc_interaction_intent(character_id, npc_id)
+
+    def _get_npc_interaction_intent_impl(self, character_id: int, npc_id: str) -> NpcInteractionView:
+        return self._legacy_get_npc_interaction_intent(character_id, npc_id)
+
+    def get_dialogue_session_intent(self, character_id: int, npc_id: str) -> DialogueSessionView:
+        return self.social_dialogue_app_service.get_dialogue_session_intent(character_id, npc_id)
+
+    def _get_dialogue_session_intent_impl(self, character_id: int, npc_id: str) -> DialogueSessionView:
+        return self._legacy_get_dialogue_session_intent(character_id, npc_id)
+
+    def submit_social_approach_intent(
+        self,
+        character_id: int,
+        npc_id: str,
+        approach: str,
+        forced_dc: int | None = None,
+        forced_skill: str | None = None,
+    ) -> SocialOutcomeView:
+        return self.social_dialogue_app_service.submit_social_approach_intent(
+            character_id,
+            npc_id,
+            approach,
+            forced_dc=forced_dc,
+            forced_skill=forced_skill,
+        )
+
+    def _submit_social_approach_intent_impl(
+        self,
+        character_id: int,
+        npc_id: str,
+        approach: str,
+        forced_dc: int | None = None,
+        forced_skill: str | None = None,
+    ) -> SocialOutcomeView:
+        return self._legacy_submit_social_approach_intent(
+            character_id,
+            npc_id,
+            approach,
+            forced_dc=forced_dc,
+            forced_skill=forced_skill,
+        )
+
+    def submit_dialogue_choice_intent(self, character_id: int, npc_id: str, choice_id: str) -> SocialOutcomeView:
+        return self.social_dialogue_app_service.submit_dialogue_choice_intent(character_id, npc_id, choice_id)
+
+    def _submit_dialogue_choice_intent_impl(self, character_id: int, npc_id: str, choice_id: str) -> SocialOutcomeView:
+        return self._legacy_submit_dialogue_choice_intent(character_id, npc_id, choice_id)
+
+    def get_quest_board_intent(self, character_id: int) -> QuestBoardView:
+        return self.quest_app_service.get_quest_board_intent(character_id)
+
+    def _get_quest_board_intent_impl(self, character_id: int) -> QuestBoardView:
+        return self._legacy_get_quest_board_intent(character_id)
+
+    def get_quest_journal_intent(self, character_id: int) -> QuestJournalView:
+        return self.quest_app_service.get_quest_journal_intent(character_id)
+
+    def _get_quest_journal_intent_impl(self, character_id: int) -> QuestJournalView:
+        return self._legacy_get_quest_journal_intent(character_id)
+
+    def accept_quest_intent(self, character_id: int, quest_id: str) -> ActionResult:
+        return self.quest_app_service.accept_quest_intent(character_id, quest_id)
+
+    def _accept_quest_intent_impl(self, character_id: int, quest_id: str) -> ActionResult:
+        return self._legacy_accept_quest_intent(character_id, quest_id)
+
+    def turn_in_quest_intent(self, character_id: int, quest_id: str) -> ActionResult:
+        return self.quest_app_service.turn_in_quest_intent(character_id, quest_id)
+
+    def _turn_in_quest_intent_impl(self, character_id: int, quest_id: str) -> ActionResult:
+        return self._legacy_turn_in_quest_intent(character_id, quest_id)
+
+    def get_town_view_intent(self, character_id: int) -> TownView:
+        return self.town_economy_app_service.get_town_view_intent(character_id)
+
+    def _get_town_view_intent_impl(self, character_id: int) -> TownView:
+        return self._legacy_get_town_view_intent(character_id)
+
+    def get_shop_view_intent(self, character_id: int) -> ShopView:
+        return self.town_economy_app_service.get_shop_view_intent(character_id)
+
+    def _get_shop_view_intent_impl(self, character_id: int) -> ShopView:
+        return self._legacy_get_shop_view_intent(character_id)
+
+    def buy_shop_item_intent(self, character_id: int, item_id: str) -> ActionResult:
+        return self.town_economy_app_service.buy_shop_item_intent(character_id, item_id)
+
+    def _buy_shop_item_intent_impl(self, character_id: int, item_id: str) -> ActionResult:
+        return self._legacy_buy_shop_item_intent(character_id, item_id)
+
+    def get_sell_inventory_view_intent(self, character_id: int) -> SellInventoryView:
+        return self.town_economy_app_service.get_sell_inventory_view_intent(character_id)
+
+    def _get_sell_inventory_view_intent_impl(self, character_id: int) -> SellInventoryView:
+        return self._legacy_get_sell_inventory_view_intent(character_id)
+
+    def sell_inventory_item_intent(self, character_id: int, item_name: str) -> ActionResult:
+        return self.town_economy_app_service.sell_inventory_item_intent(character_id, item_name)
+
+    def _sell_inventory_item_intent_impl(self, character_id: int, item_name: str) -> ActionResult:
+        return self._legacy_sell_inventory_item_intent(character_id, item_name)
+
+    def get_training_view_intent(self, character_id: int) -> TrainingView:
+        return self.town_economy_app_service.get_training_view_intent(character_id)
+
+    def _get_training_view_intent_impl(self, character_id: int) -> TrainingView:
+        return self._legacy_get_training_view_intent(character_id)
+
+    def purchase_training_intent(self, character_id: int, training_id: str) -> ActionResult:
+        return self.town_economy_app_service.purchase_training_intent(character_id, training_id)
+
+    def _purchase_training_intent_impl(self, character_id: int, training_id: str) -> ActionResult:
+        return self._legacy_purchase_training_intent(character_id, training_id)
+
+    def get_party_status_intent(self, character_id: int) -> list[str]:
+        return self.party_app_service.get_party_status_intent(character_id)
+
+    def _get_party_status_intent_impl(self, character_id: int) -> list[str]:
+        return self._legacy_get_party_status_intent(character_id)
+
+    def get_party_capacity_intent(self, character_id: int) -> tuple[int, int]:
+        return self.party_app_service.get_party_capacity_intent(character_id)
+
+    def _get_party_capacity_intent_impl(self, character_id: int) -> tuple[int, int]:
+        return self._legacy_get_party_capacity_intent(character_id)
+
+    def get_party_management_intent(self, character_id: int) -> list[dict[str, str | bool]]:
+        return self.party_app_service.get_party_management_intent(character_id)
+
+    def _get_party_management_intent_impl(self, character_id: int) -> list[dict[str, str | bool]]:
+        return self._legacy_get_party_management_intent(character_id)
+
+    def set_party_companion_active_intent(self, character_id: int, companion_id: str, active: bool) -> ActionResult:
+        return self.party_app_service.set_party_companion_active_intent(character_id, companion_id, active)
+
+    def _set_party_companion_active_intent_impl(self, character_id: int, companion_id: str, active: bool) -> ActionResult:
+        return self._legacy_set_party_companion_active_intent(character_id, companion_id, active)
+
+    def set_party_companion_lane_intent(self, character_id: int, companion_id: str, lane: str) -> ActionResult:
+        return self.party_app_service.set_party_companion_lane_intent(character_id, companion_id, lane)
+
+    def _set_party_companion_lane_intent_impl(self, character_id: int, companion_id: str, lane: str) -> ActionResult:
+        return self._legacy_set_party_companion_lane_intent(character_id, companion_id, lane)

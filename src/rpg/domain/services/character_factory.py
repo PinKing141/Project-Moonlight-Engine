@@ -118,6 +118,7 @@ def create_new_character(
     race: Optional[Race] = None,
     background: Optional[Background] = None,
     difficulty: Optional[DifficultyPreset] = None,
+    hardcore_toggles: Optional[Dict[str, bool]] = None,
     starting_equipment: Optional[list[str]] = None,
     alignment: str | None = None,
 ) -> Character:
@@ -141,6 +142,17 @@ def create_new_character(
 
     difficulty_slug = difficulty.slug if difficulty else "normal"
     flags: Dict[str, str] = {"difficulty": difficulty_slug} if difficulty else {}
+    toggles_payload: Dict[str, bool] = {
+        "max_monster_hp": False,
+        "deadlier_death_saves": False,
+        "rest_lock_on_failed_saves": False,
+    }
+    if isinstance(hardcore_toggles, dict):
+        for key in list(toggles_payload.keys()):
+            if key in hardcore_toggles:
+                toggles_payload[key] = bool(hardcore_toggles.get(key))
+    flags["hardcore_toggles_version"] = "hardcore_toggles_v1"
+    flags["hardcore_toggles"] = dict(toggles_payload)
     if background and background.faction:
         flags["faction_affinity"] = background.faction
 

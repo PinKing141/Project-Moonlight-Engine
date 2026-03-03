@@ -183,7 +183,14 @@ class CharacterClassDetailView:
     hit_die: str
     combat_profile_line: str
     recommended_line: str
+    progression_rows: List["ClassProgressionRowView"] = field(default_factory=list)
     options: List[str] = field(default_factory=lambda: ["Choose this class", "Back"])
+
+
+@dataclass
+class ClassProgressionRowView:
+    level: int
+    gains: str
 
 
 @dataclass
@@ -412,6 +419,7 @@ class FactionStandingsView:
     faction_names: Dict[str, str] = field(default_factory=dict)
     descriptions: Dict[str, str] = field(default_factory=dict)
     empty_state_hint: str = ""
+    conflict_summary: str = ""
 
 
 @dataclass

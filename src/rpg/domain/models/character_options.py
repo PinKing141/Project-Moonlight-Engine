@@ -39,3 +39,7 @@ class DifficultyPreset:
     outgoing_damage_multiplier: float = 1.0
     incoming_damage_multiplier: float = 1.0
     threat_modifier: float = 1.0
+    risk_label: str = ""
+    casualty_pressure: str = ""
+    guardrail_warning: str = ""
+    legacy_labels: List[str] = field(default_factory=list)

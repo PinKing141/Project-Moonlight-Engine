@@ -2,6 +2,7 @@ from typing import Dict, List, Optional
 
 from rpg.domain.models.character import Character
 from rpg.domain.models.character_class import CharacterClass
+from rpg.domain.services.class_progression_catalog import ClassProgressionRow, progression_rows_for_class
 from rpg.domain.models.entity import Entity
 from rpg.domain.models.location import Location
 from rpg.domain.models.world import World
@@ -241,3 +242,6 @@ class InMemoryClassRepository(ClassRepository):
             if cls.slug.lower() == slug_key:
                 return cls
         return None
+
+    def list_progression_rows(self, class_slug_or_name: str | None) -> tuple[ClassProgressionRow, ...]:
+        return progression_rows_for_class(class_slug_or_name)

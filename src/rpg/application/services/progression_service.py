@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from rpg.application.dtos import LevelUpPendingView
 from rpg.application.services.balance_tables import (
     LEVEL_CAP,
@@ -21,6 +23,7 @@ from rpg.domain.models.skill_proficiency import (
     normalize_skill_slug,
     skill_label,
 )
+from rpg.domain.services.class_progression_catalog import gains_with_fallback, progression_rows_for_class
 from rpg.domain.services.subclass_progression import resolve_subclass_tier_unlocks
 
 
@@ -44,6 +47,13 @@ class ProgressionService:
             flags = {}
             character.flags = flags
         return flags
+
+    @staticmethod
+    def _normalize_unlock_token(value: str) -> str:
+        token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+        if not token:
+            return "feature"
+        return token[:120]
 
     def _normalized_class_levels(self, character: Character) -> dict[str, int]:
         levels: dict[str, int] = {}
@@ -419,6 +429,29 @@ class ProgressionService:
                         "level": int(current_level),
                     }
                 )
+
+            progression_rows = progression_rows_for_class(advance_slug)
+            progression_row = next((row for row in progression_rows if int(row.level) == class_level_after), None)
+            if progression_row is not None:
+                for gain in gains_with_fallback(progression_row):
+                    gain_text = str(gain or "").strip()
+                    if not gain_text:
+                        continue
+                    unlock_key = (
+                        f"class_{advance_slug}_level_{class_level_after}_"
+                        f"{self._normalize_unlock_token(gain_text)}"
+                    )
+                    unlocks[unlock_key] = True
+                    unlock_rows.append(
+                        {
+                            "kind": "class_feature",
+                            "key": unlock_key,
+                            "level": int(current_level),
+                        }
+                    )
+                    messages.append(
+                        f"Class feature unlocked: {advance_slug.title()} {class_level_after} — {gain_text}."
+                    )
 
             if not subclass_class_slug:
                 subclass_class_slug = primary_slug

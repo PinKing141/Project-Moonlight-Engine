@@ -280,6 +280,11 @@ class CharacterCreationRacesTests(unittest.TestCase):
         self.assertEqual("d6", detail.hit_die)
         self.assertIn("AC", detail.combat_profile_line)
         self.assertIn("INT 16", detail.recommended_line)
+        self.assertEqual(20, len(detail.progression_rows))
+        self.assertEqual(1, detail.progression_rows[0].level)
+        self.assertIn("Spellcasting", detail.progression_rows[0].gains)
+        self.assertEqual(20, detail.progression_rows[-1].level)
+        self.assertIn("Signature Spells", detail.progression_rows[-1].gains)
         self.assertEqual(["Choose this class", "Back"], detail.options)
 
     def test_alignment_options_include_true_neutral_and_expected_count(self) -> None:

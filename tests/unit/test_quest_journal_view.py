@@ -187,6 +187,89 @@ class QuestJournalViewTests(unittest.TestCase):
         self.assertEqual(courier_run.target, courier_run.progress)
         self.assertIn("Reach destination", courier_run.objective_summary)
 
+    def test_quest_board_persists_arc_metadata_and_surfaces_branch_summary(self):
+        service, world_repo, character_id = self._build_service()
+        world = world_repo.load_default()
+        world.flags.setdefault("quests", {})
+        world.flags["quests"] = {
+            "courier_run": {
+                "status": "available",
+                "objective_kind": "travel_to",
+                "objective_target_location_id": 2,
+                "progress": 0,
+                "target": 1,
+                "reward_xp": 14,
+                "reward_money": 9,
+                "seed_key": "quest:courier_run:77",
+            }
+        }
+        world.flags["faction_conflict_v1"] = {
+            "version": 1,
+            "active": True,
+            "relations": {
+                "wardens|thieves_guild": {
+                    "score": -7,
+                    "stance": "hostile",
+                    "last_updated_turn": int(getattr(world, "current_turn", 0) or 0),
+                }
+            },
+            "last_tick_turn": int(getattr(world, "current_turn", 0) or 0),
+        }
+        world_repo.save(world)
+
+        board = service.get_quest_board_intent(character_id)
+        courier_run = next(quest for quest in board.quests if quest.quest_id == "courier_run")
+        self.assertIn("Arc Branch:", courier_run.objective_summary)
+        self.assertIn("Contested Routes", courier_run.objective_summary)
+
+        world_after = world_repo.load_default()
+        payload = dict((world_after.flags or {}).get("quests", {}).get("courier_run", {}))
+        metadata = dict(payload.get("arc_metadata_v2", {}))
+        self.assertEqual(2, int(metadata.get("v", 0) or 0))
+        self.assertEqual("contested_routes", str(metadata.get("branch_key", "") or ""))
+        self.assertTrue(str(metadata.get("branch_label", "") or "").startswith("Arc Branch:"))
+        self.assertGreater(int(metadata.get("signature", 0) or 0), 0)
+
+    def test_quest_arc_metadata_signature_is_stable_for_identical_world_state(self):
+        service_a, world_repo_a, character_id_a = self._build_service()
+        service_b, world_repo_b, character_id_b = self._build_service()
+
+        for world_repo in (world_repo_a, world_repo_b):
+            world = world_repo.load_default()
+            world.flags.setdefault("quests", {})
+            world.flags["quests"] = {
+                "first_hunt": {
+                    "status": "available",
+                    "objective_kind": "kill_any",
+                    "progress": 0,
+                    "target": 1,
+                    "reward_xp": 10,
+                    "reward_money": 4,
+                    "seed_key": "quest:first_hunt:42",
+                }
+            }
+            world.flags["faction_conflict_v1"] = {
+                "version": 1,
+                "active": True,
+                "relations": {
+                    "wardens|thieves_guild": {
+                        "score": 6,
+                        "stance": "allied",
+                        "last_updated_turn": int(getattr(world, "current_turn", 0) or 0),
+                    }
+                },
+                "last_tick_turn": int(getattr(world, "current_turn", 0) or 0),
+            }
+            world_repo.save(world)
+
+        service_a.get_quest_board_intent(character_id_a)
+        service_b.get_quest_board_intent(character_id_b)
+
+        meta_a = dict((world_repo_a.load_default().flags or {}).get("quests", {}).get("first_hunt", {}).get("arc_metadata_v2", {}))
+        meta_b = dict((world_repo_b.load_default().flags or {}).get("quests", {}).get("first_hunt", {}).get("arc_metadata_v2", {}))
+        self.assertEqual(str(meta_a.get("branch_key", "")), str(meta_b.get("branch_key", "")))
+        self.assertEqual(int(meta_a.get("signature", 0) or 0), int(meta_b.get("signature", 0) or 0))
+
 
 if __name__ == "__main__":
     unittest.main()

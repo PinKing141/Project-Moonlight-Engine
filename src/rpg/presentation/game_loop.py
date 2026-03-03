@@ -300,7 +300,13 @@ def _render_town_header(town_view) -> None:
             print(f"- {line}")
 
 
-def _render_faction_standings(standings, descriptions=None, empty_state_hint: str = "", faction_names=None) -> None:
+def _render_faction_standings(
+    standings,
+    descriptions=None,
+    empty_state_hint: str = "",
+    faction_names=None,
+    conflict_summary: str = "",
+) -> None:
     clear_screen()
     descriptions = descriptions or {}
     faction_names = faction_names or {}
@@ -320,6 +326,8 @@ def _render_faction_standings(standings, descriptions=None, empty_state_hint: st
         table.add_column("Faction")
         table.add_column("Score", justify="right")
         table.add_column("Description")
+        if str(conflict_summary or "").strip():
+            table.add_row("Conflict", "", str(conflict_summary))
         for faction_id, score in standings.items():
             label = str(faction_names.get(str(faction_id), str(faction_id)))
             table.add_row(label, str(score), str(descriptions.get(str(faction_id), "")))
@@ -335,6 +343,8 @@ def _render_faction_standings(standings, descriptions=None, empty_state_hint: st
         return
 
     print("=== Faction Standings ===")
+    if str(conflict_summary or "").strip():
+        print(f"Conflict: {conflict_summary}")
     if not standings:
         print(empty_state_hint or "No standings tracked yet.")
     else:
@@ -1174,6 +1184,7 @@ def _run_town(game_service, character_id: int):
                 standings_view.descriptions,
                 standings_view.empty_state_hint,
                 standings_view.faction_names,
+                standings_view.conflict_summary,
             )
             _prompt_continue()
             continue

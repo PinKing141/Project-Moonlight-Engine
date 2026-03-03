@@ -22,6 +22,7 @@ Purpose: Capture feature ideas discovered during playtesting without violating t
 - Graphical client front-end.
 - (Moved to Roadmap V16 and resolved) Playtest defect: investigate zero turn advancement in short scripted CLI cycle.
 - (Moved to Roadmap V16 and resolved) Playtest defect: verify travel destination selection path when loop coverage reports zero travel hops.
+- Adventurers Guild expansion package (cross-faction occupation, rank tiers, quest generation v2, class progression data tables, difficulty + hardcore rules); planning docs drafted under `docs/roadmaps/adventurers_guild/`.
 
 ## Prioritization Queue
-- (empty)
+- Adventurers Guild expansion package (pending roadmap phase assignment).

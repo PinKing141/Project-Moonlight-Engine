@@ -76,6 +76,42 @@ class DowntimeFlowTests(unittest.TestCase):
         result = service.submit_downtime_intent(character_id, "craft_healing_herbs")
         self.assertIn("requires", " ".join(result.messages).lower())
 
+    def test_submit_downtime_crafting_outcome_is_deterministic_for_same_seed(self) -> None:
+        service_a, repo_a, world_repo_a, _faction_repo_a, character_id_a = self._build_service(money=20)
+        service_b, repo_b, world_repo_b, _faction_repo_b, character_id_b = self._build_service(money=20)
+
+        result_a = service_a.submit_downtime_intent(character_id_a, "craft_whetstone")
+        result_b = service_b.submit_downtime_intent(character_id_b, "craft_whetstone")
+
+        craft_line_a = next((line for line in result_a.messages if str(line).startswith("Craft result:")), "")
+        craft_line_b = next((line for line in result_b.messages if str(line).startswith("Craft result:")), "")
+        self.assertTrue(craft_line_a)
+        self.assertEqual(craft_line_a, craft_line_b)
+
+        world_a = world_repo_a.load_default()
+        world_b = world_repo_b.load_default()
+        self.assertEqual(
+            dict((world_a.flags or {}).get("crafting_v1", {})),
+            dict((world_b.flags or {}).get("crafting_v1", {})),
+        )
+
+        crafter_a = repo_a.get(character_id_a)
+        crafter_b = repo_b.get(character_id_b)
+        self.assertEqual(list(crafter_a.inventory or []), list(crafter_b.inventory or []))
+
+    def test_submit_downtime_crafting_persists_crafting_v1_recipe_and_stockpile(self) -> None:
+        service, _character_repo, world_repo, _faction_repo, character_id = self._build_service(money=20)
+
+        service.submit_downtime_intent(character_id, "craft_healing_herbs")
+
+        world = world_repo.load_default()
+        crafting = dict((world.flags or {}).get("crafting_v1", {}))
+        self.assertTrue(bool(crafting.get("active", False)))
+        known = list(crafting.get("known_recipes", []) or [])
+        self.assertIn("field_remedy", known)
+        stockpile = dict(crafting.get("stockpile", {}))
+        self.assertGreaterEqual(int(stockpile.get("healing_herbs", 0) or 0), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

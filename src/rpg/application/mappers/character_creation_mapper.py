@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from rpg.application.dtos import CharacterClassDetailView
+from rpg.application.dtos import CharacterClassDetailView, ClassProgressionRowView
 from rpg.domain.services.class_profiles import CLASS_COMBAT_PROFILE, CLASS_DESCRIPTIONS, DEFAULT_COMBAT_PROFILE
+from rpg.domain.services.class_progression_catalog import gains_text_for_row, progression_rows_for_class
 
 
 def to_character_class_detail_view(
@@ -14,6 +15,10 @@ def to_character_class_detail_view(
 ) -> CharacterClassDetailView:
     profile = CLASS_COMBAT_PROFILE.get(class_slug, DEFAULT_COMBAT_PROFILE)
     description = CLASS_DESCRIPTIONS.get(class_slug, "Adventurer ready for the unknown.")
+    progression_rows = [
+        ClassProgressionRowView(level=int(row.level), gains=gains_text_for_row(row))
+        for row in progression_rows_for_class(class_slug)
+    ]
     return CharacterClassDetailView(
         title=f"Class: {class_name}",
         description=description,
@@ -21,4 +26,5 @@ def to_character_class_detail_view(
         hit_die=hit_die or "d8",
         combat_profile_line=f"AC {profile['ac']}, +{profile['attack_bonus']} to hit, damage {profile['damage_die']}",
         recommended_line=recommended_line,
+        progression_rows=progression_rows,
     )

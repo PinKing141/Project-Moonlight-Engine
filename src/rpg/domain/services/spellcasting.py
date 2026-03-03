@@ -48,6 +48,8 @@ def normalize_slot_ledger(actor: Any) -> tuple[dict[int, int], dict[int, int]]:
             fallback_current = max(0, int(getattr(actor, "spell_slots_current", fallback_max) or fallback_max))
         except Exception:
             fallback_current = fallback_max
+        if fallback_max <= 0 and fallback_current > 0:
+            fallback_max = int(fallback_current)
         if fallback_max > 0:
             max_by_level[1] = fallback_max
             current_by_level[1] = min(fallback_max, fallback_current)

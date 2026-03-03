@@ -40,17 +40,34 @@ class DifficultyCalibrationTests(unittest.TestCase):
         service = self._build_service()
         presets = {preset.slug: preset for preset in service.list_difficulties()}
 
-        story = presets["story"]
+        easy = presets["easy"]
         normal = presets["normal"]
-        hardcore = presets["hardcore"]
+        hard = presets["hard"]
+        deadly = presets["deadly"]
+        nightmare = presets["nightmare"]
 
-        self.assertGreater(story.hp_multiplier, normal.hp_multiplier)
-        self.assertGreater(normal.hp_multiplier, hardcore.hp_multiplier)
+        self.assertGreater(easy.hp_multiplier, normal.hp_multiplier)
+        self.assertGreater(normal.hp_multiplier, hard.hp_multiplier)
+        self.assertGreater(hard.hp_multiplier, deadly.hp_multiplier)
+        self.assertGreater(deadly.hp_multiplier, nightmare.hp_multiplier)
 
-        self.assertLess(story.incoming_damage_multiplier, normal.incoming_damage_multiplier)
-        self.assertLess(normal.incoming_damage_multiplier, hardcore.incoming_damage_multiplier)
+        self.assertLess(easy.incoming_damage_multiplier, normal.incoming_damage_multiplier)
+        self.assertLess(normal.incoming_damage_multiplier, hard.incoming_damage_multiplier)
+        self.assertLess(hard.incoming_damage_multiplier, deadly.incoming_damage_multiplier)
+        self.assertLess(deadly.incoming_damage_multiplier, nightmare.incoming_damage_multiplier)
 
-        self.assertGreater(hardcore.outgoing_damage_multiplier, normal.outgoing_damage_multiplier)
+        self.assertGreater(hard.outgoing_damage_multiplier, normal.outgoing_damage_multiplier)
+        self.assertGreaterEqual(deadly.outgoing_damage_multiplier, hard.outgoing_damage_multiplier)
+        self.assertGreaterEqual(nightmare.outgoing_damage_multiplier, deadly.outgoing_damage_multiplier)
+
+    def test_difficulty_presets_expose_risk_guardrail_and_legacy_metadata(self) -> None:
+        service = self._build_service()
+        presets = {preset.slug: preset for preset in service.list_difficulties()}
+
+        self.assertTrue(str(presets["easy"].risk_label))
+        self.assertTrue(str(presets["nightmare"].guardrail_warning))
+        self.assertIn("story", list(presets["easy"].legacy_labels))
+        self.assertIn("hardcore", list(presets["hard"].legacy_labels))
 
 
 if __name__ == "__main__":

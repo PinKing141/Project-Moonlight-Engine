@@ -66,6 +66,21 @@ class CharacterFactoryTests(unittest.TestCase):
 
         self.assertEqual(CharacterAlignment.TRUE_NEUTRAL.value, character.alignment)
 
+    def test_persists_hardcore_toggle_defaults_and_opt_in_overrides(self) -> None:
+        character = create_new_character(
+            name="Rhea",
+            cls=self.wizard,
+            ability_scores={"STR": 10, "DEX": 12, "INT": 14},
+            hardcore_toggles={"max_monster_hp": True},
+        )
+
+        flags = character.flags if isinstance(character.flags, dict) else {}
+        self.assertEqual("hardcore_toggles_v1", flags.get("hardcore_toggles_version"))
+        toggles = flags.get("hardcore_toggles", {}) if isinstance(flags.get("hardcore_toggles", {}), dict) else {}
+        self.assertTrue(bool(toggles.get("max_monster_hp")))
+        self.assertFalse(bool(toggles.get("deadlier_death_saves")))
+        self.assertFalse(bool(toggles.get("rest_lock_on_failed_saves")))
+
 
 if __name__ == "__main__":
     unittest.main()

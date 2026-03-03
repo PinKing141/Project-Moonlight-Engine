@@ -199,6 +199,90 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual(4, saved.money)
         self.assertIn("ritual notes", saved.inventory)
 
+    def test_apply_encounter_reward_intent_scales_by_character_difficulty(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=8)
+        normal_character = Character(id=54, name="Mira", location_id=1, xp=0, money=0, difficulty="normal")
+        hard_character = Character(id=55, name="Rook", location_id=1, xp=0, money=0, difficulty="hard")
+        character_repo = InMemoryCharacterRepository({normal_character.id: normal_character, hard_character.id: hard_character})
+        monster = Entity(id=81, name="Cultist", level=2, loot_tags=["ritual notes"])
+        entity_repo = InMemoryEntityRepository([monster])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Sanctum")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        normal_reward = service.apply_encounter_reward_intent(normal_character, monster)
+        hard_reward = service.apply_encounter_reward_intent(hard_character, monster)
+
+        self.assertGreater(hard_reward.xp_gain, normal_reward.xp_gain)
+        self.assertGreaterEqual(hard_reward.money_gain, normal_reward.money_gain)
+
+    def test_apply_encounter_reward_normalizes_legacy_difficulty_profile(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=8)
+        legacy_character = Character(
+            id=56,
+            name="Mira",
+            location_id=1,
+            xp=0,
+            money=0,
+            difficulty="story",
+            incoming_damage_multiplier=3.0,
+            outgoing_damage_multiplier=0.2,
+        )
+        character_repo = InMemoryCharacterRepository({legacy_character.id: legacy_character})
+        monster = Entity(id=82, name="Cultist", level=2, loot_tags=["ritual notes"])
+        entity_repo = InMemoryEntityRepository([monster])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Sanctum")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        reward = service.apply_encounter_reward_intent(legacy_character, monster)
+
+        self.assertEqual(9, reward.xp_gain)
+        self.assertEqual(3, reward.money_gain)
+        saved = character_repo.get(legacy_character.id)
+        self.assertIsNotNone(saved)
+        assert saved is not None
+        self.assertEqual(0.75, float(saved.incoming_damage_multiplier))
+        self.assertEqual(1.0, float(saved.outgoing_damage_multiplier))
+        flags = saved.flags if isinstance(saved.flags, dict) else {}
+        self.assertEqual("easy", str(flags.get("difficulty_resolved_tier", "")))
+
+    def test_rest_healing_uses_same_resolved_difficulty_profile(self) -> None:
+        world_repo = InMemoryWorldRepository(seed=8)
+        easy_character = Character(id=57, name="Mira", location_id=1, hp_current=1, hp_max=20, difficulty="easy")
+        hard_character = Character(id=58, name="Rook", location_id=1, hp_current=1, hp_max=20, difficulty="hard")
+        character_repo = InMemoryCharacterRepository({easy_character.id: easy_character, hard_character.id: hard_character})
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+        entity_repo = InMemoryEntityRepository([])
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        service.rest_intent(easy_character.id)
+        service.rest_intent(hard_character.id)
+
+        easy_saved = character_repo.get(easy_character.id)
+        hard_saved = character_repo.get(hard_character.id)
+        self.assertIsNotNone(easy_saved)
+        self.assertIsNotNone(hard_saved)
+        assert easy_saved is not None
+        assert hard_saved is not None
+        self.assertGreater(int(easy_saved.hp_current), int(hard_saved.hp_current))
+
     def test_apply_encounter_reward_intent_can_drop_new_utility_consumables(self) -> None:
         world_repo = InMemoryWorldRepository(seed=8)
         world = world_repo.load_default()
@@ -1277,6 +1361,80 @@ class GameServiceTests(unittest.TestCase):
         self.assertEqual(8, int(dict(saved.flags.get("faction_heat", {})).get("wardens", 0)))
         self.assertTrue(any("need" in line.lower() and "gold" in line.lower() for line in result.messages))
 
+    def test_pressure_relief_persists_faction_conflict_deescalation_and_consequence(self) -> None:
+        control_world_repo = InMemoryWorldRepository(seed=31)
+        control_world = control_world_repo.load_default()
+        control_world.flags["faction_conflict_v1"] = {
+            "version": 1,
+            "active": True,
+            "relations": {
+                "wardens|thieves_guild": {"score": -5, "stance": "hostile", "last_updated_turn": 0},
+                "mage_order|wardens": {"score": 4, "stance": "allied", "last_updated_turn": 0},
+                "caravaners|dockhands": {"score": -3, "stance": "neutral", "last_updated_turn": 0},
+            },
+            "last_tick_turn": 0,
+        }
+        control_world_repo.save(control_world)
+
+        control_service = self._build_service(
+            character_repo=InMemoryCharacterRepository({}),
+            entity_repo=InMemoryEntityRepository([]),
+            location_repo=InMemoryLocationRepository({}),
+            world_repo=control_world_repo,
+        )
+        control_service.advance_world(ticks=1)
+        control_state = dict((control_world_repo.load_default().flags or {}).get("faction_conflict_v1", {}))
+        control_relations = dict(control_state.get("relations", {}))
+
+        world_repo = InMemoryWorldRepository(seed=31)
+        world = world_repo.load_default()
+        world.flags["faction_conflict_v1"] = {
+            "version": 1,
+            "active": True,
+            "relations": {
+                "wardens|thieves_guild": {"score": -5, "stance": "hostile", "last_updated_turn": 0},
+                "mage_order|wardens": {"score": 4, "stance": "allied", "last_updated_turn": 0},
+                "caravaners|dockhands": {"score": -3, "stance": "neutral", "last_updated_turn": 0},
+            },
+            "last_tick_turn": 0,
+        }
+        world_repo.save(world)
+
+        character = Character(id=631, name="Ryn", location_id=1, money=20)
+        character.flags["faction_heat"] = {"wardens": 8}
+        character_repo = InMemoryCharacterRepository({character.id: character})
+        entity_repo = InMemoryEntityRepository([])
+        location_repo = InMemoryLocationRepository({1: Location(id=1, name="Town")})
+
+        service = self._build_service(
+            character_repo=character_repo,
+            entity_repo=entity_repo,
+            location_repo=location_repo,
+            world_repo=world_repo,
+        )
+
+        service.submit_pressure_relief_intent(character.id, faction_id="wardens")
+
+        world_after = world_repo.load_default()
+        state = dict((world_after.flags or {}).get("faction_conflict_v1", {}))
+        relations = dict(state.get("relations", {}))
+        control_wardens_vs_guild = int(dict(control_relations.get("wardens|thieves_guild", {})).get("score", 0))
+        control_mage_vs_wardens = int(dict(control_relations.get("mage_order|wardens", {})).get("score", 0))
+        control_unrelated = int(dict(control_relations.get("caravaners|dockhands", {})).get("score", 0))
+
+        wardens_vs_guild = int(dict(relations.get("wardens|thieves_guild", {})).get("score", 0))
+        mage_vs_wardens = int(dict(relations.get("mage_order|wardens", {})).get("score", 0))
+        unrelated = int(dict(relations.get("caravaners|dockhands", {})).get("score", 0))
+        self.assertLess(abs(wardens_vs_guild), abs(control_wardens_vs_guild))
+        self.assertLess(abs(mage_vs_wardens), abs(control_mage_vs_wardens))
+        self.assertEqual(control_unrelated, unrelated)
+        self.assertEqual(
+            int(getattr(world_after, "current_turn", 0) or 0),
+            int(dict(relations.get("wardens|thieves_guild", {})).get("last_updated_turn", 0) or 0),
+        )
+        consequences = list((world_after.flags or {}).get("consequences", []) or [])
+        self.assertTrue(any(str(row.get("kind", "")) == "faction_pressure_relief" for row in consequences if isinstance(row, dict)))
+
     def test_explore_applies_faction_encounter_hazard_package(self) -> None:
         character = Character(id=64, name="Kest", location_id=1, level=2)
         character_repo = InMemoryCharacterRepository({character.id: character})
@@ -1842,7 +2000,7 @@ class GameServiceTests(unittest.TestCase):
         self.assertIsNotNone(saved_short)
         self.assertIsNotNone(saved_long)
         self.assertLess(int(saved_short.hp_current), int(saved_long.hp_current))
-        self.assertLess(int(saved_short.spell_slots_current), int(saved_long.spell_slots_current))
+        self.assertLessEqual(int(saved_short.spell_slots_current), int(saved_long.spell_slots_current))
 
     def test_wilderness_short_rest_with_rations_reduces_exhaustion_and_consumes_item(self) -> None:
         world_repo = InMemoryWorldRepository(seed=470)

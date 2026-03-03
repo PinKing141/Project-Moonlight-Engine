@@ -17,6 +17,9 @@ class WorldProgression:
         (99, "map_shrinks"),
         (100, "ruin"),
     )
+    _FACTION_CONFLICT_VERSION = 1
+    _CRAFTING_VERSION = 1
+    _CRAFTING_PROFESSIONS = ("gathering", "refining", "fieldcraft")
 
     def __init__(self, world_repo: WorldRepository, entity_repo: EntityRepository, event_bus: EventBus) -> None:
         self.world_repo = world_repo
@@ -26,11 +29,146 @@ class WorldProgression:
     def tick(self, world: World, ticks: int = 1, persist: bool = True) -> None:
         for _ in range(ticks):
             world.advance_turns()
+            self._ensure_crafting_state(world)
             self._advance_cataclysm_clock(world)
+            self._advance_faction_conflict_clock(world)
             # Future hooks: NPC schedules, faction AI, story triggers
         if persist:
             self.world_repo.save(world)
         self.event_bus.publish(TickAdvanced(turn_after=world.current_turn))
+
+    @staticmethod
+    def _faction_stance_for_score(score: int) -> str:
+        value = int(score)
+        if value >= 4:
+            return "allied"
+        if value <= -4:
+            return "hostile"
+        return "neutral"
+
+    @classmethod
+    def _ensure_faction_conflict_state(cls, world: World) -> dict:
+        if not isinstance(getattr(world, "flags", None), dict):
+            world.flags = {}
+        row = world.flags.setdefault("faction_conflict_v1", {})
+        if not isinstance(row, dict):
+            row = {}
+            world.flags["faction_conflict_v1"] = row
+
+        row["version"] = int(cls._FACTION_CONFLICT_VERSION)
+        row["active"] = bool(row.get("active", False))
+
+        relations = row.get("relations", {})
+        if not isinstance(relations, dict):
+            relations = {}
+        normalized_relations: dict[str, dict[str, object]] = {}
+        for raw_pair, raw_payload in relations.items():
+            pair = str(raw_pair or "").strip().lower().replace(" ", "")
+            if not pair:
+                continue
+            payload = raw_payload if isinstance(raw_payload, dict) else {}
+            try:
+                score = int(payload.get("score", 0) or 0)
+            except Exception:
+                score = 0
+            score = max(-10, min(10, int(score)))
+            normalized_relations[pair] = {
+                "score": int(score),
+                "stance": str(cls._faction_stance_for_score(score)),
+                "last_updated_turn": int(payload.get("last_updated_turn", 0) or 0),
+            }
+        row["relations"] = normalized_relations
+        row["last_tick_turn"] = int(row.get("last_tick_turn", 0) or 0)
+        return row
+
+    def _advance_faction_conflict_clock(self, world: World) -> None:
+        state = self._ensure_faction_conflict_state(world)
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+        if not bool(state.get("active", False)):
+            state["last_tick_turn"] = int(world_turn)
+            return
+
+        relations = state.get("relations", {})
+        if not isinstance(relations, dict) or not relations:
+            state["last_tick_turn"] = int(world_turn)
+            return
+
+        world_seed = int(getattr(world, "rng_seed", 0) or 0)
+        for pair in sorted(relations.keys()):
+            payload = relations.get(pair)
+            if not isinstance(payload, dict):
+                continue
+            score_before = max(-10, min(10, int(payload.get("score", 0) or 0)))
+            drift_seed = derive_seed(
+                namespace="world.faction_conflict.v1.tick",
+                context={
+                    "world_turn": int(world_turn),
+                    "world_seed": int(world_seed),
+                    "pair": str(pair),
+                    "score_before": int(score_before),
+                },
+            )
+            drift = int(int(drift_seed) % 3) - 1
+            score_after = max(-10, min(10, int(score_before) + int(drift)))
+            payload["score"] = int(score_after)
+            payload["stance"] = str(self._faction_stance_for_score(score_after))
+            payload["last_updated_turn"] = int(world_turn)
+
+        state["last_tick_turn"] = int(world_turn)
+
+    @classmethod
+    def _ensure_crafting_state(cls, world: World) -> dict:
+        if not isinstance(getattr(world, "flags", None), dict):
+            world.flags = {}
+        row = world.flags.setdefault("crafting_v1", {})
+        if not isinstance(row, dict):
+            row = {}
+            world.flags["crafting_v1"] = row
+
+        row["version"] = int(cls._CRAFTING_VERSION)
+        row["active"] = bool(row.get("active", False))
+
+        raw_professions = row.get("professions", {})
+        if not isinstance(raw_professions, dict):
+            raw_professions = {}
+        normalized_professions: dict[str, int] = {}
+        for profession in cls._CRAFTING_PROFESSIONS:
+            try:
+                value = int(raw_professions.get(profession, 0) or 0)
+            except Exception:
+                value = 0
+            normalized_professions[str(profession)] = max(0, min(100, int(value)))
+        row["professions"] = normalized_professions
+
+        raw_known = row.get("known_recipes", [])
+        known_recipes: list[str] = []
+        if isinstance(raw_known, list):
+            for value in raw_known:
+                recipe_id = str(value or "").strip().lower().replace(" ", "_")
+                if recipe_id and recipe_id not in known_recipes:
+                    known_recipes.append(recipe_id)
+        row["known_recipes"] = known_recipes
+
+        raw_stockpile = row.get("stockpile", {})
+        if not isinstance(raw_stockpile, dict):
+            raw_stockpile = {}
+        normalized_stockpile: dict[str, int] = {}
+        for raw_key, raw_qty in raw_stockpile.items():
+            item_id = str(raw_key or "").strip().lower().replace(" ", "_")
+            if not item_id:
+                continue
+            try:
+                qty = int(raw_qty)
+            except Exception:
+                qty = 0
+            bounded_qty = max(0, min(999, int(qty)))
+            if bounded_qty > 0:
+                normalized_stockpile[item_id] = int(bounded_qty)
+        row["stockpile"] = normalized_stockpile
+
+        row["last_tick_turn"] = int(row.get("last_tick_turn", 0) or 0)
+        row["last_craft_turn"] = int(row.get("last_craft_turn", 0) or 0)
+        return row
 
     @classmethod
     def _cataclysm_phase_from_progress(cls, progress: int) -> str:

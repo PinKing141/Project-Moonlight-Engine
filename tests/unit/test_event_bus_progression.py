@@ -258,6 +258,177 @@ class WorldProgressionTests(unittest.TestCase):
         low_progress = int(low_repo.world.flags.get("cataclysm_state", {}).get("progress", 0) or 0)
         self.assertGreater(high_progress, low_progress)
 
+    def test_faction_conflict_state_normalization_creates_bounded_v1_envelope(self) -> None:
+        world_repo = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        progression = WorldProgression(world_repo, entity_repo, EventBus())
+
+        world_repo.world.flags = {
+            "faction_conflict_v1": {
+                "active": "yes",
+                "relations": {
+                    " Wardens | Thieves_Guild ": {
+                        "score": "17",
+                        "stance": "allied",
+                    }
+                },
+            }
+        }
+
+        state = progression._ensure_faction_conflict_state(world_repo.world)
+        relation = dict(state.get("relations", {})).get("wardens|thieves_guild", {})
+
+        self.assertEqual(1, int(state.get("version", 0) or 0))
+        self.assertTrue(bool(state.get("active", False)))
+        self.assertEqual(10, int(relation.get("score", 0) or 0))
+        self.assertEqual("allied", str(relation.get("stance", "")))
+
+    def test_faction_conflict_tick_is_deterministic_for_same_seed_and_state(self) -> None:
+        repo_a = _StubWorldRepository()
+        repo_b = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        progression_a = WorldProgression(repo_a, entity_repo, EventBus())
+        progression_b = WorldProgression(repo_b, entity_repo, EventBus())
+
+        base_state = {
+            "version": 1,
+            "active": True,
+            "relations": {
+                "wardens|thieves_guild": {
+                    "score": 0,
+                    "stance": "neutral",
+                    "last_updated_turn": 0,
+                },
+                "the_crown|free_council": {
+                    "score": 2,
+                    "stance": "neutral",
+                    "last_updated_turn": 0,
+                },
+            },
+            "last_tick_turn": 0,
+        }
+        repo_a.world.flags = {"faction_conflict_v1": dict(base_state)}
+        repo_b.world.flags = {"faction_conflict_v1": dict(base_state)}
+
+        progression_a.tick(repo_a.world, ticks=12)
+        progression_b.tick(repo_b.world, ticks=12)
+
+        self.assertEqual(
+            repo_a.world.flags.get("faction_conflict_v1", {}),
+            repo_b.world.flags.get("faction_conflict_v1", {}),
+        )
+
+    def test_faction_conflict_compact_summary_signature_is_stable_for_identical_runs(self) -> None:
+        repo_a = _StubWorldRepository()
+        repo_b = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        progression_a = WorldProgression(repo_a, entity_repo, EventBus())
+        progression_b = WorldProgression(repo_b, entity_repo, EventBus())
+
+        base_state = {
+            "version": 1,
+            "active": True,
+            "relations": {
+                "wardens|thieves_guild": {
+                    "score": -3,
+                    "stance": "neutral",
+                    "last_updated_turn": 0,
+                },
+                "the_crown|free_council": {
+                    "score": 4,
+                    "stance": "allied",
+                    "last_updated_turn": 0,
+                },
+            },
+            "last_tick_turn": 0,
+        }
+        repo_a.world.flags = {"faction_conflict_v1": dict(base_state)}
+        repo_b.world.flags = {"faction_conflict_v1": dict(base_state)}
+
+        progression_a.tick(repo_a.world, ticks=10)
+        progression_b.tick(repo_b.world, ticks=10)
+
+        def compact_signature(world: World) -> tuple[str, int, str]:
+            state = dict((world.flags or {}).get("faction_conflict_v1", {}))
+            relations = dict(state.get("relations", {}))
+            pair = ""
+            score = -1
+            stance = ""
+            for raw_pair, raw_payload in relations.items():
+                payload = raw_payload if isinstance(raw_payload, dict) else {}
+                relation_score = abs(int(payload.get("score", 0) or 0))
+                if relation_score > score:
+                    pair = str(raw_pair)
+                    score = relation_score
+                    stance = str(payload.get("stance", ""))
+            return pair, score, stance
+
+        self.assertEqual(compact_signature(repo_a.world), compact_signature(repo_b.world))
+
+    def test_crafting_state_normalization_creates_bounded_v1_envelope(self) -> None:
+        world_repo = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        progression = WorldProgression(world_repo, entity_repo, EventBus())
+
+        world_repo.world.flags = {
+            "crafting_v1": {
+                "active": "yes",
+                "professions": {
+                    "gathering": "120",
+                    "refining": -9,
+                    "fieldcraft": "5",
+                },
+                "known_recipes": [" Healing Herbs ", "healing herbs", "Whetstone"],
+                "stockpile": {" Raw Ore ": "7", "Spoiled": -3},
+                "last_tick_turn": "2",
+            }
+        }
+
+        state = progression._ensure_crafting_state(world_repo.world)
+
+        self.assertEqual(1, int(state.get("version", 0) or 0))
+        self.assertTrue(bool(state.get("active", False)))
+        professions = dict(state.get("professions", {}))
+        self.assertEqual(100, int(professions.get("gathering", 0) or 0))
+        self.assertEqual(0, int(professions.get("refining", 0) or 0))
+        self.assertEqual(5, int(professions.get("fieldcraft", 0) or 0))
+        self.assertEqual(["healing_herbs", "whetstone"], list(state.get("known_recipes", [])))
+        self.assertEqual({"raw_ore": 7}, dict(state.get("stockpile", {})))
+
+    def test_crafting_state_signature_is_stable_for_identical_runs(self) -> None:
+        repo_a = _StubWorldRepository()
+        repo_b = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        progression_a = WorldProgression(repo_a, entity_repo, EventBus())
+        progression_b = WorldProgression(repo_b, entity_repo, EventBus())
+
+        base_state = {
+            "version": 1,
+            "active": True,
+            "professions": {
+                "gathering": 3,
+                "refining": 2,
+                "fieldcraft": 1,
+            },
+            "known_recipes": ["healing_herbs", "whetstone"],
+            "stockpile": {
+                "raw_ore": 4,
+                "wild_herbs": 2,
+            },
+            "last_tick_turn": 0,
+            "last_craft_turn": 0,
+        }
+        repo_a.world.flags = {"crafting_v1": dict(base_state)}
+        repo_b.world.flags = {"crafting_v1": dict(base_state)}
+
+        progression_a.tick(repo_a.world, ticks=24)
+        progression_b.tick(repo_b.world, ticks=24)
+
+        self.assertEqual(
+            repo_a.world.flags.get("crafting_v1", {}),
+            repo_b.world.flags.get("crafting_v1", {}),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

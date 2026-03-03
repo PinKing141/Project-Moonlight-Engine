@@ -12,6 +12,7 @@ from rpg.domain.models.entity import Entity
 from rpg.domain.models.character_class import CharacterClass
 from rpg.domain.models.location import Location
 from rpg.domain.models.world import World
+from rpg.domain.services.class_progression_catalog import progression_rows_for_class
 from rpg.infrastructure.db.inmemory.repos import (
     InMemoryCharacterRepository,
     InMemoryClassRepository,
@@ -120,6 +121,14 @@ class InMemoryClassRepositoryTests(unittest.TestCase):
 
         fetched = repo.get_by_slug("wizard")
         self.assertEqual(wizard, fetched)
+
+    def test_list_progression_rows_matches_catalog(self) -> None:
+        fighter = CharacterClass(id=1, name="Fighter", slug="fighter", hit_die="d10")
+        repo = InMemoryClassRepository([fighter])
+
+        rows = repo.list_progression_rows("fighter")
+
+        self.assertEqual(progression_rows_for_class("fighter"), rows)
 
 
 if __name__ == "__main__":
