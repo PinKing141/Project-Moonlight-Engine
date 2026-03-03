@@ -12,20 +12,6 @@ _SRC_DIR = Path(__file__).resolve().parents[1]
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-from rpg.bootstrap import create_game_service
-from rpg.presentation.main_menu import main_menu
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 from rpg.presentation.loading_screen import startup_loading_screen
 
 if load_dotenv is not None:
@@ -42,7 +28,6 @@ def _print_help_surface() -> None:
 def _is_mysql_rng_seed_schema_error(exc: Exception) -> bool:
     text = str(exc).lower()
     return "unknown column 'rng_seed'" in text or ("unknown column" in text and "rng_seed" in text)
-
 
 
 def _is_mysql_connectivity_error(exc: Exception) -> bool:
@@ -73,28 +58,8 @@ def _open_main_menu(game_service):
 def main():
     try:
         with startup_loading_screen("Booting Realm of Broken Stars..."):
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-            game_service = create_game_service()
-        main_menu(game_service)
-=======
             game_service = _create_game_service()
         _open_main_menu(game_service)
->>>>>>> theirs
-=======
-            game_service = _create_game_service()
-        _open_main_menu(game_service)
->>>>>>> theirs
-=======
-            game_service = _create_game_service()
-        _open_main_menu(game_service)
->>>>>>> theirs
-=======
-            game_service = _create_game_service()
-        _open_main_menu(game_service)
->>>>>>> theirs
     except KeyboardInterrupt:
         print("\nSession ended.")
     except Exception as exc:
@@ -109,4 +74,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

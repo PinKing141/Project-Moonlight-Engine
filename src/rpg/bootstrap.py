@@ -39,17 +39,6 @@ def _get_name_generator() -> DnDCorpusNameGenerator:
         _NAME_GENERATOR_CACHE[key] = cached
     return cached
 
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
-=======
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 
 
 
@@ -63,16 +52,6 @@ def _safe_float_env(name: str, default: float, *, minimum: float | None = None) 
         value = max(float(minimum), value)
     return value
 
-<<<<<<< ours
-<<<<<<< ours
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 
 def _looks_like_local_mysql_unreachable(database_url: str) -> bool:
     if not database_url:
