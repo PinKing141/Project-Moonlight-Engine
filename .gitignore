@@ -11,6 +11,7 @@ ENV/
 # Python build & packaging
 build/
 dist/
+release/
 *.egg-info/
 .eggs/
 pip-wheel-metadata/

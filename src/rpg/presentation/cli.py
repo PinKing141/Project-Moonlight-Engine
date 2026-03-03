@@ -1,6 +1,7 @@
 from rpg.bootstrap import _build_inmemory_game_service, create_game_service
 from rpg.domain.services.class_progression_catalog import gains_text_for_row, progression_rows_for_class
 from rpg.presentation.main_menu import main_menu as _main_menu
+from rpg.presentation.menu_controls import prompt_input
 
 
 def _bootstrap():
@@ -22,14 +23,14 @@ def _bootstrap_inmemory():
 def run_character_creator(creation_service) -> int:
     """Minimal compatibility character creator used by e2e/scripted CLI tests."""
     print("=== Character Creation ===")
-    name = input("Enter your character's name: ").strip()
+    name = prompt_input("Enter your character's name: ").strip()
 
     available = creation_service.list_classes()
     for idx, cls in enumerate(available, start=1):
         ability = f" ({cls.primary_ability})" if getattr(cls, "primary_ability", None) else ""
         print(f"{idx}) {cls.name}{ability}")
 
-    choice = input("> ").strip()
+    choice = prompt_input("> ").strip()
     selected_idx = int(choice) - 1 if choice.isdigit() else 0
     selected_idx = max(0, min(selected_idx, len(available) - 1))
     chosen = available[selected_idx]
@@ -56,7 +57,7 @@ def _run_game_loop(game, player_id: int) -> None:
     while not game_over:
         view = game.get_player_view(player_id)
         print(view)
-        choice = input(">>> ")
+        choice = prompt_input(">>> ")
         result = game.make_choice(player_id, choice)
         for msg in result.messages:
             print(msg)

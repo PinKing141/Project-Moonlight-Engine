@@ -1,7 +1,7 @@
 ﻿
 import random
 
-from rpg.presentation.menu_controls import arrow_menu, clear_screen
+from rpg.presentation.menu_controls import arrow_menu, clear_screen, prompt_enter
 from rpg.presentation.music import get_music_player
 
 try:
@@ -69,11 +69,7 @@ def _panel_subtitle(panel_key: str) -> str:
 
 
 def _prompt_continue(message: str = "Press ENTER to continue...") -> None:
-    if _CONSOLE is not None:
-        _CONSOLE.input(f"[dim]{message}[/dim]")
-        clear_screen()
-        return
-    input(message)
+    prompt_enter(message)
     clear_screen()
 
 
@@ -987,12 +983,12 @@ def run_game_loop(game_service, character_id: int):
             party_lines=game_service.get_party_status_intent(character_id),
         )
         recovery_note = game_service.get_recovery_status_intent(character_id)
-        if recovery_note:
-            if _CONSOLE is not None:
-                _CONSOLE.print(f"[dim]{recovery_note}[/dim]")
-            else:
-                print(recovery_note)
-        choice = arrow_menu(f"{context.current_location_name} — Actions", ["Act", "Travel", "Rest", "Character", "Quit"])
+        footer_hint = str(recovery_note or "").strip() or None
+        choice = arrow_menu(
+            f"{context.current_location_name} — Actions",
+            ["Act", "Travel", "Rest", "Character", "Quit"],
+            footer_hint=footer_hint,
+        )
 
         if choice == 0:
             if context.location_type == "town":

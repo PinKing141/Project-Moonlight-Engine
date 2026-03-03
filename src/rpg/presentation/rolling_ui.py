@@ -1,7 +1,8 @@
 import asyncio
 import random
+import sys
 
-from rpg.presentation.menu_controls import clear_screen
+from rpg.presentation.menu_controls import clear_screen, prompt_input
 
 try:
     from rich.console import Console
@@ -25,22 +26,42 @@ _DIE_PIPS = {
 }
 
 
+def _supports_dice_unicode() -> bool:
+    encoding = sys.stdout.encoding or "utf-8"
+    try:
+        "┌─────┐●".encode(encoding)
+        return True
+    except Exception:
+        return False
+
+
 def _build_die_frame(value: int, *, perspective: str = "right") -> list[str]:
     top, mid, bottom = _DIE_PIPS.get(int(value), _DIE_PIPS[1])
+    if not _supports_dice_unicode():
+        top = top.replace("●", "o")
+        mid = mid.replace("●", "o")
+        bottom = bottom.replace("●", "o")
+        return [
+            "+-----+",
+            f"|{top}|",
+            f"|{mid}|",
+            f"|{bottom}|",
+            "+-----+",
+        ]
     if perspective == "left":
         return [
-            "╲╭─────╮",
+            "╱┌─────┐",
             f"││{top}│",
             f"││{mid}│",
             f"││{bottom}│",
-            "╱╰─────╯",
+            "╲└─────┘",
         ]
     return [
-        "╭─────╮╱",
+        "┌─────┐╲",
         f"│{top}││",
         f"│{mid}││",
         f"│{bottom}││",
-        "╰─────╯╲",
+        "└─────┘╱",
     ]
 
 
@@ -48,24 +69,40 @@ def _render_dice_ascii_faces(values: list[int], offsets: list[int] | None = None
     offsets = list(offsets or [0 for _ in values])
     if not values:
         return ["(no dice)"]
-    width = max(0, len(values) * 12)
+
+    die_faces = []
+    for idx, value in enumerate(values):
+        perspective = "right" if ((frame // 3 + idx) % 2 == 0) else "left"
+        die_faces.append(_build_die_frame(int(value), perspective=perspective))
+    die_width = len(die_faces[0][0])
+    normalized_offsets = [max(0, min(2, int(offsets[idx]) if idx < len(offsets) else 0)) for idx in range(len(values))]
+    max_offset = max(normalized_offsets, default=0)
+    row_count = 5 + max_offset
+    spacer = "  "
+
     rows: list[str] = []
-    for art_line in range(5):
-        chars = [" " for _ in range(width)]
-        for idx, value in enumerate(values):
-            perspective = "left" if ((frame + idx) % 4 in {1, 2}) else "right"
-            face = _build_die_frame(int(value), perspective=perspective)[art_line]
-            col = (idx * 10) + min(5, max(0, int(offsets[idx]) if idx < len(offsets) else 0))
-            for c_idx, token in enumerate(face):
-                pos = col + c_idx
-                if 0 <= pos < width:
-                    chars[pos] = token
-        rows.append("".join(chars).rstrip())
+    for row in range(row_count):
+        row_chunks: list[str] = []
+        for idx, face in enumerate(die_faces):
+            source_row = row - normalized_offsets[idx]
+            if 0 <= source_row < 5:
+                row_chunks.append(face[source_row])
+            else:
+                row_chunks.append(" " * die_width)
+        rows.append(spacer.join(row_chunks).rstrip())
+
+    while rows and not rows[0].strip():
+        rows.pop(0)
+    while rows and not rows[-1].strip():
+        rows.pop()
+
     return rows
 
 
 def _rolling_offsets(frame: int, count: int) -> list[int]:
-    return [max(0, (frame * 2 + idx * 3) % 14) for idx in range(count)]
+    phase = frame % 10
+    offset = 1 if phase in {4, 5} else 0
+    return [offset for _ in range(count)]
 
 
 def render_tumbling_dice_lines(values: list[int], *, frame: int = 0) -> list[str]:
@@ -73,11 +110,7 @@ def render_tumbling_dice_lines(values: list[int], *, frame: int = 0) -> list[str
 
 
 def _prompt_continue(message: str) -> None:
-    if _CONSOLE is not None:
-        _CONSOLE.input(f"[dim]{message}[/dim]")
-        clear_screen()
-        return
-    input(message)
+    prompt_input(message)
     clear_screen()
 
 
@@ -131,18 +164,18 @@ async def _animate_stat_roll_async(
     rng: random.Random | None = None,
 ) -> None:
     """Async variant that yields to the event loop during roll animation."""
-    frames = 12
-    sleep_time = 0.05
+    frames = 8
+    sleep_time = 0.08
     resolved_rng = rng or random.Random()
+    fake_rolls = [resolved_rng.randint(1, 6) for _ in range(4)]
 
-    for _ in range(frames):
+    for frame_index in range(frames):
         clear_screen()
-        fake_rolls = [resolved_rng.randint(1, 6) for _ in range(4)]
         _render_roll_panel(
             f"ROLLING {stat_name} (4d6, drop lowest)",
             [
                 "Dice tumbling...",
-                *render_tumbling_dice_lines(fake_rolls, frame=_),
+                *render_tumbling_dice_lines(fake_rolls, frame=frame_index),
                 "",
                 f"Values: {_render_dice_row(fake_rolls)}",
             ],

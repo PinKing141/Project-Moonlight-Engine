@@ -26,6 +26,7 @@ dev = [
 ]
 ui = [
 	"rich>=13.7.0",
+	"pygame>=2.6.0",
 ]
 ops = [
 	"python-dotenv>=1.0.1",

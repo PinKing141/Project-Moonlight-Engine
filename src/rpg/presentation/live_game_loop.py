@@ -10,6 +10,7 @@ import time
 from typing import Any, Callable
 
 from rpg.presentation import game_loop as legacy_loop
+from rpg.presentation.menu_controls import prompt_input
 from rpg.presentation.music import get_music_player
 from rpg.presentation.sound_effects import SoundEffects, get_sound_effects
 
@@ -556,7 +557,7 @@ class InventoryState(GameState):
                         for index, row in enumerate(attuned, start=1):
                             prompt_lines.append(f"[{index}] {row}")
                         prompt_lines.append("Enter number (or press ENTER to cancel)")
-                        response = console.input("\n".join(prompt_lines) + "\n").strip()
+                        response = prompt_input("\n".join(prompt_lines) + "\n").strip()
                         if not response:
                             ctx.append_log("Attunement swap canceled.")
                             return self
@@ -1439,7 +1440,7 @@ def _choose_combat_action_live(
     if console is None:
         selected_index = 0
     else:
-        raw = console.input("[bold cyan]Combat Action[/bold cyan] > ").strip().lower()
+        raw = prompt_input("[bold cyan]Combat Action[/bold cyan] > ").strip().lower()
         if not raw:
             selected_index = -1
         elif raw.isdigit():
@@ -1484,7 +1485,7 @@ def _choose_spell_live(ctx: LiveGameContext, player: Any) -> tuple[str | None, i
         return str(getattr(first, "slug", "") or ""), (levels[0] if levels else None), False
     rows = [f"[{i}] {getattr(row, 'label', '')}" for i, row in enumerate(options, start=1)]
     prompt = "\n".join(["Cast Spell:", *rows, "Enter number or press ENTER to cancel"]) + "\n"
-    raw = console.input(prompt).strip()
+    raw = prompt_input(prompt).strip()
     if not raw or not raw.isdigit():
         return None, None, False
     idx = int(raw) - 1
@@ -1505,7 +1506,7 @@ def _choose_spell_live(ctx: LiveGameContext, player: Any) -> tuple[str | None, i
                     "Enter level (or press ENTER for minimum):",
                 ]
             ) + "\n"
-            level_raw = console.input(level_prompt).strip()
+            level_raw = prompt_input(level_prompt).strip()
             if level_raw.isdigit() and int(level_raw) in cast_levels:
                 chosen_level = int(level_raw)
             else:
@@ -1514,7 +1515,7 @@ def _choose_spell_live(ctx: LiveGameContext, player: Any) -> tuple[str | None, i
     ritual = False
     is_ritual = bool(getattr(selected, "ritual", False))
     if is_ritual:
-        ritual_raw = console.input("Cast as ritual? [y/N] > ").strip().lower()
+        ritual_raw = prompt_input("Cast as ritual? [y/N] > ").strip().lower()
         ritual = ritual_raw in {"y", "yes"}
 
     return slug, chosen_level, ritual
@@ -1530,7 +1531,7 @@ def _choose_item_live(ctx: LiveGameContext, player: Any) -> str | None:
         return str(options[0])
     rows = [f"[{i}] {row}" for i, row in enumerate(options, start=1)]
     prompt = "\n".join(["Use Item:", *rows, "Enter number or press ENTER to cancel"]) + "\n"
-    raw = console.input(prompt).strip()
+    raw = prompt_input(prompt).strip()
     if not raw or not raw.isdigit():
         return None
     idx = int(raw) - 1
@@ -1560,7 +1561,7 @@ def _handle_world_spellcast(ctx: LiveGameContext) -> GameState:
     console = ctx.ui_console
     if console is not None:
         rows = [f"[{idx}] {getattr(row, 'label', '')}" for idx, row in enumerate(playable, start=1)]
-        raw = console.input("\n".join(["Cast Spell (World):", *rows, "Enter number or press ENTER to cancel"]) + "\n").strip()
+        raw = prompt_input("\n".join(["Cast Spell (World):", *rows, "Enter number or press ENTER to cancel"]) + "\n").strip()
         if not raw:
             ctx.append_log("World spellcast canceled.")
             return ExplorationState()
@@ -1583,7 +1584,7 @@ def _handle_world_spellcast(ctx: LiveGameContext) -> GameState:
     if cast_levels:
         cast_level = cast_levels[0]
         if console is not None and len(cast_levels) > 1:
-            level_raw = console.input(
+            level_raw = prompt_input(
                 "\n".join(
                     [
                         f"Cast level options: {', '.join(str(level) for level in cast_levels)}",
@@ -1598,7 +1599,7 @@ def _handle_world_spellcast(ctx: LiveGameContext) -> GameState:
     as_ritual = False
     if bool(getattr(selected, "ritual", False)):
         if console is not None:
-            ritual_raw = console.input("Cast as ritual (+10 minutes)? [y/N] > ").strip().lower()
+            ritual_raw = prompt_input("Cast as ritual (+10 minutes)? [y/N] > ").strip().lower()
             as_ritual = ritual_raw in {"y", "yes"}
 
     try:
@@ -1733,7 +1734,7 @@ def run_live_game_loop(game_service: Any, character_id: int) -> None:
             ctx.ui_live = live
             while not ctx.should_exit:
                 live.update(state.render(ctx))
-                user_input = console.input("[bold cyan]Action[/bold cyan] > ").strip()
+                user_input = prompt_input("[bold cyan]Action[/bold cyan] > ").strip()
                 state = state.handle_input(user_input, ctx)
                 music.set_context(_music_context_for_state(state))
                 live.update(state.render(ctx))

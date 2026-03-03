@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+from typing import Protocol
 
 try:
     from rich.console import Console
@@ -26,6 +27,42 @@ _ENTER_AFTER_NAV_GUARD_SECONDS = 0.14
 _ENTER_AFTER_NOISE_GUARD_SECONDS = 0.22
 
 
+class MenuTransportBackend(Protocol):
+    def clear_screen(self) -> None:
+        ...
+
+    def read_key(self) -> str | None:
+        ...
+
+    def prompt_input(self, prompt: str = "") -> str:
+        ...
+
+    def arrow_menu(
+        self,
+        title: str,
+        options: list[str],
+        footer_hint: str | None = None,
+        initial_enter_guard_seconds: float | None = None,
+    ) -> int:
+        ...
+
+
+_MENU_BACKEND: MenuTransportBackend | None = None
+
+
+def set_menu_transport_backend(backend: MenuTransportBackend | None) -> None:
+    global _MENU_BACKEND
+    _MENU_BACKEND = backend
+
+
+def get_menu_transport_backend() -> MenuTransportBackend | None:
+    return _MENU_BACKEND
+
+
+def reset_menu_transport_backend() -> None:
+    set_menu_transport_backend(None)
+
+
 def _decorate_title(title: str) -> str:
     core = str(title or "").strip()
     if not core:
@@ -36,11 +73,19 @@ def _decorate_title(title: str) -> str:
 def clear_screen() -> None:
     """Clear the console in a basic cross-platform way."""
 
+    backend = get_menu_transport_backend()
+    if backend is not None:
+        backend.clear_screen()
+        return
+
     os.system("cls" if os.name == "nt" else "clear")
 
 
 def _read_key_windows():
     """Read a single key from the keyboard on Windows using msvcrt."""
+
+    if msvcrt is None:
+        return None
 
     ch = msvcrt.getch()
 
@@ -80,6 +125,10 @@ def _flush_windows_input_buffer() -> None:
 def read_key():
     """Read a key, defaulting to simple input when msvcrt is unavailable."""
 
+    backend = get_menu_transport_backend()
+    if backend is not None:
+        return backend.read_key()
+
     if msvcrt is not None:
         return _read_key_windows()
 
@@ -88,6 +137,17 @@ def read_key():
     if line == "":
         return None
     return line.strip()
+
+
+def prompt_input(prompt: str = "") -> str:
+    backend = get_menu_transport_backend()
+    if backend is not None:
+        return str(backend.prompt_input(prompt))
+    return input(prompt)
+
+
+def prompt_enter(message: str = "Press ENTER to continue...") -> None:
+    prompt_input(message)
 
 
 def normalize_menu_key(key):
@@ -127,6 +187,17 @@ def arrow_menu(
 
     if not options:
         raise ValueError("arrow_menu requires at least one option")
+
+    backend = get_menu_transport_backend()
+    if backend is not None:
+        return int(
+            backend.arrow_menu(
+                title,
+                options,
+                footer_hint=footer_hint,
+                initial_enter_guard_seconds=initial_enter_guard_seconds,
+            )
+        )
 
     _flush_windows_input_buffer()
     enter_guard_seconds = (
