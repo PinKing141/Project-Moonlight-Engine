@@ -14,6 +14,7 @@ if str(_SRC_DIR) not in sys.path:
 
 from rpg.bootstrap import create_game_service
 from rpg.presentation.main_menu import main_menu
+from rpg.presentation.loading_screen import startup_loading_screen
 
 if load_dotenv is not None:
     load_dotenv()
@@ -47,27 +48,18 @@ def _is_mysql_connectivity_error(exc: Exception) -> bool:
 
 def main():
     try:
-        game_service = create_game_service()
+        with startup_loading_screen("Booting Realm of Broken Stars..."):
+            game_service = create_game_service()
         main_menu(game_service)
     except KeyboardInterrupt:
         print("\nSession ended.")
     except Exception as exc:
-        if os.getenv("RPG_DATABASE_URL") and _is_mysql_connectivity_error(exc):
-            print("MySQL connection unavailable; retrying in-memory mode.")
-            os.environ.pop("RPG_DATABASE_URL", None)
-            try:
-                game_service = create_game_service()
-                main_menu(game_service)
-                return
-            except KeyboardInterrupt:
-                print("\nSession ended.")
-                return
-            except Exception as fallback_exc:
-                exc = fallback_exc
         print("An unexpected error occurred. The game closed safely.")
         print(f"Reason: {exc}")
         if _is_mysql_rng_seed_schema_error(exc):
             print("Hint: run `python -m rpg.infrastructure.db.mysql.migrate` to apply missing schema updates.")
+        elif os.getenv("RPG_DATABASE_URL") and _is_mysql_connectivity_error(exc):
+            print("Hint: verify MySQL connectivity or set RPG_DB_ALLOW_INMEMORY_FALLBACK=1.")
         _print_help_surface()
 
 

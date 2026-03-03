@@ -3,10 +3,12 @@ from rpg.presentation.menu_controls import arrow_menu, clear_screen
 
 
 def choose_existing_character(game_service: GameService):
-    characters = game_service.list_character_summaries()
+    all_characters = list(game_service.list_character_summaries() or [])
+    characters = [char for char in all_characters if int(getattr(char, "id", 0) or 0) > 0]
+
     if not characters:
         clear_screen()
-        print("No characters available.")
+        print("No saved characters available.")
         input("Press ENTER to return to the menu...")
         clear_screen()
         return None
@@ -20,4 +22,4 @@ def choose_existing_character(game_service: GameService):
     if selection == -1:
         return None
 
-    return characters[selection].id
+    return int(characters[selection].id)

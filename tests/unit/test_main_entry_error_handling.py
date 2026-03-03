@@ -1,3 +1,4 @@
+import contextlib
 import io
 import os
 import sys
@@ -13,9 +14,9 @@ import rpg.__main__ as runtime_main
 class MainEntryErrorHandlingTests(unittest.TestCase):
     def test_main_handles_runtime_exceptions_without_traceback(self) -> None:
         output = io.StringIO()
-        with mock.patch.object(runtime_main, "create_game_service", side_effect=RuntimeError("db unavailable")), mock.patch(
-            "sys.stdout", output
-        ):
+        with mock.patch.object(runtime_main, "create_game_service", side_effect=RuntimeError("db unavailable")), mock.patch.object(
+            runtime_main, "startup_loading_screen", return_value=contextlib.nullcontext()
+        ), mock.patch("sys.stdout", output):
             runtime_main.main()
 
         text = output.getvalue()
@@ -26,37 +27,29 @@ class MainEntryErrorHandlingTests(unittest.TestCase):
 
     def test_main_handles_keyboard_interrupt(self) -> None:
         output = io.StringIO()
-        with mock.patch.object(runtime_main, "create_game_service", side_effect=KeyboardInterrupt), mock.patch(
-            "sys.stdout", output
-        ):
+        with mock.patch.object(runtime_main, "create_game_service", side_effect=KeyboardInterrupt), mock.patch.object(
+            runtime_main, "startup_loading_screen", return_value=contextlib.nullcontext()
+        ), mock.patch("sys.stdout", output):
             runtime_main.main()
 
         self.assertIn("Session ended", output.getvalue())
 
-    def test_main_retries_inmemory_when_mysql_connection_fails(self) -> None:
+    def test_main_surfaces_mysql_connectivity_hint_without_silent_retry(self) -> None:
         output = io.StringIO()
 
-        primary_service = object()
-        fallback_service = object()
-
-        def menu_side_effect(service):
-            if service is primary_service:
-                raise RuntimeError(
-                    "(mysql.connector.errors.DatabaseError) 2003 (HY000): Can't connect to MySQL server on '127.0.0.1:3307' (10061)"
-                )
-            return None
-
         with mock.patch.dict(os.environ, {"RPG_DATABASE_URL": "mysql+mysqlconnector://root@127.0.0.1:3307/rpg_game"}, clear=False), mock.patch.object(
-            runtime_main, "create_game_service", side_effect=[primary_service, fallback_service]
-        ) as create_mock, mock.patch.object(runtime_main, "main_menu", side_effect=menu_side_effect), mock.patch(
-            "sys.stdout", output
-        ):
+            runtime_main,
+            "create_game_service",
+            side_effect=RuntimeError("sqlalchemy.exc.OperationalError: connection refused"),
+        ) as create_mock, mock.patch.object(
+            runtime_main, "startup_loading_screen", return_value=contextlib.nullcontext()
+        ), mock.patch("sys.stdout", output):
             runtime_main.main()
 
         text = output.getvalue()
-        self.assertIn("retrying in-memory mode", text)
-        self.assertEqual(create_mock.call_count, 2)
-        self.assertNotIn("An unexpected error occurred", text)
+        self.assertIn("An unexpected error occurred", text)
+        self.assertIn("RPG_DB_ALLOW_INMEMORY_FALLBACK=1", text)
+        self.assertEqual(create_mock.call_count, 1)
 
     def test_main_prints_migration_hint_for_rng_seed_schema_mismatch(self) -> None:
         output = io.StringIO()
@@ -65,7 +58,9 @@ class MainEntryErrorHandlingTests(unittest.TestCase):
             "1054 (42S22): Unknown column 'rng_seed' in 'field list'"
         )
 
-        with mock.patch.object(runtime_main, "create_game_service", side_effect=error), mock.patch("sys.stdout", output):
+        with mock.patch.object(runtime_main, "create_game_service", side_effect=error), mock.patch.object(
+            runtime_main, "startup_loading_screen", return_value=contextlib.nullcontext()
+        ), mock.patch("sys.stdout", output):
             runtime_main.main()
 
         text = output.getvalue()

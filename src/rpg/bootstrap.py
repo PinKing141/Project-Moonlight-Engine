@@ -26,6 +26,19 @@ from rpg.infrastructure.content_provider_factory import create_content_client_fa
 from rpg.infrastructure.datamuse_client import DatamuseClient
 from rpg.infrastructure.name_generation import DnDCorpusNameGenerator
 
+_NAME_GENERATOR_CACHE: dict[int, DnDCorpusNameGenerator] = {}
+
+
+def _get_name_generator() -> DnDCorpusNameGenerator:
+    factory = DnDCorpusNameGenerator
+    key = id(factory)
+    cached = _NAME_GENERATOR_CACHE.get(key)
+    if cached is None:
+        cached = factory()
+        _NAME_GENERATOR_CACHE.clear()
+        _NAME_GENERATOR_CACHE[key] = cached
+    return cached
+
 
 def _looks_like_local_mysql_unreachable(database_url: str) -> bool:
     if not database_url:
@@ -107,7 +120,7 @@ def _build_inmemory_game_service() -> GameService:
     char_repo = InMemoryCharacterRepository()
     loc_repo = InMemoryLocationRepository()
     cls_repo = InMemoryClassRepository()
-    name_generator = DnDCorpusNameGenerator()
+    name_generator = _get_name_generator()
     entity_repo = InMemoryEntityRepository(name_generator=name_generator)
     faction_repo = InMemoryFactionRepository()
     feature_repo = InMemoryFeatureRepository(
@@ -203,7 +216,7 @@ def _build_mysql_game_service():
     quest_template_repo = MysqlQuestTemplateRepository()
     feature_repo = MysqlFeatureRepository()
     world_repo = MysqlWorldRepository()
-    name_generator = DnDCorpusNameGenerator()
+    name_generator = _get_name_generator()
     use_external_creation_content = os.getenv("RPG_CREATION_EXTERNAL_CONTENT", "0").strip().lower() in {"1", "true", "yes"}
     content_client_factory = create_content_client_factory() if use_external_creation_content else None
     encounter_intro_builder = _build_encounter_intro_builder()
