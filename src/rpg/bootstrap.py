@@ -39,6 +39,40 @@ def _get_name_generator() -> DnDCorpusNameGenerator:
         _NAME_GENERATOR_CACHE[key] = cached
     return cached
 
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+=======
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+
+
+
+def _safe_float_env(name: str, default: float, *, minimum: float | None = None) -> float:
+    raw = os.getenv(name, str(default))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float(default)
+    if minimum is not None:
+        value = max(float(minimum), value)
+    return value
+
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 
 def _looks_like_local_mysql_unreachable(database_url: str) -> bool:
     if not database_url:
@@ -53,7 +87,7 @@ def _looks_like_local_mysql_unreachable(database_url: str) -> bool:
         return False
 
     port = parsed.port or 3306
-    timeout = float(os.getenv("RPG_DB_CONNECT_PROBE_TIMEOUT_S", "1.5"))
+    timeout = _safe_float_env("RPG_DB_CONNECT_PROBE_TIMEOUT_S", 1.5, minimum=0.1)
 
     try:
         with socket.create_connection((host, port), timeout=timeout):

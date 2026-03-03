@@ -70,6 +70,22 @@ class BootstrapNameGeneratorHookTests(unittest.TestCase):
 
         self.assertIsNotNone(service)
 
+    def test_create_game_service_tolerates_invalid_probe_timeout_env(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "RPG_DATABASE_URL": "mysql+mysqlconnector://root@127.0.0.1:3307/rpg_game",
+                "RPG_DB_CONNECT_PROBE_TIMEOUT_S": "not-a-number",
+                "RPG_DB_ALLOW_INMEMORY_FALLBACK": "1",
+            },
+            clear=False,
+        ), mock.patch("rpg.bootstrap.socket.create_connection", side_effect=OSError("refused")), mock.patch.object(
+            bootstrap, "_build_mysql_game_service", side_effect=AssertionError("mysql path should be skipped")
+        ):
+            service = bootstrap.create_game_service()
+
+        self.assertIsNotNone(service)
+
     def test_create_game_service_tries_mysql_when_probe_succeeds(self) -> None:
         class _DummySocket:
             def __enter__(self):

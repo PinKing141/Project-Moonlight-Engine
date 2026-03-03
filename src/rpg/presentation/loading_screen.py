@@ -29,18 +29,78 @@ def startup_loading_screen(message: str = "Loading game systems..."):
     started_at = time.perf_counter()
     spinner_thread: threading.Thread | None = None
     use_spinner = bool(getattr(sys.stdout, "isatty", lambda: False)())
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+=======
+    printed_plain_message = False
+>>>>>>> theirs
+=======
+    printed_plain_message = False
+>>>>>>> theirs
+=======
+    printed_plain_message = False
+>>>>>>> theirs
+=======
+    printed_plain_message = False
+>>>>>>> theirs
     if use_spinner:
         spinner_thread = threading.Thread(target=_run_spinner, daemon=True)
         spinner_thread.start()
     else:
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+=======
+        printed_plain_message = True
+>>>>>>> theirs
+=======
+        printed_plain_message = True
+>>>>>>> theirs
+=======
+        printed_plain_message = True
+>>>>>>> theirs
+=======
+        printed_plain_message = True
+>>>>>>> theirs
         print(message)
 
     try:
         yield
     finally:
         stop_event.set()
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
         if spinner_thread is not None:
             spinner_thread.join(timeout=0.3)
             elapsed = time.perf_counter() - started_at
             sys.stdout.write(f"\r✓ Ready in {elapsed:0.2f}s{' ' * 40}\n")
             sys.stdout.flush()
+=======
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+        elapsed = time.perf_counter() - started_at
+        if spinner_thread is not None:
+            spinner_thread.join(timeout=0.3)
+            sys.stdout.write(f"\r✓ Ready in {elapsed:0.2f}s{' ' * 40}\n")
+            sys.stdout.flush()
+        elif printed_plain_message:
+            print(f"Ready in {elapsed:0.2f}s")
+<<<<<<< ours
+<<<<<<< ours
+<<<<<<< ours
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
