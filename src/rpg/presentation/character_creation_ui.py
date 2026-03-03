@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict
 
 from rpg.application.services.character_creation_service import ABILITY_ORDER
 from rpg.presentation.menu_controls import arrow_menu, clear_screen, read_key, normalize_menu_key
-from rpg.presentation.rolling_ui import roll_attributes_with_animation, ATTR_ORDER
+from rpg.presentation.rolling_ui import roll_attributes_with_animation, ATTR_ORDER, render_tumbling_dice_lines
 
 try:
     from rich.layout import Layout
@@ -144,6 +144,25 @@ def _draft_lines(draft: CreationDraft) -> list[str]:
         "",
         f"Stats: {ability_line}",
     ]
+    checklist = [
+        ("Name", bool(draft.name)),
+        ("Race", bool(draft.race)),
+        ("Class", bool(draft.class_name)),
+        ("Ability scores", bool(draft.ability_scores)),
+        ("Background", bool(draft.background)),
+        ("Difficulty", bool(draft.difficulty)),
+        ("Alignment", bool(draft.alignment)),
+        ("Equipment", bool(draft.equipment)),
+    ]
+    missing = [label for label, done in checklist if not done]
+    completion = len(checklist) - len(missing)
+    lines.extend(
+        [
+            "",
+            f"[bold cyan]Build completeness[/bold cyan]: {completion}/{len(checklist)}",
+            f"Missing: {', '.join(missing[:3]) + ('…' if len(missing) > 3 else '') if missing else 'None'}",
+        ]
+    )
     if bool(getattr(draft, "show_detailed", False)):
         lines.extend(
             [
@@ -162,10 +181,11 @@ def _draft_panel(draft: CreationDraft):
     lines = _draft_lines(draft)
     if Panel is None:
         return "\n".join(lines)
-    return Panel.fit(
+    return Panel(
         "\n".join(lines),
         title="[bold yellow]Character Draft[/bold yellow]",
         border_style=_PANEL_BORDER,
+        expand=True,
     )
 
 
@@ -186,37 +206,41 @@ def _creation_split_view(
         left_lines.append(f"[yellow]{footer_hint}[/yellow]")
     left_lines.append("[bold cyan]V[/bold cyan] Toggle draft details")
     left_lines.append("[bold white]Use arrow keys to move, ENTER to select, ESC to go back.[/bold white]")
-    left_panel = Panel.fit(
+    left_panel = Panel(
         "\n".join(left_lines),
         title=f"[{_THEME['title']}]{title}[/{_THEME['title']}]",
         border_style=_PANEL_BORDER,
+        expand=True,
     )
 
     context_rows = [str(row) for row in list(context_lines or []) if str(row).strip()]
     if not context_rows:
         context_rows = ["Hover options to inspect lore and mechanics."]
-    context_panel = Panel.fit(
+    context_panel = Panel(
         "\n".join(context_rows),
         title=f"[{_THEME['class_race']}]{context_title}[/{_THEME['class_race']}]",
         border_style="magenta",
+        expand=True,
     )
 
     progress_line = _progress_markup(draft)
     if Layout is not None:
         layout = Layout(name="creation")
+        context_height = max(7, min(16, len(context_rows) + 4))
         layout.split_column(
             Layout(name="progress", size=3),
-            Layout(name="upper", ratio=2),
-            Layout(name="context", size=max(6, min(12, len(context_rows) + 3))),
+            Layout(name="upper", ratio=3),
+            Layout(name="context", size=context_height),
         )
-        layout["upper"].split_row(Layout(name="menu"), Layout(name="draft"))
+        layout["upper"].split_row(Layout(name="menu", ratio=3), Layout(name="draft", ratio=2))
         layout["menu"].update(left_panel)
         layout["draft"].update(_draft_panel(draft))
         layout["context"].update(context_panel)
         layout["progress"].update(
-            Panel.fit(
+            Panel(
                 progress_line or "[bold white]Character creation in progress...[/bold white]",
                 border_style="cyan",
+                expand=True,
             )
         )
         return layout
@@ -1229,7 +1253,9 @@ def _roll_assign_prompt(creation_service, chosen_class, draft: CreationDraft) ->
             center_lines = [
                 f"Rolling set {len(rolled_rows) + 1} / 6",
                 f"Progress: {progress_bar}",
-                f"Preview dice: ({', '.join(str(int(row)) for row in list(rolling_preview))})",
+                "",
+                *(render_tumbling_dice_lines(rolling_preview, frame=frame_counter)),
+                f"Values: ({', '.join(str(int(row)) for row in list(rolling_preview))})",
                 "",
                 continue_line,
                 *trail_rows,
@@ -1239,7 +1265,8 @@ def _roll_assign_prompt(creation_service, chosen_class, draft: CreationDraft) ->
                 "Rolling complete.",
                 f"Progress: [{'█' * 6}] 6/6",
                 "",
-                *rolling_feed[-10:],
+                *(render_tumbling_dice_lines(rolling_preview, frame=0)),
+                *rolling_feed[-8:],
             ]
             if not center_lines:
                 center_lines = ["Ready to assign scores."]

@@ -15,6 +15,63 @@ ATTR_ORDER = ["STR", "DEX", "CON", "INT", "WIS", "CHA"]
 _CONSOLE = Console() if Console is not None else None
 
 
+_DIE_PIPS = {
+    1: ("     ", "  ●  ", "     "),
+    2: ("●    ", "     ", "    ●"),
+    3: ("●    ", "  ●  ", "    ●"),
+    4: ("●   ●", "     ", "●   ●"),
+    5: ("●   ●", "  ●  ", "●   ●"),
+    6: ("●   ●", "●   ●", "●   ●"),
+}
+
+
+def _build_die_frame(value: int, *, perspective: str = "right") -> list[str]:
+    top, mid, bottom = _DIE_PIPS.get(int(value), _DIE_PIPS[1])
+    if perspective == "left":
+        return [
+            "╲╭─────╮",
+            f"││{top}│",
+            f"││{mid}│",
+            f"││{bottom}│",
+            "╱╰─────╯",
+        ]
+    return [
+        "╭─────╮╱",
+        f"│{top}││",
+        f"│{mid}││",
+        f"│{bottom}││",
+        "╰─────╯╲",
+    ]
+
+
+def _render_dice_ascii_faces(values: list[int], offsets: list[int] | None = None, *, frame: int = 0) -> list[str]:
+    offsets = list(offsets or [0 for _ in values])
+    if not values:
+        return ["(no dice)"]
+    width = max(0, len(values) * 12)
+    rows: list[str] = []
+    for art_line in range(5):
+        chars = [" " for _ in range(width)]
+        for idx, value in enumerate(values):
+            perspective = "left" if ((frame + idx) % 4 in {1, 2}) else "right"
+            face = _build_die_frame(int(value), perspective=perspective)[art_line]
+            col = (idx * 10) + min(5, max(0, int(offsets[idx]) if idx < len(offsets) else 0))
+            for c_idx, token in enumerate(face):
+                pos = col + c_idx
+                if 0 <= pos < width:
+                    chars[pos] = token
+        rows.append("".join(chars).rstrip())
+    return rows
+
+
+def _rolling_offsets(frame: int, count: int) -> list[int]:
+    return [max(0, (frame * 2 + idx * 3) % 14) for idx in range(count)]
+
+
+def render_tumbling_dice_lines(values: list[int], *, frame: int = 0) -> list[str]:
+    return _render_dice_ascii_faces(values, offsets=_rolling_offsets(frame, len(values)), frame=frame)
+
+
 def _prompt_continue(message: str) -> None:
     if _CONSOLE is not None:
         _CONSOLE.input(f"[dim]{message}[/dim]")
@@ -84,9 +141,10 @@ async def _animate_stat_roll_async(
         _render_roll_panel(
             f"ROLLING {stat_name} (4d6, drop lowest)",
             [
-                f"Dice: {_render_dice_row(fake_rolls)}",
+                "Dice tumbling...",
+                *render_tumbling_dice_lines(fake_rolls, frame=_),
                 "",
-                "Rolling...",
+                f"Values: {_render_dice_row(fake_rolls)}",
             ],
         )
         await asyncio.sleep(sleep_time)
@@ -98,6 +156,8 @@ async def _animate_stat_roll_async(
     _render_roll_panel(
         f"{stat_name} RESULT",
         [
+            "Final roll lock-in:",
+            *_render_dice_ascii_faces(final_rolls, offsets=[0 for _ in final_rolls], frame=0),
             f"Final dice: {_render_dice_row(final_rolls, highlight_index=lowest_idx)}",
             f"(Lowest die ({lowest}) is dropped.)",
             "",
