@@ -6,6 +6,8 @@ import threading
 import time
 from contextlib import contextmanager
 
+from rpg.presentation.sound_effects import get_sound_effects
+
 
 @contextmanager
 def startup_loading_screen(message: str = "Loading game systems..."):
@@ -49,3 +51,4 @@ def startup_loading_screen(message: str = "Loading game systems..."):
             sys.stdout.flush()
         elif printed_plain_message:
             print(f"Ready in {elapsed:0.2f}s")
+        get_sound_effects().play("boot_ready")

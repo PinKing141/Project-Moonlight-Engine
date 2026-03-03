@@ -86,6 +86,17 @@ class BootstrapNameGeneratorHookTests(unittest.TestCase):
 
         self.assertIsNotNone(service)
 
+    def test_local_mysql_probe_uses_faster_default_timeout(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {"RPG_DATABASE_URL": "mysql+mysqlconnector://root@127.0.0.1:3307/rpg_game"},
+            clear=False,
+        ), mock.patch("rpg.bootstrap.socket.create_connection", side_effect=OSError("refused")) as create_conn:
+            self.assertTrue(bootstrap._looks_like_local_mysql_unreachable(os.environ["RPG_DATABASE_URL"]))
+
+        timeout = create_conn.call_args.kwargs.get("timeout")
+        self.assertEqual(0.35, timeout)
+
     def test_create_game_service_tries_mysql_when_probe_succeeds(self) -> None:
         class _DummySocket:
             def __enter__(self):
@@ -105,6 +116,22 @@ class BootstrapNameGeneratorHookTests(unittest.TestCase):
             service = bootstrap.create_game_service()
 
         self.assertIs(service, sentinel)
+
+    def test_flavour_builder_tolerates_invalid_numeric_env(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                "RPG_FLAVOUR_DATAMUSE_ENABLED": "1",
+                "RPG_FLAVOUR_TIMEOUT_S": "bad",
+                "RPG_FLAVOUR_RETRIES": "bad",
+                "RPG_FLAVOUR_BACKOFF_S": "bad",
+                "RPG_FLAVOUR_MAX_LINES": "bad",
+            },
+            clear=False,
+        ):
+            builder = bootstrap._build_encounter_intro_builder()
+
+        self.assertTrue(callable(builder))
 
 
 if __name__ == "__main__":

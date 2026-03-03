@@ -7,6 +7,7 @@ from rpg.presentation.game_loop import run_game_loop
 from rpg.presentation.live_game_loop import run_live_game_loop
 from rpg.presentation.load_menu import choose_existing_character
 from rpg.presentation.menu_controls import arrow_menu, clear_screen
+from rpg.presentation.sound_effects import get_sound_effects
 
 try:
     from rich.console import Console
@@ -69,6 +70,7 @@ def _show_main_splash() -> None:
 def main_menu(game_service: GameService) -> None:
     options = ["New Game", "Continue", "Help", "Credits", "Quit"]
     session_character_id: int | None = None
+    sfx = get_sound_effects()
 
     while True:
         menu_title = "Realm of Broken Stars"
@@ -88,24 +90,29 @@ def main_menu(game_service: GameService) -> None:
         )
 
         if choice_idx == 0:  # New Game
+            sfx.play("menu_select")
             character_id = run_character_creation(game_service)
             if character_id is not None:
                 session_character_id = character_id
+                sfx.play("game_start")
                 if _use_live_fsm_cli():
                     run_live_game_loop(game_service, character_id)
                 else:
                     run_game_loop(game_service, character_id)
 
         elif choice_idx == 1:  # Continue
+            sfx.play("menu_select")
             character_id = choose_existing_character(game_service)
             if character_id is not None:
                 session_character_id = character_id
+                sfx.play("game_start")
                 if _use_live_fsm_cli():
                     run_live_game_loop(game_service, character_id)
                 else:
                     run_game_loop(game_service, character_id)
 
         elif choice_idx == 2:  # Help
+            sfx.play("menu_back")
             clear_screen()
             if _CONSOLE is not None and Panel is not None:
                 _render_centered_panel(
@@ -137,6 +144,7 @@ def main_menu(game_service: GameService) -> None:
             clear_screen()
 
         elif choice_idx == 3:  # Credits
+            sfx.play("menu_back")
             clear_screen()
             if _CONSOLE is not None and Panel is not None:
                 _render_centered_panel(
@@ -150,6 +158,7 @@ def main_menu(game_service: GameService) -> None:
             clear_screen()
 
         elif choice_idx == 4 or choice_idx == -1:  # Quit or ESC
+            sfx.play("quit")
             report_path = maybe_emit_session_quality_report(game_service, character_id=session_character_id)
             clear_screen()
             if report_path is not None:

@@ -53,6 +53,17 @@ def _safe_float_env(name: str, default: float, *, minimum: float | None = None) 
     return value
 
 
+def _safe_int_env(name: str, default: int, *, minimum: int | None = None) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(default)
+    if minimum is not None:
+        value = max(int(minimum), value)
+    return value
+
+
 def _looks_like_local_mysql_unreachable(database_url: str) -> bool:
     if not database_url:
         return False
@@ -66,7 +77,7 @@ def _looks_like_local_mysql_unreachable(database_url: str) -> bool:
         return False
 
     port = parsed.port or 3306
-    timeout = _safe_float_env("RPG_DB_CONNECT_PROBE_TIMEOUT_S", 1.5, minimum=0.1)
+    timeout = _safe_float_env("RPG_DB_CONNECT_PROBE_TIMEOUT_S", 0.35, minimum=0.1)
 
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -80,10 +91,10 @@ def _build_encounter_intro_builder():
     if not enabled:
         return EncounterIntroEnricher(enabled=False).build_intro
 
-    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "0.4"))
-    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "0"))
-    backoff_seconds = float(os.getenv("RPG_FLAVOUR_BACKOFF_S", "0.1"))
-    max_lines = int(os.getenv("RPG_FLAVOUR_MAX_LINES", "1"))
+    timeout = _safe_float_env("RPG_FLAVOUR_TIMEOUT_S", 0.4, minimum=0.05)
+    retries = _safe_int_env("RPG_FLAVOUR_RETRIES", 0, minimum=0)
+    backoff_seconds = _safe_float_env("RPG_FLAVOUR_BACKOFF_S", 0.1, minimum=0.0)
+    max_lines = _safe_int_env("RPG_FLAVOUR_MAX_LINES", 1, minimum=0)
 
     lexical = DatamuseClient(timeout=timeout, retries=retries, backoff_seconds=backoff_seconds)
     enricher = EncounterIntroEnricher(
@@ -99,10 +110,10 @@ def _build_mechanical_flavour_builder():
     if not enabled:
         return None
 
-    timeout = float(os.getenv("RPG_FLAVOUR_TIMEOUT_S", "0.4"))
-    retries = int(os.getenv("RPG_FLAVOUR_RETRIES", "0"))
-    backoff_seconds = float(os.getenv("RPG_FLAVOUR_BACKOFF_S", "0.1"))
-    max_words = int(os.getenv("RPG_FLAVOUR_MAX_WORDS", "8"))
+    timeout = _safe_float_env("RPG_FLAVOUR_TIMEOUT_S", 0.4, minimum=0.05)
+    retries = _safe_int_env("RPG_FLAVOUR_RETRIES", 0, minimum=0)
+    backoff_seconds = _safe_float_env("RPG_FLAVOUR_BACKOFF_S", 0.1, minimum=0.0)
+    max_words = _safe_int_env("RPG_FLAVOUR_MAX_WORDS", 8, minimum=1)
 
     lexical = DatamuseClient(timeout=timeout, retries=retries, backoff_seconds=backoff_seconds)
     enricher = MechanicalFlavourEnricher(lexical_client=lexical, enabled=True, max_words=max_words)

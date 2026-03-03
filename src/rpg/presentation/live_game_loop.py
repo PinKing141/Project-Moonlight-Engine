@@ -10,6 +10,7 @@ import time
 from typing import Any, Callable
 
 from rpg.presentation import game_loop as legacy_loop
+from rpg.presentation.sound_effects import SoundEffects, get_sound_effects
 
 try:
     from rich.console import Console
@@ -128,6 +129,7 @@ class LiveGameContext:
     ui_console: Any | None = None
     ui_live: Any | None = None
     ui_density: str = "standard"
+    sound_effects: SoundEffects = field(default_factory=get_sound_effects)
 
     def append_log(self, message: str) -> None:
         row = str(message or "").strip()
@@ -135,6 +137,9 @@ class LiveGameContext:
             return
         timestamp = time.strftime("%H:%M:%S")
         self.log_lines.append(f"[{timestamp}] {row}")
+
+    def play_sound(self, event: str) -> None:
+        self.sound_effects.play(event)
 
 
 class GameState(ABC):
@@ -219,8 +224,10 @@ class RootState(GameState):
                 result = ctx.game_service.short_rest_intent(ctx.character_id)
                 for line in list(getattr(result, "messages", []) or ["You pause and recover."]):
                     ctx.append_log(str(line))
+                ctx.play_sound("action_success")
             except Exception as exc:
                 ctx.append_log(f"Rest failed: {exc}")
+                ctx.play_sound("error")
             _queue_narrative_task(ctx, "rest", "Updating camp journal")
             return self
         if choice in {"t", "travel"}:
@@ -238,8 +245,10 @@ class RootState(GameState):
                     result = ctx.game_service.travel_intent(ctx.character_id)
                     for line in list(getattr(result, "messages", []) or ["You travel onward."]):
                         ctx.append_log(str(line))
+                    ctx.play_sound("action_success")
                 except Exception as exc:
                     ctx.append_log(f"Travel failed: {exc}")
+                    ctx.play_sound("error")
                 _queue_narrative_task(ctx, "travel", "Updating route chronicle")
                 return self
             return TravelSelectState(destinations)
@@ -248,8 +257,10 @@ class RootState(GameState):
                 result = ctx.game_service.short_rest_intent(ctx.character_id)
                 for line in list(getattr(result, "messages", []) or ["You pause and recover."]):
                     ctx.append_log(str(line))
+                ctx.play_sound("action_success")
             except Exception as exc:
                 ctx.append_log(f"Rest failed: {exc}")
+                ctx.play_sound("error")
             _queue_narrative_task(ctx, "rest", "Updating camp journal")
             return self
         if choice == "4":
