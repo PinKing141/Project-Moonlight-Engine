@@ -1547,7 +1547,15 @@ def _run_quest_board(game_service, character_id: int):
 def _run_explore(game_service, character_id: int):
     while True:
         clear_screen()
-        environment = game_service.get_exploration_environment_intent(character_id)
+        environment: dict[str, object] = {}
+        get_environment = getattr(game_service, "get_exploration_environment_intent", None)
+        if callable(get_environment):
+            try:
+                raw_environment = get_environment(character_id)
+                if isinstance(raw_environment, dict):
+                    environment = raw_environment
+            except Exception:
+                environment = {}
         env_lines = [
             f"Lighting: {str(environment.get('light_level', 'Unknown') or 'Unknown')}",
             f"Status: {str(environment.get('detection_state', 'Unaware') or 'Unaware')}",

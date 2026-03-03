@@ -2173,10 +2173,39 @@ def run_character_creation(game_service):
         generated_name_gender=str(getattr(draft, "name_gender", "") or "").strip().lower() or None,
     )
     summary = game_service.build_character_creation_summary(character)
+    character_id = int(getattr(summary, "character_id", 0) or getattr(character, "id", 0) or 0)
+    if character_id <= 0:
+        clear_screen()
+        if _CONSOLE is not None and Panel is not None:
+            _CONSOLE.print(
+                Panel.fit(
+                    "Character was created, but no playable save ID was returned.",
+                    title="[bold red]Creation Error[/bold red]",
+                    border_style="red",
+                )
+            )
+        else:
+            print("Character was created, but no playable save ID was returned.")
+        _prompt_enter("Press ENTER to return to the menu...")
+        return None
 
     clear_screen()
     _render_character_summary(summary)
-    _run_creation_skill_training_flow(game_service, summary.character_id)
+    try:
+        _run_creation_skill_training_flow(game_service, character_id)
+    except Exception:
+        clear_screen()
+        if _CONSOLE is not None and Panel is not None:
+            _CONSOLE.print(
+                Panel.fit(
+                    "Skill training setup was skipped due to an initialization issue. You can continue and train from the Character menu.",
+                    title="[bold yellow]Skill Training Notice[/bold yellow]",
+                    border_style=_PANEL_BORDER,
+                )
+            )
+        else:
+            print("Skill training setup was skipped due to an initialization issue. You can continue and train from the Character menu.")
+        _prompt_enter()
     print("")
     _prompt_enter("Press ENTER to begin your adventure...")
-    return summary.character_id
+    return character_id
