@@ -106,6 +106,26 @@ Notes:
 - Live mode is opt-in and leaves the existing arrow-menu loop as default.
 - If Rich is unavailable, runtime automatically falls back to the default loop.
 
+Optional music + sound effects:
+
+- Sound effects are built in and use terminal bell output events.
+- Enable sound effects with `RPG_SOUND_EFFECTS=1`.
+- Background music is opt-in and requires `pygame` installed locally.
+- You can define one default track (`RPG_MUSIC_FILE`) or state-specific tracks:
+        - `RPG_MUSIC_TRACK_MENU`
+        - `RPG_MUSIC_TRACK_EXPLORATION`
+        - `RPG_MUSIC_TRACK_COMBAT`
+- Enable music with:
+        ```bash
+        set RPG_MUSIC=1
+        set RPG_MUSIC_TRACK_MENU=assets/audio/menu_theme.mp3
+        set RPG_MUSIC_TRACK_EXPLORATION=assets/audio/exploration_theme.mp3
+        set RPG_MUSIC_TRACK_COMBAT=assets/audio/combat_theme.mp3
+        set RPG_MUSIC_VOLUME=0.35
+        python -m rpg
+        ```
+- Music switches automatically by game state (menu/exploration/combat) and stops on quit.
+
 Optional dependency groups:
 
 - Dev/testing tools:

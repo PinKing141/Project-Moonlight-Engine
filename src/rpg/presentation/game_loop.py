@@ -2,6 +2,7 @@
 import random
 
 from rpg.presentation.menu_controls import arrow_menu, clear_screen
+from rpg.presentation.music import get_music_player
 
 try:
     from rich.console import Console
@@ -874,6 +875,8 @@ def _render_combat_round(round_view) -> None:
 
 
 def run_game_loop(game_service, character_id: int):
+    music = get_music_player()
+    music.set_context("exploration")
     while True:
         try:
             view = game_service.get_game_loop_view(character_id)
@@ -1651,13 +1654,18 @@ def _run_explore(game_service, character_id: int):
         _render_message_panel("Encounter", lines, border_style=_BORDER_LOOP, panel_key="loop")
         _prompt_continue("Press ENTER to start combat...")
 
-        result = game_service.combat_resolve_party_intent(
-            player,
-            enemies,
-            lambda options, p, e, round_no, ctx=None: _choose_combat_action(game_service, options, p, e, round_no, scene),
-            choose_target=lambda actor, allies, foes, round_no, scene_ctx, action: _choose_party_target(actor, allies, foes, round_no, scene_ctx, action),
-            scene=scene,
-        )
+        music = get_music_player()
+        music.set_context("combat")
+        try:
+            result = game_service.combat_resolve_party_intent(
+                player,
+                enemies,
+                lambda options, p, e, round_no, ctx=None: _choose_combat_action(game_service, options, p, e, round_no, scene),
+                choose_target=lambda actor, allies, foes, round_no, scene_ctx, action: _choose_party_target(actor, allies, foes, round_no, scene_ctx, action),
+                scene=scene,
+            )
+        finally:
+            music.set_context("exploration")
 
         player_after = next((ally for ally in result.allies if int(getattr(ally, "id", 0) or 0) == int(getattr(player, "id", 0) or 0)), None)
         if player_after is not None:

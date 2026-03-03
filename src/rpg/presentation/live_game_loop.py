@@ -10,6 +10,7 @@ import time
 from typing import Any, Callable
 
 from rpg.presentation import game_loop as legacy_loop
+from rpg.presentation.music import get_music_player
 from rpg.presentation.sound_effects import SoundEffects, get_sound_effects
 
 try:
@@ -141,6 +142,15 @@ class LiveGameContext:
     def play_sound(self, event: str) -> None:
         self.sound_effects.play(event)
 
+
+
+
+def _music_context_for_state(state: "GameState") -> str:
+    if isinstance(state, CombatState):
+        return "combat"
+    if isinstance(state, ExplorationState):
+        return "exploration"
+    return "exploration"
 
 class GameState(ABC):
     @abstractmethod
@@ -1714,6 +1724,8 @@ def run_live_game_loop(game_service: Any, character_id: int) -> None:
     ctx.event_queue = queue
 
     state: GameState = RootState()
+    music = get_music_player()
+    music.set_context(_music_context_for_state(state))
 
     try:
         with Live(state.render(ctx), console=console, refresh_per_second=8, screen=True) as live:
@@ -1723,10 +1735,12 @@ def run_live_game_loop(game_service: Any, character_id: int) -> None:
                 live.update(state.render(ctx))
                 user_input = console.input("[bold cyan]Action[/bold cyan] > ").strip()
                 state = state.handle_input(user_input, ctx)
+                music.set_context(_music_context_for_state(state))
                 live.update(state.render(ctx))
     except KeyboardInterrupt:
         pass
     finally:
         ctx.ui_live = None
         ctx.ui_console = None
+        music.stop()
         queue.stop()

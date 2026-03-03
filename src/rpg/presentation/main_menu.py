@@ -7,6 +7,7 @@ from rpg.presentation.game_loop import run_game_loop
 from rpg.presentation.live_game_loop import run_live_game_loop
 from rpg.presentation.load_menu import choose_existing_character
 from rpg.presentation.menu_controls import arrow_menu, clear_screen
+from rpg.presentation.music import get_music_player
 from rpg.presentation.sound_effects import get_sound_effects
 
 try:
@@ -71,6 +72,8 @@ def main_menu(game_service: GameService) -> None:
     options = ["New Game", "Continue", "Help", "Credits", "Quit"]
     session_character_id: int | None = None
     sfx = get_sound_effects()
+    music = get_music_player()
+    music.set_context("menu")
 
     while True:
         menu_title = "Realm of Broken Stars"
@@ -159,6 +162,7 @@ def main_menu(game_service: GameService) -> None:
 
         elif choice_idx == 4 or choice_idx == -1:  # Quit or ESC
             sfx.play("quit")
+            music.stop()
             report_path = maybe_emit_session_quality_report(game_service, character_id=session_character_id)
             clear_screen()
             if report_path is not None:
