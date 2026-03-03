@@ -12,6 +12,7 @@ class DowntimeActivity:
     inventory_costs: tuple[str, ...] = ()
     inventory_rewards: tuple[str, ...] = ()
     reputation_deltas: dict[str, int] = field(default_factory=dict)
+    activity_family: str = ""
 
 
 @dataclass(frozen=True)

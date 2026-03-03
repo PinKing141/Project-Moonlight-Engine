@@ -5200,7 +5200,9 @@ class GameService:
             world_turn = int(getattr(self._require_world(), "current_turn", 0) or 0)
 
         crafting_messages: list[str] = []
-        if str(activity.id).startswith("craft_"):
+        activity_family = str(getattr(activity, "activity_family", "") or "").strip().lower()
+        is_crafting_activity = activity_family == "crafting" or str(activity.id).startswith("craft_")
+        if is_crafting_activity:
             world_target = world_after
             if world_target is None and self.world_repo:
                 world_target = self._require_world()
@@ -10385,9 +10387,21 @@ class GameService:
                 "bonus_item": "antitoxin",
             },
         }
-        profile = recipe_map.get(str(activity_id or "").strip().lower())
+        normalized_activity_id = str(activity_id or "").strip().lower()
+        profile = recipe_map.get(normalized_activity_id)
         if not isinstance(profile, dict):
-            return []
+            generic_item = normalized_activity_id
+            for prefix in ("craft_", "brew_", "forge_"):
+                if generic_item.startswith(prefix):
+                    generic_item = generic_item[len(prefix):]
+                    break
+            generic_item = self._normalize_crafting_item_id(generic_item)
+            profile = {
+                "recipe_id": generic_item or "fieldcraft_batch",
+                "profession": "fieldcraft",
+                "base_item": generic_item or "crafted_supply",
+                "bonus_item": "",
+            }
 
         crafting = self._world_crafting_state(world)
         crafting["active"] = True

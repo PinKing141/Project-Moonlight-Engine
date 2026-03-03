@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import unittest
+from dataclasses import replace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
@@ -98,6 +99,19 @@ class DowntimeFlowTests(unittest.TestCase):
         crafter_a = repo_a.get(character_id_a)
         crafter_b = repo_b.get(character_id_b)
         self.assertEqual(list(crafter_a.inventory or []), list(crafter_b.inventory or []))
+
+
+    def test_submit_downtime_uses_activity_family_for_crafting_resolution(self) -> None:
+        service, _character_repo, _world_repo, _faction_repo, character_id = self._build_service(money=20)
+
+        activities = list(service.downtime_service.list_activities())
+        herbal = next(row for row in activities if row.id == "craft_healing_herbs")
+        custom = replace(herbal, id="brew_field_remedy", title="Brew Field Remedy", activity_family="crafting")
+        service.downtime_service._ACTIVITIES = tuple([custom, *activities])
+
+        result = service.submit_downtime_intent(character_id, "brew_field_remedy")
+
+        self.assertTrue(any(str(line).startswith("Craft result:") for line in result.messages))
 
     def test_submit_downtime_crafting_persists_crafting_v1_recipe_and_stockpile(self) -> None:
         service, _character_repo, world_repo, _faction_repo, character_id = self._build_service(money=20)

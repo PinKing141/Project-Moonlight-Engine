@@ -4,13 +4,12 @@
 
 **Implementation Status:** **Implemented** (V22a and V22b closeout complete, 2026-03-02).
 
-Active next roadmap phase (2026-03-02).
+Superseded by subsequent roadmap phases (post-2026-03-02).
 
 ## Phase Split Strategy
 
 V22 is executed in two controlled sub-phases to reduce integration risk:
 
-- **V22a (active):** faction simulation foundation + quest arc generator v2 integration.
 - **V22a (implemented):** faction simulation foundation + quest arc generator v2 integration.
 - **V22b (implemented):** crafting/profession loop + endgame crisis framework foundation.
 

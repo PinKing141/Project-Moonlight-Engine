@@ -16,6 +16,7 @@ class DowntimeService:
             gold_cost=4,
             inventory_rewards=("Healing Herbs",),
             reputation_deltas={"wardens": 1},
+            activity_family="crafting",
         ),
         DowntimeActivity(
             id="craft_whetstone",
@@ -24,6 +25,7 @@ class DowntimeService:
             days=1,
             gold_cost=3,
             inventory_rewards=("Whetstone",),
+            activity_family="crafting",
         ),
         DowntimeActivity(
             id="carouse_contacts",
@@ -32,6 +34,7 @@ class DowntimeService:
             days=1,
             gold_cost=6,
             reputation_deltas={"thieves_guild": 2, "the_crown": -1},
+            activity_family="social",
         ),
         DowntimeActivity(
             id="research_rituals",
@@ -41,6 +44,7 @@ class DowntimeService:
             gold_cost=8,
             inventory_rewards=("Scout Notes",),
             reputation_deltas={"tower_aurelian": 1},
+            activity_family="research",
         ),
         DowntimeActivity(
             id="contract_work",
@@ -49,6 +53,7 @@ class DowntimeService:
             days=1,
             gold_reward=10,
             reputation_deltas={"the_crown": 1},
+            activity_family="contract",
         ),
     )
 

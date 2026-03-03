@@ -46,6 +46,51 @@ class WorldProgression:
             return "hostile"
         return "neutral"
 
+
+    @staticmethod
+    def _pair_key(left: str, right: str) -> str:
+        a = str(left or "").strip().lower()
+        b = str(right or "").strip().lower()
+        if not a or not b or a == b:
+            return ""
+        ordered = sorted((a, b))
+        return f"{ordered[0]}|{ordered[1]}"
+
+    @classmethod
+    def _seed_faction_conflict_relations_from_diplomacy(cls, world: World, existing: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
+        if not isinstance(getattr(world, "flags", None), dict):
+            return existing
+        narrative = world.flags.get("narrative", {})
+        if not isinstance(narrative, dict):
+            return existing
+        diplomacy = narrative.get("faction_diplomacy", {})
+        if not isinstance(diplomacy, dict):
+            return existing
+        relations = diplomacy.get("relations", {})
+        if not isinstance(relations, dict):
+            return existing
+
+        seeded = dict(existing)
+        world_turn = int(getattr(world, "current_turn", 0) or 0)
+        for raw_pair, raw_score in relations.items():
+            pair_text = str(raw_pair or "").strip().lower()
+            if not pair_text:
+                continue
+            left, sep, right = pair_text.partition("|")
+            pair = cls._pair_key(left, right) if sep else ""
+            if not pair:
+                continue
+            try:
+                score = int(raw_score)
+            except Exception:
+                continue
+            score = max(-10, min(10, int(round(score / 10.0))))
+            seeded[pair] = {
+                "score": int(score),
+                "stance": str(cls._faction_stance_for_score(score)),
+                "last_updated_turn": int(world_turn),
+            }
+        return seeded
     @classmethod
     def _ensure_faction_conflict_state(cls, world: World) -> dict:
         if not isinstance(getattr(world, "flags", None), dict):
@@ -77,7 +122,12 @@ class WorldProgression:
                 "stance": str(cls._faction_stance_for_score(score)),
                 "last_updated_turn": int(payload.get("last_updated_turn", 0) or 0),
             }
+        normalized_relations = cls._seed_faction_conflict_relations_from_diplomacy(world, normalized_relations)
         row["relations"] = normalized_relations
+        if normalized_relations and "active" not in row:
+            row["active"] = True
+        elif normalized_relations and not bool(row.get("active", False)):
+            row["active"] = True
         row["last_tick_turn"] = int(row.get("last_tick_turn", 0) or 0)
         return row
 

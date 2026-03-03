@@ -283,6 +283,36 @@ class WorldProgressionTests(unittest.TestCase):
         self.assertEqual(10, int(relation.get("score", 0) or 0))
         self.assertEqual("allied", str(relation.get("stance", "")))
 
+
+    def test_faction_conflict_state_bootstraps_from_narrative_diplomacy_relations(self) -> None:
+        world_repo = _StubWorldRepository()
+        entity_repo = _StubEntityRepository()
+        progression = WorldProgression(world_repo, entity_repo, EventBus())
+
+        world_repo.world.flags = {
+            "narrative": {
+                "faction_diplomacy": {
+                    "relations": {
+                        "wardens|thieves_guild": -62,
+                        "the_crown|free_council": 35,
+                    }
+                }
+            },
+            "faction_conflict_v1": {
+                "active": False,
+                "relations": {},
+            },
+        }
+
+        state = progression._ensure_faction_conflict_state(world_repo.world)
+
+        self.assertTrue(bool(state.get("active", False)))
+        relations = dict(state.get("relations", {}))
+        self.assertIn("thieves_guild|wardens", relations)
+        self.assertIn("free_council|the_crown", relations)
+        self.assertEqual(-6, int(relations["thieves_guild|wardens"].get("score", 0) or 0))
+        self.assertEqual(4, int(relations["free_council|the_crown"].get("score", 0) or 0))
+
     def test_faction_conflict_tick_is_deterministic_for_same_seed_and_state(self) -> None:
         repo_a = _StubWorldRepository()
         repo_b = _StubWorldRepository()
